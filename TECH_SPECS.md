@@ -17,7 +17,7 @@
 | POST /v1/sessions | Abuse controls, optional challenge | Issue short-lived scoped visitor token |
 | POST /v1/chat | Visitor bearer token | Stream answer from server-retrieved knowledge |
 | POST /v1/entries | Visitor bearer token | Validate explicitly submitted approved form |
-| GET /v1/conversations/:id | Visitor bearer token | Optional bounded history, same-session only |
+| GET /v1/conversations/:id | Visitor bearer token | Bounded history, same-session only; the query excludes `role = system` rows (enforced server-side, not just filtered in UI). Enabled in MVP (ADR 0009) |
 
 Session creation is not proof of human identity. Rate limits/bot challenges and spending controls remain mandatory. Optional history may be disabled entirely in the MVP.
 

@@ -24,7 +24,7 @@ The API initiates a search RPC; pgvector executes the vector computation inside 
 - Keep widget and dashboard versioned independently while maintaining a compatible API contract.
 
 ## 3. Chat sequence
-1. Read minimal public configuration; create/reuse a short-lived visitor session through API.
+1. Widget reads `public_bot_config` directly from Supabase REST with the publishable key (anon may read only this relation); it then creates/reuses a short-lived visitor session through the Render API.
 2. Submit question plus idempotency key with visitor token.
 3. API verifies token, bot scope, payload limits, and allowed state; applies atomic rate/budget checks.
 4. Moderate input; obtain embedding using the configured query embedding model.

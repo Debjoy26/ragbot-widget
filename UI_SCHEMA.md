@@ -37,7 +37,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
         AssistantMessage
           AnswerBody
           SourceList
-          FeedbackButtons
+          (FeedbackButtons deferred for v1 — ADR 0011; no feedback endpoint/table)
         ContactCard [escalation message, email/phone/WhatsApp/contact-page links, business hours, open-now hint]
         StatusNotice
       OptionalApprovedForm
@@ -107,7 +107,7 @@ Contact fields: email format, E.164 phone, `https:` URLs only, plain-text messag
 - Announced once to screen readers when it appears.
 
 ## 7. Visitor session policy
-Keep the short-lived session token in memory by default. Optional sessionStorage persistence requires an explicit policy. Never store provider credentials or admin tokens in widget state. Session reset should clear locally held context and start a new authorised conversation.
+Keep the short-lived session token (~30 min, bound to bot/session/expiry) in tab-scoped `sessionStorage` so the conversation survives page navigation on multi-page host sites (ADR 0009). Restore the transcript through `GET /v1/conversations/:id` (same session only; `system` messages never returned). Never use `localStorage` for the token. Never store provider credentials or admin tokens in widget state. Session reset should clear locally held context and start a new authorised conversation.
 
 ## 8. Failure behaviour
 No raw stack traces or provider errors. Show stable user messages and an opaque request ID. Do not automatically resend after partial output. A retry after connection loss reconciles the idempotency key with server state before generating again.

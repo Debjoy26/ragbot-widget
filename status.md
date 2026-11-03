@@ -1,8 +1,8 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-03**
-> Overall: **🟡 Planning complete — implementation not started**
-> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`.
+> Overall: **🟡 P0 decisions approved — P1 awaiting owner go-ahead**
+> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0013).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
@@ -12,17 +12,17 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | # | Phase | State | Blocker / note |
 |---|---|---|---|
-| P0 | Decisions & prerequisites | 🟡 | Open decisions listed in §3; doc inconsistencies in `handover.md §6` |
-| P1 | Monorepo scaffold & tooling | ⬜ | Needs pinned Node LTS version (P0) |
-| P2 | Shared contracts | ⬜ | Waits on doc-inconsistency fixes |
-| P3 | Database & storage migrations | ⛔ | `002_vectors.sql` blocked on embedding dimension |
+| P0 | Decisions & prerequisites | ✅ | D1–D14 approved and phase accepted by owner 2026-11-03 (ADRs 0001–0013). Open items carried forward: §3a |
+| P1 | Monorepo scaffold & tooling | ⬜ | Unblocked (D11, ADR 0001); awaits owner approval |
+| P2 | Shared contracts | ⬜ | Waits on remaining doc fixes (§4); UI_SCHEMA edits pending |
+| P3 | Database & storage migrations | ⬜ | D1 (ADR 0002) and D5 (ADR 0006) decided; `002_vectors.sql` unblocked. D1 validation check pending (§3a c); `005_retention.sql` jurisdiction per client open (§3a b) |
 | P4 | API foundation | ⬜ | |
-| P5 | Visitor sessions & abuse controls | ⬜ | Needs rate/budget limits (P0) |
-| P6 | Ingestion pipeline (worker) | ⬜ | Needs OCR decision + file limits (P0) |
-| P7 | Retrieval & chat | ⬜ | Needs chat/fallback/moderation providers (P0) |
-| P7.5 | Caching & latency | ⬜ | Needs D13 (answer-cache policy); schema additions go into P3 |
-| P8 | Widget | ⬜ | Needs Markdown + token-persistence decisions (P0) |
-| P9 | Analysis, entries, settings, retention | ⬜ | Needs retention policy (P0) |
+| P5 | Visitor sessions & abuse controls | ⬜ | Limits (ADR 0007) and Turnstile (ADR 0010) decided; production daily cap open, fails closed (§3a a) |
+| P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007) |
+| P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); OpenAI fallback model ID pinned at P7; D1 validation pending (§3a c) |
+| P7.5 | Caching & latency | ⬜ | D13 decided (ADR 0012); C7 answer cache off by default; schema additions go into P3 |
+| P8 | Widget | ⬜ | Markdown off (ADR 0008), sessionStorage + history endpoint (ADR 0009), feedback deferred (ADR 0011); UI_SCHEMA §3/§7 edits pending |
+| P9 | Analysis, entries, settings, retention | ⬜ | Retention periods set (ADR 0006); jurisdiction per client and DPAs open (§3a b) |
 | P10 | Observability & ops | ⬜ | |
 | P11 | Evaluation, security, load | ⬜ | |
 | P12 | First client deployment | ⬜ | |
@@ -35,38 +35,52 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] Contact routing (W-16) added to PRD, plan, DATABASE_SCHEMA, UI_SCHEMA, TECH_SPECS
 - [x] Planning docs committed and pushed to `main`
 - [x] Supabase MCP connected to dev project `rbejeqwxyxtklehuzibv` (verified 2026-11-03: empty `public` schema, no migrations)
-- [x] `CLAUDE.md` dev contract v0.1 + sub-agents in `.claude/agents/` (`sonnet-implementer`, `haiku-docs`, `reviewer`, `security-reviewer`). None spawned yet, so model resolution is unverified. Committed to `main`.
+- [x] `CLAUDE.md` dev contract v0.1 + sub-agents in `.claude/agents/` (`sonnet-implementer`, `haiku-docs`, `reviewer`, `security-reviewer`). Committed to `main`. Model record: §9.
+- [x] P0 decisions D1–D14 approved by owner 2026-11-03 as recommended; ADRs 0001–0013 written in `docs/decisions/` (**uncommitted**)
 
 ## 3. Open decisions (P0)
 
+All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each decision's ADR is the authoritative record.
+
 | # | Decision | Blocks | Owner | State |
 |---|---|---|---|---|
-| D1 | Embedding provider/model + vector dimension | P3, P6, P7 | TBD | ⬜ |
-| D2 | Primary + fallback chat providers | P7 | TBD | ⬜ |
-| D3 | Moderation provider + streaming policy | P7 | TBD | ⬜ |
-| D4 | OCR scope/provider | P6 | TBD | ⬜ |
-| D5 | Retention, jurisdiction, provider DPA | P3 (005), P9 | TBD | ⬜ |
-| D6 | File limits, rate limits, budget caps | P5, P6 | TBD | ⬜ |
-| D7 | Markdown rendering + sanitiser | P8 | TBD | ⬜ |
-| D8 | History endpoint in MVP | P7, P8 | TBD | ⬜ |
-| D9 | Visitor token persistence | P8 | TBD | ⬜ |
-| D10 | Bot challenge on `/v1/sessions` | P5 | TBD | ⬜ |
-| D11 | Node LTS + dependency pins | P1 | TBD | ⬜ |
-| D12 | Feedback buttons: defer or add endpoint | P8 | TBD | ⬜ |
-| D14 | Per-client contact channels, hours, localised escalation messages, repeated-miss threshold | P3, P7, P8 | TBD | ⬜ |
-| D13 | Answer cache: enable per client? TTL? Which provider prompt caching? | P7.5 | TBD | ⬜ |
+| D1 | Embedding provider/model + vector dimension | P3, P6, P7 | Owner (approved 2026-11-03) | ✅ ADR 0002 (open: validation check, §3a c) |
+| D2 | Primary + fallback chat providers | P7 | Owner (approved 2026-11-03) | ✅ ADR 0003 (fallback model ID pinned at P7) |
+| D3 | Moderation provider + streaming policy | P7 | Owner (approved 2026-11-03) | ✅ ADR 0004 |
+| D4 | OCR scope/provider | P6 | Owner (approved 2026-11-03) | ✅ ADR 0005 |
+| D5 | Retention, jurisdiction, provider DPA | P3 (005), P9 | Owner (approved 2026-11-03) | ✅ ADR 0006 (open: jurisdiction per client, DPAs, §3a b) |
+| D6 | File limits, rate limits, budget caps | P5, P6 | Owner (approved 2026-11-03) | ✅ ADR 0007 (open: production daily cap, §3a a) |
+| D7 | Markdown rendering + sanitiser | P8 | Owner (approved 2026-11-03) | ✅ ADR 0008 (off for v1) |
+| D8 | History endpoint in MVP | P7, P8 | Owner (approved 2026-11-03) | ✅ ADR 0009 (enabled in MVP) |
+| D9 | Visitor token persistence | P8 | Owner (approved 2026-11-03) | ✅ ADR 0009 (sessionStorage) |
+| D10 | Bot challenge on `/v1/sessions` | P5 | Owner (approved 2026-11-03) | ✅ ADR 0010 (Turnstile; Cloudflare details unverified, §3a e) |
+| D11 | Node LTS + dependency pins | P1 | Owner (approved 2026-11-03) | ✅ ADR 0001 (Node 24 LTS; Supabase CLI install pending, §3a d) |
+| D12 | Feedback buttons: defer or add endpoint | P8 | Owner (approved 2026-11-03) | ✅ ADR 0011 (defer; UI_SCHEMA §3 edit pending) |
+| D14 | Per-client contact channels, hours, localised escalation messages, repeated-miss threshold | P3, P7, P8 | Owner (approved 2026-11-03) | ✅ ADR 0013 (threshold 2; per-client details at P12) |
+| D13 | Answer cache: enable per client? TTL? Which provider prompt caching? | P7.5 | Owner (approved 2026-11-03) | ✅ ADR 0012 (C7 off by default; TTL 24 h) |
+
+### 3a. Open items after P0 (not done)
+- **a)** Production daily budget cap per client: no value given. Fails closed until set (ADR 0007).
+- **b)** Jurisdiction India/DPDP is an assumption. Owner to confirm per client. Provider DPAs outstanding (ADR 0006).
+- **c)** D1 embedding validation check on real documents not run. Needs owner approval for real provider API calls (ADR 0002).
+- **d)** Supabase CLI not installed locally. Install needs owner approval (ADR 0001).
+- **e)** Non-Anthropic provider details (OpenAI, Voyage, Cloudflare) not verified in the P0 session (ADRs 0002, 0003, 0004, 0010).
+- **f)** ~~Spec edits~~ done 2026-11-03: UI_SCHEMA §3/§7, ARCHITECTURE §3 (item 7), TECH_SPECS §2 (item 10).
+- **g)** Nothing committed. ADRs 0001–0013 and this docs update are uncommitted.
 
 ## 4. Doc fixes pending (from `handover.md §6`)
 - [x] Add `escalation_label` to `public_bot_config`
 - [x] Resolve `data-bot-id` (slug) vs `bot_slug` vs UUID `bot_id` naming
 - [x] Add `OCR_REQUIRED` to TECH_SPECS §5 error list
-- [ ] Decide on feedback buttons (D12)
+- [x] Decide on feedback buttons (D12): defer, ADR 0011
+- [x] Remove `FeedbackButtons` from `UI_SCHEMA §3` (ADR 0011)
+- [x] Change `UI_SCHEMA §7` token default from memory-only to sessionStorage (ADR 0009)
 - [x] Document Stop → server abort on client disconnect
 - [x] Rename `request_runs.session_id` → `visitor_session_id`
-- [ ] Clarify public-config fetch path (Supabase REST direct)
+- [x] Clarify public-config fetch path (Supabase REST direct) — ARCHITECTURE §3
 - [x] Add `routes/conversations.ts` to README layout
 - [x] Mark `analysing` as background metadata, not a UI state
-- [ ] Enforce exclusion of `system` messages in history query spec
+- [x] Enforce exclusion of `system` messages in history query spec — TECH_SPECS §2
 
 ## 5. Requirements coverage
 
@@ -102,9 +116,10 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Hold P0 decision session; fill owners for D1–D12.
-2. Apply the remaining doc fixes in §4.
-3. Start P1 scaffold once D11 is decided.
+1. Owner provides the production daily cap (§3a a) and confirms jurisdiction per client (§3a b) when available.
+2. Owner decides whether to approve the D1 validation calls (§3a c) and the Supabase CLI install (§3a d).
+3. Apply the remaining spec doc fixes (§4 unchecked items, §3a f).
+4. P1 scaffold on owner go-ahead, using the ADR 0001 pins.
 
 ## 8. Change log
 | Date | Change |
@@ -112,3 +127,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | 2026-11-03 | Created status tracker; project in planning, no code. |
 | 2026-11-03 | Added W-16 contact routing across docs; resolved 7 doc inconsistencies; decision D14. |
 | 2026-11-03 | Added P7.5 caching & latency phase and decision D13. |
+| 2026-11-03 | P0 decisions D1–D14 approved by owner; ADRs 0001–0013 written in `docs/decisions/` (uncommitted). Status and handover updated (docs-only checkpoint, `haiku-docs`). No code, tests or Supabase changes. |
+
+## 9. Agent model record
+- `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
+- `sonnet-implementer`, `reviewer`, `security-reviewer`: no spawn is recorded in the P0-DOC1 evidence packet.
