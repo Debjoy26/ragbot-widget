@@ -18,7 +18,7 @@ insert into public.admin_memberships (user_id, role) values
 -- ===== anon: new service-only RPCs must be permission denied =====
 set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
-select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'anon: begin_request_run -> permission denied (service role only)');
+select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), 1, '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'anon: begin_request_run -> permission denied (service role only)');
 select throws_ok($q$select public.complete_job(gen_random_uuid(), 'w')$q$, '42501', null, 'anon: complete_job -> permission denied (service role only)');
 select throws_ok($q$select public.fail_job(gen_random_uuid(), 'w', 'e')$q$, '42501', null, 'anon: fail_job -> permission denied (service role only)');
 select throws_ok($q$select public.heartbeat_job(gen_random_uuid(), 'w', 60)$q$, '42501', null, 'anon: heartbeat_job -> permission denied (service role only)');
@@ -28,7 +28,7 @@ reset role;
 -- ===== nonmember: new service-only RPCs must be permission denied =====
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000000a4","aal":"aal2","role":"authenticated"}', true);
-select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'nonmember: begin_request_run -> permission denied (service role only)');
+select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), 1, '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'nonmember: begin_request_run -> permission denied (service role only)');
 select throws_ok($q$select public.complete_job(gen_random_uuid(), 'w')$q$, '42501', null, 'nonmember: complete_job -> permission denied (service role only)');
 select throws_ok($q$select public.fail_job(gen_random_uuid(), 'w', 'e')$q$, '42501', null, 'nonmember: fail_job -> permission denied (service role only)');
 select throws_ok($q$select public.heartbeat_job(gen_random_uuid(), 'w', 60)$q$, '42501', null, 'nonmember: heartbeat_job -> permission denied (service role only)');
@@ -38,7 +38,7 @@ reset role;
 -- ===== analyst: new service-only RPCs must be permission denied =====
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000000a3","aal":"aal2","role":"authenticated"}', true);
-select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'analyst: begin_request_run -> permission denied (service role only)');
+select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), 1, '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'analyst: begin_request_run -> permission denied (service role only)');
 select throws_ok($q$select public.complete_job(gen_random_uuid(), 'w')$q$, '42501', null, 'analyst: complete_job -> permission denied (service role only)');
 select throws_ok($q$select public.fail_job(gen_random_uuid(), 'w', 'e')$q$, '42501', null, 'analyst: fail_job -> permission denied (service role only)');
 select throws_ok($q$select public.heartbeat_job(gen_random_uuid(), 'w', 60)$q$, '42501', null, 'analyst: heartbeat_job -> permission denied (service role only)');
@@ -48,7 +48,7 @@ reset role;
 -- ===== admin: new service-only RPCs must be permission denied =====
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000000a2","aal":"aal2","role":"authenticated"}', true);
-select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'admin: begin_request_run -> permission denied (service role only)');
+select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), 1, '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'admin: begin_request_run -> permission denied (service role only)');
 select throws_ok($q$select public.complete_job(gen_random_uuid(), 'w')$q$, '42501', null, 'admin: complete_job -> permission denied (service role only)');
 select throws_ok($q$select public.fail_job(gen_random_uuid(), 'w', 'e')$q$, '42501', null, 'admin: fail_job -> permission denied (service role only)');
 select throws_ok($q$select public.heartbeat_job(gen_random_uuid(), 'w', 60)$q$, '42501', null, 'admin: heartbeat_job -> permission denied (service role only)');
@@ -58,7 +58,7 @@ reset role;
 -- ===== owner: new service-only RPCs must be permission denied =====
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"f1000000-0000-4000-8000-0000000000a1","aal":"aal2","role":"authenticated"}', true);
-select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'owner: begin_request_run -> permission denied (service role only)');
+select throws_ok($q$select * from public.begin_request_run(gen_random_uuid(), gen_random_uuid(), 1, '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$, '42501', null, 'owner: begin_request_run -> permission denied (service role only)');
 select throws_ok($q$select public.complete_job(gen_random_uuid(), 'w')$q$, '42501', null, 'owner: complete_job -> permission denied (service role only)');
 select throws_ok($q$select public.fail_job(gen_random_uuid(), 'w', 'e')$q$, '42501', null, 'owner: fail_job -> permission denied (service role only)');
 select throws_ok($q$select public.heartbeat_job(gen_random_uuid(), 'w', 60)$q$, '42501', null, 'owner: heartbeat_job -> permission denied (service role only)');
@@ -66,8 +66,8 @@ select throws_ok($q$select public.purge_expired_data_entries(10)$q$, '42501', nu
 reset role;
 
 -- ===== catalog: EXECUTE for service_role only =====
-select ok(has_function_privilege('service_role', 'public.begin_request_run(uuid, uuid, text, text)', 'EXECUTE'), 'service_role: EXECUTE on begin_request_run');
-select ok(not has_function_privilege('anon', 'public.begin_request_run(uuid, uuid, text, text)', 'EXECUTE') and not has_function_privilege('authenticated', 'public.begin_request_run(uuid, uuid, text, text)', 'EXECUTE') and not exists (select 1 from pg_proc p, lateral aclexplode(p.proacl) a where p.oid = 'public.begin_request_run(uuid, uuid, text, text)'::regprocedure and a.grantee = 0), 'catalog: anon/authenticated/PUBLIC cannot EXECUTE begin_request_run');
+select ok(has_function_privilege('service_role', 'public.begin_request_run(uuid, uuid, integer, text, text)', 'EXECUTE'), 'service_role: EXECUTE on begin_request_run');
+select ok(not has_function_privilege('anon', 'public.begin_request_run(uuid, uuid, integer, text, text)', 'EXECUTE') and not has_function_privilege('authenticated', 'public.begin_request_run(uuid, uuid, integer, text, text)', 'EXECUTE') and not exists (select 1 from pg_proc p, lateral aclexplode(p.proacl) a where p.oid = 'public.begin_request_run(uuid, uuid, integer, text, text)'::regprocedure and a.grantee = 0), 'catalog: anon/authenticated/PUBLIC cannot EXECUTE begin_request_run');
 select ok(has_function_privilege('service_role', 'public.complete_job(uuid, text)', 'EXECUTE'), 'service_role: EXECUTE on complete_job');
 select ok(not has_function_privilege('anon', 'public.complete_job(uuid, text)', 'EXECUTE') and not has_function_privilege('authenticated', 'public.complete_job(uuid, text)', 'EXECUTE') and not exists (select 1 from pg_proc p, lateral aclexplode(p.proacl) a where p.oid = 'public.complete_job(uuid, text)'::regprocedure and a.grantee = 0), 'catalog: anon/authenticated/PUBLIC cannot EXECUTE complete_job');
 select ok(has_function_privilege('service_role', 'public.fail_job(uuid, text, text)', 'EXECUTE'), 'service_role: EXECUTE on fail_job');

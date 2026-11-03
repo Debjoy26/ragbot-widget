@@ -40,6 +40,51 @@ begin
 end;
 $$;
 
+-- Fail runs stuck in 'reserved'/'running' for longer than p_older_than_seconds (60..86400, required, no
+-- default; measured from started_at) so they stop counting toward the per-session concurrency cap
+-- (P3-D2 N2). In the SAME transaction their still-'reserved' budget reservations are released.
+-- Settled reservations are left alone (the spend happened). Batch-bounded (1..10000, required); oldest
+-- first; rows locked by another transaction are skipped. Returns the number of runs failed.
+create function public.expire_stuck_request_runs(p_older_than_seconds integer, p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+as $$
+declare v_n integer;
+begin
+  if p_older_than_seconds is null or p_older_than_seconds < 60 or p_older_than_seconds > 86400 then
+    raise exception 'expire_stuck_request_runs: older-than seconds must be 60..86400' using errcode = '22023';
+  end if;
+  if p_batch is null or p_batch < 1 or p_batch > 10000 then
+    raise exception 'expire_stuck_request_runs: batch must be 1..10000' using errcode = '22023';
+  end if;
+  with stuck as (
+    select r.id from public.request_runs r
+     where r.state in ('reserved', 'running')
+       and r.started_at < now() - make_interval(secs => p_older_than_seconds)
+     order by r.started_at
+     limit p_batch
+     for update skip locked
+  ),
+  failed as (
+    update public.request_runs r
+       set state = 'failed', finished_at = now()
+      from stuck
+     where r.id = stuck.id
+    returning r.id
+  ),
+  released as (
+    update public.budget_reservations b
+       set state = 'released'
+      from failed
+     where b.request_id = failed.id and b.state = 'reserved'
+    returning b.id
+  )
+  select count(*)::integer into v_n from failed;
+  return v_n;
+end;
+$$;
+
 create function public.purge_expired_rate_limit_buckets(p_batch integer)
 returns integer
 language plpgsql
@@ -280,6 +325,7 @@ end;
 $$;
 
 revoke all on function public.expire_visitor_sessions(integer, integer) from public, anon, authenticated;
+revoke all on function public.expire_stuck_request_runs(integer, integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_rate_limit_buckets(integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_caches(integer) from public, anon, authenticated;
 revoke all on function public.expire_stale_budget_reservations(integer) from public, anon, authenticated;
@@ -288,6 +334,7 @@ revoke all on function public.purge_expired_usage_records(integer) from public, 
 revoke all on function public.purge_expired_data_entries(integer) from public, anon, authenticated;
 
 grant execute on function public.expire_visitor_sessions(integer, integer) to service_role;
+grant execute on function public.expire_stuck_request_runs(integer, integer) to service_role;
 grant execute on function public.purge_expired_rate_limit_buckets(integer) to service_role;
 grant execute on function public.purge_expired_caches(integer) to service_role;
 grant execute on function public.expire_stale_budget_reservations(integer) to service_role;

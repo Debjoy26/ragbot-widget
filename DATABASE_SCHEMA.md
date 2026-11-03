@@ -93,7 +93,16 @@ Ambiguous cells above are resolved fail-closed:
 - **Public config:** `public_bot_config.is_published` is derived from `bot_profiles.enabled` by triggers; anon/authenticated only see published rows.
 - **Retention/caches:** `expire_visitor_sessions(batch, grace_seconds 1..86400)` (grace required); `purge_expired_caches` also drops `answer_cache` rows from older corpus/settings versions.
 - **Other:** rate-limit counter clamps at `limit + 1`; global default `EXECUTE` on new functions revoked from PUBLIC; `knowledge` bucket limited to PDF/Markdown/plain text; `knowledge_gaps` pairs answers to questions by `request_id`, returns ≤ 500 chars, hides `blocked` from analysts.
-- **Known limits:** races are tested sequentially only (real multi-connection tests in P5/P6); `fail_job` requeues without backoff; stuck `reserved`/`running` runs count toward the per-session cap until the session expires.
+- **Known limits:** races are tested sequentially only (real multi-connection tests in P5/P6); `fail_job` requeues without backoff.
+
+### Follow-up hardening (debug cycle P3-D2, 2026-11-04)
+- `begin_request_run(bot_id, visitor_session_id, token_version, idempotency_key, request_hash)` — token version must match the locked session row (RB004).
+- `settle_budget_reservation` accepts `reserved` (even past `expires_at`) or `expired`, so real spend from slow requests always counts toward the cap; `settled`/`released`/foreign → RB003. A late settle counts toward the UTC day the reservation was created.
+- `release_budget_reservation(bot_id, reservation_id)` — ownership check and settings-row lock (RB002/RB003).
+- `expire_stuck_request_runs(older_than_seconds 60..86400, batch 1..10000)` (service-only) fails stuck `reserved`/`running` runs and releases their reservations; the worker cleanup job must schedule it alongside `expire_visitor_sessions` and `purge_expired_data_entries`.
+- `messages.reply_to_message_id` (assistant rows only; must reference a `user` message in the same conversation, enforced by trigger, 23514). The API sets it on every assistant insert. `knowledge_gaps` pairs by `reply_to_message_id`, then `request_id`, then latest prior user message; hiding `blocked` from analysts is UX-only (analysts can read messages directly).
+- `audit_logs` also rejects TRUNCATE (statement trigger). `is_active_member` is executable by `authenticated` only.
+- Retention purges fail closed for **all** bots if any bot lacks retention config (design choice; one bot per client project in practice).
 
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.

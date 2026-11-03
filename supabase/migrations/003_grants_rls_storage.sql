@@ -72,8 +72,10 @@ as $$
     false
   );
 $$;
-revoke all on function public.is_active_member(text[]) from public, anon;
-grant execute on function public.is_active_member(text[]) to authenticated, service_role;
+-- service_role has no auth.uid() and the helper takes no user id, so a service_role grant would be dead
+-- (P3-D2 N7c): authenticated only.
+revoke all on function public.is_active_member(text[]) from public, anon, service_role;
+grant execute on function public.is_active_member(text[]) to authenticated;
 
 -- is_active_member_mfa(roles): active membership AND an MFA-verified session (JWT aal = 'aal2').
 --   Used by EVERY authenticated data policy and the admin RPCs (ADR 0015). is_active_member() above
@@ -222,12 +224,18 @@ revoke all on function public.usage_daily_summary(date, date) from public, anon,
 grant execute on function public.usage_daily_summary(date, date) to authenticated;
 
 -- Knowledge gaps: unanswered questions grouped by handoff_reason + question text with counts.
--- Question pairing (deterministic): the user message with the same request_id as the assistant
--- message (request_id present); only when the assistant message has NO request_id, the latest earlier
--- user message in the same conversation, ordered by (created_at desc, id desc). Only assistant
--- messages count as answers. Question text is btrim'd and truncated to 500 characters.
+-- Question pairing (deterministic, first rule that applies, no cross-rule fallback):
+--   1. assistant.reply_to_message_id present -> that user message (durable; survives purge of the
+--      visitor session / request_runs which null request_id);
+--   2. else assistant.request_id present -> the user message with the same request_id in the same conversation;
+--   3. else (neither present) the latest earlier user message in the same conversation, ordered by
+--      (created_at desc, id desc).
+-- Only assistant messages count as answers. Question text is btrim'd and truncated to 500 characters.
 -- handoff_reason = 'blocked' (moderation hits; may quote abusive/sensitive text) is visible to
--- owner/admin only; analysts do not see those rows. Date range is inclusive (UTC days), at most
+-- owner/admin only; analysts do not see those rows. NOTE (P3-D2 N4): this is a UX filter only, NOT an
+-- access control: analysts hold SELECT on public.messages (RLS, MFA members) and can read the blocked
+-- question text there directly. If analysts must not see moderation hits, that needs a separate
+-- policy/decision (it would also affect conversation viewing). Date range is inclusive (UTC days), at most
 -- 92 days; limit is 1..200. Returns user-authored text, so access is MFA members only and the
 -- result follows conversation retention (rows disappear when messages do).
 create function public.knowledge_gaps(p_from date, p_to date, p_limit integer)
@@ -268,6 +276,7 @@ begin
     where u.conversation_id = a.conversation_id
       and u.role = 'user'
       and case
+            when a.reply_to_message_id is not null then u.id = a.reply_to_message_id
             when a.request_id is not null then u.request_id = a.request_id
             else u.created_at <= a.created_at
           end
@@ -286,6 +295,8 @@ end;
 $$;
 revoke all on function public.knowledge_gaps(date, date, integer) from public, anon, service_role;
 grant execute on function public.knowledge_gaps(date, date, integer) to authenticated;
+comment on function public.knowledge_gaps(date, date, integer) is
+  'Unanswered-question report for MFA members. Hiding handoff_reason=blocked from analysts is a UX filter only: analysts can read public.messages directly (P3-D2 N4).';
 
 -- ---------------------------------------------------------------------------
 -- 6. service_role (API/worker): explicit grants. It also bypasses RLS; application checks remain mandatory.
@@ -319,6 +330,21 @@ $$;
 revoke all on function public.audit_logs_append_only() from public, anon, authenticated;
 create trigger audit_logs_append_only before update or delete on public.audit_logs
   for each row execute function public.audit_logs_append_only();
+
+-- TRUNCATE bypasses row-level triggers; block it too (P3-D2 N5). service_role already lacks the
+-- TRUNCATE privilege; this also stops the table owner.
+create function public.audit_logs_no_truncate()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  raise exception 'audit_logs is append-only' using errcode = '42501';
+end;
+$$;
+revoke all on function public.audit_logs_no_truncate() from public, anon, authenticated;
+create trigger audit_logs_no_truncate before truncate on public.audit_logs
+  for each statement execute function public.audit_logs_no_truncate();
 
 -- ---------------------------------------------------------------------------
 -- 7. Private storage bucket. No object policies for anon/authenticated: browsers cannot read,

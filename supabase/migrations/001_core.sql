@@ -296,6 +296,10 @@ create table public.messages (
   id              uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations (id) on delete cascade,
   request_id      uuid references public.request_runs (id) on delete set null,
+  -- Durable question pairing (P3-D2 N3): an assistant message points at the user message it answers.
+  -- Unlike request_id (set null when the run/session is purged), this survives session cleanup.
+  -- Set null if the question message itself is deleted. Integrity trigger below.
+  reply_to_message_id uuid references public.messages (id) on delete set null,
   role            text not null,
   content         text not null,
   status          text not null default 'complete',
@@ -308,8 +312,46 @@ create table public.messages (
   constraint messages_handoff_reason_check check (
     handoff_reason is null or handoff_reason in
       ('no_knowledge', 'out_of_scope', 'human_requested', 'blocked', 'unavailable', 'repeated_no_knowledge')
+  ),
+  -- Only assistant messages answer a question; a message cannot reply to itself.
+  constraint messages_reply_to_check check (
+    reply_to_message_id is null or (role = 'assistant' and reply_to_message_id <> id)
   )
 );
+
+-- The referenced message must be a USER message of the SAME conversation (SQLSTATE 23514 otherwise).
+-- A missing target is left to the foreign key (23503). Also protects the target: once an assistant
+-- message points at a user message, that message cannot be moved to another conversation or change role.
+create function public.messages_check_reply_to()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_conv uuid;
+  v_role text;
+begin
+  if tg_op = 'UPDATE' and old.role = 'user'
+     and (new.role is distinct from old.role or new.conversation_id is distinct from old.conversation_id)
+     and exists (select 1 from public.messages m where m.reply_to_message_id = old.id) then
+    raise exception 'messages: a message that is the target of reply_to_message_id cannot change role or conversation'
+      using errcode = '23514';
+  end if;
+
+  if new.reply_to_message_id is not null then
+    select m.conversation_id, m.role into v_conv, v_role
+      from public.messages m where m.id = new.reply_to_message_id;
+    if found and (v_conv is distinct from new.conversation_id or v_role <> 'user') then
+      raise exception 'messages: reply_to_message_id must reference a user message of the same conversation'
+        using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.messages_check_reply_to() from public, anon, authenticated;
+create trigger messages_check_reply_to before insert or update of reply_to_message_id, conversation_id, role
+  on public.messages for each row execute function public.messages_check_reply_to();
 
 -- Citation snapshots survive chunk/version deletion only until the message itself is
 -- purged by retention (messages cascade); chunk and version links are set null.
@@ -500,6 +542,7 @@ create index conversations_created_at_idx on public.conversations (created_at);
 
 create index messages_conversation_time_idx on public.messages (conversation_id, created_at);
 create index messages_request_id_idx on public.messages (request_id) where request_id is not null;
+create index messages_reply_to_idx on public.messages (reply_to_message_id) where reply_to_message_id is not null;
 -- Knowledge-gaps view (DATABASE_SCHEMA "Indexes and integrity").
 create index messages_handoff_reason_idx on public.messages (handoff_reason, created_at) where handoff_reason is not null;
 

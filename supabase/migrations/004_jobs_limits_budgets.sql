@@ -5,10 +5,13 @@
 -- Custom SQLSTATEs (stable contract for api/ P5):
 --   RB001  budget_exceeded           reserve_request_budget: daily cap would be exceeded
 --   RB002  budget_policy_missing     reserve_request_budget: client_settings/daily cap missing or invalid (fail closed)
---   RB003  reservation_not_active    settle/release on a reservation that is not in state 'reserved' (settle: also
---                                    unknown / other bot's / expired reservation)
+--   RB003  reservation_not_active    settle: unknown / other bot's reservation, or one already 'settled'/'released'
+--                                    (a 'reserved' reservation past expires_at and a swept 'expired' one CAN still be
+--                                    settled: the provider call already happened, N1);
+--                                    release: unknown / other bot's reservation or one not in state 'reserved'
 --   RB004  request_conflict          reserve_request_budget: request missing, wrong bot, or reservation not reusable;
---                                    begin_request_run: unknown, expired or revoked visitor session
+--                                    begin_request_run: unknown, expired or revoked visitor session, or a
+--                                    token_version that does not match the session's current token_version
 --   RB010  document_not_found        activate/mark_deleted: unknown or deleted document / wrong version
 --   RB011  activation_failed         activate_document_version: validation failed (chunk count, status, embedding model)
 --   RB012  embedding_change_requires_reindex  (trigger in 002) embedding model/dimension change while chunks exist
@@ -296,8 +299,10 @@ $$;
 
 -- Reconcile a reservation with the actual (conservatively estimated) cost. The bot id is an
 -- ownership check; the bot's client_settings row is locked like reserve_request_budget does (so a
--- settle cannot interleave with a cap check). An expired (even if not yet swept) or foreign
--- reservation cannot be settled: RB003.
+-- settle cannot interleave with a cap check). Settling is allowed from state 'reserved' (even when
+-- already past expires_at but not yet swept) and from 'expired' (swept): the provider call has happened
+-- and its real cost must count toward the daily cap (P3-D2 N1), otherwise a slow request would escape
+-- the cap. A foreign, 'settled' or 'released' reservation is rejected: RB003.
 create function public.settle_budget_reservation(p_bot_id uuid, p_reservation_id uuid, p_actual_amount numeric)
 returns void
 language plpgsql
@@ -318,25 +323,34 @@ begin
 
   select * into v_res from public.budget_reservations br
    where br.id = p_reservation_id and br.bot_id = p_bot_id for update;
-  if not found or v_res.state <> 'reserved' or v_res.expires_at <= now() then
-    raise exception 'settle_budget_reservation: reservation is not active' using errcode = 'RB003';
+  if not found or v_res.state not in ('reserved', 'expired') then
+    raise exception 'settle_budget_reservation: reservation is not settleable' using errcode = 'RB003';
   end if;
 
   update public.budget_reservations set state = 'settled', amount = p_actual_amount where id = v_res.id;
 end;
 $$;
 
-create function public.release_budget_reservation(p_reservation_id uuid)
+-- Release an active ('reserved') reservation back to the budget. Same discipline as settle (P3-D2 N7b):
+-- the bot id is an ownership check (a foreign or unknown reservation: RB003) and the bot's
+-- client_settings row is locked first (RB002 when missing).
+create function public.release_budget_reservation(p_bot_id uuid, p_reservation_id uuid)
 returns void
 language plpgsql
 set search_path = ''
 as $$
 begin
-  if p_reservation_id is null then
-    raise exception 'release_budget_reservation: reservation is required' using errcode = '22023';
+  if p_bot_id is null or p_reservation_id is null then
+    raise exception 'release_budget_reservation: bot and reservation are required' using errcode = '22023';
   end if;
+
+  perform 1 from public.client_settings cs where cs.bot_id = p_bot_id for update;
+  if not found then
+    raise exception 'release_budget_reservation: no client settings for bot' using errcode = 'RB002';
+  end if;
+
   update public.budget_reservations set state = 'released'
-   where id = p_reservation_id and state = 'reserved';
+   where id = p_reservation_id and bot_id = p_bot_id and state = 'reserved';
   if not found then
     raise exception 'release_budget_reservation: reservation is not active' using errcode = 'RB003';
   end if;
@@ -397,15 +411,17 @@ $$;
 --   'duplicate'           same (bot, session, key) AND same request_hash already exists; run_id = existing run
 --   'hash_mismatch'       same key but a different request_hash (client bug / replay tampering); run_id null
 --   'concurrency_limited' running/reserved runs of this session >= rate_policy.concurrent_requests_per_session
--- Rejects an unknown, other-bot, expired or revoked session with RB004. The cap is read from
+-- Rejects an unknown, other-bot, expired or revoked session, or a p_token_version that differs from the
+-- locked session's token_version (token rotated/invalidated; P3-D2 N7a), with RB004. The cap is read from
 -- client_settings.rate_policy and FAILS CLOSED (RB002) when settings or the key are missing/invalid.
 -- Key must be a canonical lowercase UUID string, hash 64 lowercase hex (also enforced by CHECKs).
--- Known limitation: there is no reaper for runs stuck in 'reserved'/'running'; they count against the
--- cap until the session is deleted (expire_visitor_sessions cascades runs).
+-- Runs stuck in 'reserved'/'running' count against the cap until finished; expire_stuck_request_runs
+-- (005) fails such runs after a threshold and releases their budget reservations.
 -- ---------------------------------------------------------------------------
 create function public.begin_request_run(
   p_bot_id             uuid,
   p_visitor_session_id uuid,
+  p_token_version      integer,
   p_idempotency_key    text,
   p_request_hash       text
 )
@@ -422,16 +438,18 @@ declare
   v_active   integer;
   v_id       uuid;
 begin
-  if p_bot_id is null or p_visitor_session_id is null or p_idempotency_key is null or p_request_hash is null
+  if p_bot_id is null or p_visitor_session_id is null or p_token_version is null or p_token_version < 1
+     or p_idempotency_key is null or p_request_hash is null
      or p_idempotency_key !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
      or p_request_hash !~ '^[0-9a-f]{64}$' then
-    raise exception 'begin_request_run: bot, session, canonical uuid idempotency key and sha256 hex hash are required'
+    raise exception 'begin_request_run: bot, session, token version, canonical uuid idempotency key and sha256 hex hash are required'
       using errcode = '22023';
   end if;
 
   select * into v_sess from public.visitor_sessions s
    where s.id = p_visitor_session_id and s.bot_id = p_bot_id for update;
-  if not found or v_sess.revoked_at is not null or v_sess.expires_at <= now() then
+  if not found or v_sess.revoked_at is not null or v_sess.expires_at <= now()
+     or v_sess.token_version <> p_token_version then
     raise exception 'begin_request_run: visitor session is not valid' using errcode = 'RB004';
   end if;
 
@@ -557,11 +575,11 @@ revoke all on function public.activate_document_version(uuid, uuid, integer) fro
 revoke all on function public.mark_document_deleted(uuid, integer) from public, anon, authenticated;
 revoke all on function public.reserve_request_budget(uuid, uuid, numeric, integer) from public, anon, authenticated;
 revoke all on function public.settle_budget_reservation(uuid, uuid, numeric) from public, anon, authenticated;
-revoke all on function public.begin_request_run(uuid, uuid, text, text) from public, anon, authenticated;
+revoke all on function public.begin_request_run(uuid, uuid, integer, text, text) from public, anon, authenticated;
 revoke all on function public.complete_job(uuid, text) from public, anon, authenticated;
 revoke all on function public.fail_job(uuid, text, text) from public, anon, authenticated;
 revoke all on function public.heartbeat_job(uuid, text, integer) from public, anon, authenticated;
-revoke all on function public.release_budget_reservation(uuid) from public, anon, authenticated;
+revoke all on function public.release_budget_reservation(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.record_rate_limit_attempt(text, integer, integer) from public, anon, authenticated;
 
 grant execute on function public.claim_jobs(text, integer, integer, text[]) to service_role;
@@ -569,9 +587,9 @@ grant execute on function public.activate_document_version(uuid, uuid, integer) 
 grant execute on function public.mark_document_deleted(uuid, integer) to service_role;
 grant execute on function public.reserve_request_budget(uuid, uuid, numeric, integer) to service_role;
 grant execute on function public.settle_budget_reservation(uuid, uuid, numeric) to service_role;
-grant execute on function public.begin_request_run(uuid, uuid, text, text) to service_role;
+grant execute on function public.begin_request_run(uuid, uuid, integer, text, text) to service_role;
 grant execute on function public.complete_job(uuid, text) to service_role;
 grant execute on function public.fail_job(uuid, text, text) to service_role;
 grant execute on function public.heartbeat_job(uuid, text, integer) to service_role;
-grant execute on function public.release_budget_reservation(uuid) to service_role;
+grant execute on function public.release_budget_reservation(uuid, uuid) to service_role;
 grant execute on function public.record_rate_limit_attempt(text, integer, integer) to service_role;

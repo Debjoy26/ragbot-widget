@@ -102,9 +102,9 @@ select throws_ok(
   'RB001', null, 'budget: any further spend beyond the cap is refused');
 
 -- Release frees capacity; settle reconciles to the actual amount.
-select lives_ok(format('select public.release_budget_reservation(%L)', (select id from res)), 'budget: release of an active reservation succeeds');
+select lives_ok(format('select public.release_budget_reservation(%L, %L)', 'b1000000-0000-4000-8000-0000000000d1', (select id from res)), 'budget: release of an active reservation succeeds');
 select is((select state from public.budget_reservations where id = (select id from res)), 'released', 'budget: released reservation has state released');
-select throws_ok(format('select public.release_budget_reservation(%L)', (select id from res)), 'RB003', null, 'budget: releasing twice is rejected');
+select throws_ok(format('select public.release_budget_reservation(%L, %L)', 'b1000000-0000-4000-8000-0000000000d1', (select id from res)), 'RB003', null, 'budget: releasing twice is rejected');
 select lives_ok(
   $q$select public.reserve_request_budget('b1000000-0000-4000-8000-0000000000d1', '93000000-0000-4000-8000-0000000000d3', 3, 60)$q$,
   'budget: released capacity can be reserved again');
@@ -126,12 +126,17 @@ reset role;
 update public.budget_reservations set expires_at = now() - interval '1 minute' where request_id = '93000000-0000-4000-8000-0000000000d3';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
--- L2: settle ownership / expiry / locking (the 93 reservation is active but past expires_at, not yet swept).
-select throws_ok(
-  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', (select id from public.budget_reservations where request_id = '93000000-0000-4000-8000-0000000000d3'), 0.1)$q$,
-  'RB003', null, 'budget (L2): settling an expired (unswept) reservation is rejected');
-select is((select state from public.budget_reservations where request_id = '93000000-0000-4000-8000-0000000000d3'), 'reserved',
-  'budget (L2): the rejected settle left the reservation untouched');
+-- L2: settle ownership / locking. N1 (P3-D2) CHANGED the former L2 rule "an expired-but-unswept reservation
+-- cannot be settled": the provider call already happened, so its real cost must still count toward the cap.
+-- The 93 reservation is kept (reserved, past expires_at, unswept) for the sweep assertions below; the new
+-- N1 behaviour is asserted here on a separate reservation (96) and in 170_p3d2_fixes.test.sql.
+insert into public.budget_reservations (id, bot_id, request_id, amount, expires_at) values
+  ('e6000000-0000-4000-8000-0000000000d6', 'b1000000-0000-4000-8000-0000000000d1', '96000000-0000-4000-8000-0000000000d6', 0.2, now() - interval '1 minute');
+select lives_ok(
+  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', 'e6000000-0000-4000-8000-0000000000d6', 0.1)$q$,
+  'budget (N1): settling a reservation already past expires_at (unswept) is accepted');
+select is((select state || ':' || amount::text from public.budget_reservations where id = 'e6000000-0000-4000-8000-0000000000d6'), 'settled:0.100000',
+  'budget (N1): the late settle recorded the actual amount');
 insert into public.budget_reservations (id, bot_id, request_id, amount, expires_at) values
   ('e5000000-0000-4000-8000-0000000000d5', 'b1000000-0000-4000-8000-0000000000d1', '95000000-0000-4000-8000-0000000000d5', 0.2, now() + interval '1 hour');
 select throws_ok(
