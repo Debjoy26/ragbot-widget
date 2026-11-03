@@ -57,7 +57,8 @@ Break any of these and you've introduced a security or correctness bug:
 12. **Widget renders plain text via `textContent`** unless sanitised Markdown is explicitly enabled (no raw HTML, remote images, iframes, `javascript:` URLs).
 13. **Fail closed** on missing limits/config.
 14. **Secrets live only in Render env.** Never in bundles, git, prompts, or logs.
-15. **Single migration history** in `supabase/migrations` here; admin repo must not add competing migrations.
+15. **Caches never outrank invariants.** Every cache key includes `bot_id` and the relevant version (`corpus_version`, `settings_version`, model, prompt template). Answer cache is opt-in, first-turn only, and re-checks that cited documents are still active. Input moderation, auth and rate limits run on every request, including cache hits. See `plan.md` P7.5.
+16. **Single migration history** in `supabase/migrations` here; admin repo must not add competing migrations.
 
 ## 5. Decisions still open (block specific phases)
 From `PRD.md §9` plus items surfaced while planning. Owner: product/FDE lead. Record each as an ADR in `docs/decisions/`.
@@ -77,7 +78,7 @@ From `PRD.md §9` plus items surfaced while planning. Owner: product/FDE lead. R
 | Exact Node LTS + dependency versions | Scaffold |
 
 ## 6. Inconsistencies / gaps found in the docs
-Resolve these in P0 before freezing shared contracts:
+Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** items 1, 2 (embed attribute is now `data-bot-slug`), 3, 5, 6, 8, 9. **Still open:** 4 (feedback buttons), 7 (public-config fetch path wording in ARCHITECTURE §3), 10 (system-message exclusion in history query).
 
 1. **`escalation_label` missing from DB.** `UI_SCHEMA §5` public config has `escalation_label`; `DATABASE_SCHEMA` `public_bot_config` does not. → Add column.
 2. **`bot_id` vs `bot_slug` naming.** Embed uses `data-bot-id="website-support"` (a slug value), the chat request uses `bot_slug`, and public config returns a UUID `bot_id`. → Suggest renaming the embed attribute to `data-bot-slug` or documenting that `data-bot-id` carries the slug.
@@ -111,3 +112,4 @@ Resolve these in P0 before freezing shared contracts:
 | Date | From | To | Notes |
 |---|---|---|---|
 | 2026-11-03 | Planning | Implementation | Docs baseline v1.0 reviewed; plan/status/handover created. No code yet. |
+| 2026-11-03 | Planning | Implementation | Added caching (P7.5) and contact routing (W-16); synced all docs. |

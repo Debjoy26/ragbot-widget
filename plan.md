@@ -1,7 +1,7 @@
 # Implementation Plan — ragbot_widget
 
 > Source of truth: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`.
-> This plan turns that planning baseline (v1.0) into an ordered, testable build. Requirement IDs (W-01…W-15) refer to `PRD.md §5`.
+> This plan turns that planning baseline (v1.0) into an ordered, testable build. Requirement IDs (W-01…W-16) refer to `PRD.md §5`.
 > Created: 2026-11-03. Progress is tracked in `status.md`; context for whoever picks this up is in `handover.md`.
 
 ---
@@ -29,6 +29,7 @@
 | P5 | Visitor sessions & abuse controls | `/v1/sessions`, rate limits, budget reservation, idempotency | P4 | Forged-token, race, and idempotency tests |
 | P6 | Ingestion pipeline (worker) | Job queue, extract/chunk/embed, atomic activation, admin document API | P3, P4 | Queue test suite (TECH_SPECS §9 "Queue") |
 | P7 | Retrieval & chat | `/v1/chat` SSE: moderation, retrieval, prompt, provider + fallback, citations | P5, P6 | Unit + evaluation set baseline |
+| P7.5 | Caching & latency | Layered caches (config, embeddings, retrieval, provider prompt cache, opt-in answer cache), cache warming | P7 | Invalidation + isolation tests; measured latency gain |
 | P8 | Widget | Shadow-DOM custom element, states, streaming, a11y, build to `/v1.0.0/widget.js` | P2, P7 (contract) | E2E on host pages, a11y, XSS tests |
 | P9 | Async analysis, entries, settings, retention | Summaries/sentiment/intent jobs, `/v1/entries`, settings PATCH, cleanup/retention jobs | P6, P7 | Integration tests + retention audit |
 | P10 | Observability & ops hardening | Metrics, redaction, alerts, render.yaml, vercel.json, deploy/smoke scripts | P4–P9 | Smoke test against staging |
@@ -75,8 +76,8 @@ Also: create dev Supabase project (or local stack via Supabase CLI), dev Render/
 **Acceptance:** fresh clone → `npm ci && npm run build && npm test` succeeds; CI green.
 
 ### P2 — Shared contracts (`shared/`)
-- `contracts.ts`: request/response types for every route in TECH_SPECS §2–3; SSE event union `meta | delta | sources | done | error`.
-- `schemas.ts`: Zod schemas — chat request (rejects unknown fields such as `context`, `system`, `history`), public bot config (colour hex + https URL validation, no HTML), visitor token claims, job payloads per job type, data-entry form schemas keyed by `schema_key`, settings whitelist.
+- `contracts.ts`: request/response types for every route in TECH_SPECS §2–3; SSE event union `meta | delta | sources | handoff | done | error`. `handoff` carries `{reason, message, contact}` where `contact` comes from server config only.
+- `schemas.ts`: Zod schemas — chat request (rejects unknown fields such as `context`, `system`, `history`), public bot config (colour hex + https URL validation, no HTML), contact block (email format, E.164 phone, `https:` contact/WhatsApp URLs, hours + IANA time zone, localised escalation messages, at least one channel required), visitor token claims, job payloads per job type, data-entry form schemas keyed by `schema_key`, settings whitelist.
 - Error code enum: `INVALID_REQUEST, SESSION_EXPIRED, UNAUTHORIZED, FORBIDDEN, RATE_LIMITED, BUDGET_EXCEEDED, FILE_UNSUPPORTED, OCR_REQUIRED, INDEXING_FAILED, PROVIDER_UNAVAILABLE, STREAM_INTERRUPTED` (note `OCR_REQUIRED` appears in TECH_SPECS §7 but not §5 — add it).
 - `providers.ts`: `ChatProvider`, `EmbeddingProvider`, `ModerationProvider` interfaces with typed, classified errors (`transient | rate_limited | auth | billing | permanent`).
 - `prompts.ts`: prompt template builder with delimited evidence blocks and versioned template IDs.
@@ -136,16 +137,84 @@ Pipeline per ARCHITECTURE §3:
 3. `services/moderation.ts`: input moderation; blocked → `blocked` event/state, never reaches generation (W-09).
 4. Query embedding with the **same** model as the corpus (no silent switch).
 5. `services/retrieval.ts`: `match_document_chunks` with bounded k; per-model calibrated threshold; language handling; token-budgeted context.
-6. No evidence above threshold → scoped refusal + escalation (W-05).
+6. **Contact routing (W-05, W-16).** `services/handoff.ts` decides whether to route the visitor to contact details:
+   - **No knowledge:** no evidence above the calibrated threshold → skip generation. Send a short localised "I don't have that information" message (template from config, not the LLM) plus a `handoff` event with `reason = no_knowledge`.
+   - **Out of scope:** a scope check (cheap classifier or prompt rule) → `reason = out_of_scope`.
+   - **Human requested:** intent detection for "talk to a person / contact / phone number" → `reason = human_requested`. This answers directly with the contact card and skips retrieval and generation.
+   - **Blocked:** input moderation block (step 3) → `reason = blocked`, with the policy message plus contact card.
+   - **Unavailable:** providers exhausted after retries and fallback → `error` event followed by `handoff` with `reason = unavailable`.
+   - **Repeated misses:** count `no_knowledge` per conversation; at the configured threshold (default 2), set `prominent: true` so the widget pins the card.
+   - **Model hedges:** if the model itself says it can't answer despite evidence (detected via a structured "insufficient_evidence" flag in the prompt's output format), also emit `handoff`.
+   - **Persist:** `messages.handoff_reason`, plus the question text for the admin "knowledge gaps" view, subject to retention.
 7. Prompt: private identity/tone/scope/languages from `bot_profiles`, bounded server-owned history, delimited untrusted evidence.
 8. `services/llm.ts`: primary provider with bounded total deadline; retry/fallback only **before** first emitted token for eligible errors; after tokens emitted → terminate as partial (`STREAM_INTERRUPTED`) with retry hint (W-08).
 9. Output moderation per client policy (buffer-all or rolling batch).
-10. SSE events: `meta` → `delta`* → `sources` → `done`, or `error`. Citation tokens mapped to retrieved chunk IDs only; invented IDs/URLs dropped (W-07).
+10. SSE events: `meta` → `delta`* → `sources` → (`handoff`) → `done`, or `error` (+ `handoff`). Citation tokens mapped to retrieved chunk IDs only; invented IDs/URLs dropped (W-07). Phone numbers, emails or URLs in model text that don't match configured contact details or validated sources are de-linked (W-16).
 11. `services/conversations.ts`: persist user + assistant messages (status complete/partial/failed), `message_sources`, `usage_events` (incl. failed/fallback attempts), settle reservation, enqueue debounced `analyze-conversation`.
 12. Client disconnect → abort upstream provider call; still record usage.
 - Optional `GET /v1/conversations/:id` (same-session only, bounded, no system rows) — behind a feature flag.
 
-**Tests:** prompt assembly, citation mapping, fallback eligibility matrix, abort handling, browser-supplied context rejected, prompt-injection docs don't change behaviour, cross-session history denied.
+**Tests:** each `handoff_reason` trigger fires correctly and carries config contact details; unanswerable eval set always yields `handoff` and never an invented answer or invented phone/email; prompt assembly, citation mapping, fallback eligibility matrix, abort handling, browser-supplied context rejected, prompt-injection docs don't change behaviour, cross-session history denied.
+
+### P7.5 — Caching & latency
+Goal: cut time-to-first-token and total response time without weakening any invariant in `handover.md §4`. Every cache is **bot-scoped, version-keyed, backend-only, and bypassable** by a kill-switch flag in `client_settings.feature_flags`.
+
+**Where the time goes on a cache miss (expected order of cost):** chat-provider generation ≫ input/output moderation ≈ query embedding > vector search > config/profile reads > session/limit checks. Caches below target each step, biggest win first.
+
+#### Cache layers
+
+| # | Layer | What is cached | Key | Storage | TTL / invalidation | Expected win |
+|---|---|---|---|---|---|---|
+| C1 | Provider prompt caching | Stable prompt prefix: system instructions + bot identity/tone/scope (+ tool-free policy text) | Handled by provider; we guarantee a byte-identical prefix per `(bot_id, settings_version, prompt_template_version)` | Provider-side (e.g. Anthropic `cache_control`, OpenAI automatic prefix caching) | Provider TTL; prefix changes when settings/template version changes | Lower TTFT and input-token cost on every request |
+| C2 | Bot config cache | `bot_profiles`, `client_settings`, `public_bot_config` rows | `bot_id` + `settings_version` | In-process LRU in API and worker | 30–60 s TTL **and** immediate bust when `settings_version` changes (checked cheaply or pushed via Postgres `LISTEN/NOTIFY`) | Removes 2–3 DB round-trips per request |
+| C3 | Public config at the edge | `public_bot_config` JSON for the widget | `bot_slug` + `ETag` | Widget `localStorage` (stale-while-revalidate) + HTTP `Cache-Control: max-age=60, stale-while-revalidate=600` | ETag change on settings update | Instant first paint of launcher/greeting |
+| C4 | Query embedding cache | Embedding vector of the normalised query | `sha256(embedding_model ‖ embedding_dimensions ‖ normalised_query)` | L1 in-process LRU; L2 Postgres `query_embedding_cache` | 7–30 days; key changes automatically when the model changes. Raw query text **not** stored, only its hash | Skips one external API call for repeated questions |
+| C5 | Retrieval result cache | Ordered chunk IDs + scores (not chunk text) | `bot_id ‖ corpus_version ‖ query_embedding_hash ‖ k ‖ threshold ‖ language` | L1 in-process LRU; optional L2 Postgres | Short TTL (≤10 min); **`corpus_version` bump on any activation/delete invalidates instantly** | Skips vector search; chunk text re-read by ID so deleted chunks can't leak |
+| C6 | Moderation verdict cache | Allow/block verdict for input text | `sha256(moderation_model ‖ policy_version ‖ normalised_text)` | L1 + L2 Postgres | 24 h; key changes with policy version | Skips input-moderation call for repeated questions |
+| C7 | Answer cache (opt-in per client) | Final moderated answer text + validated source IDs (+ `handoff_reason` if it was a no-knowledge reply; contact details are **not** cached, they are read from current config at serve time) | `bot_id ‖ corpus_version ‖ settings_version ‖ prompt_template_version ‖ chat_model ‖ language ‖ sha256(normalised_question)` | Postgres `answer_cache` | TTL from `client_settings` (default 24 h); invalidated by any version change | Near-instant full answers for FAQs (biggest win) |
+| C8 | Cache warming | Pre-populate C4–C7 for `suggested_questions` and an FAQ list | — | Worker job `warm-answer-cache` | Runs after each `activate_document_version` and settings change | First visitor also gets the fast path |
+
+#### Answer cache (C7) safety rules
+The answer cache is the largest speed-up and the riskiest, so it is **off by default** and only serves when **all** of these hold:
+1. **First turn only.** No prior conversation history, so the answer can't depend on earlier context.
+2. **Exact normalised match** (lower-case, trimmed, collapsed whitespace, Unicode NFKC) for v1.0. Semantic or near-duplicate matching is deferred; it needs its own evaluation set and threshold calibration before it can be enabled.
+3. The cached answer was **completed** (not partial or failed), **passed output moderation**, and had **validated citations** or was a deliberate scoped refusal.
+4. Current `corpus_version`, `settings_version`, `prompt_template_version` and chat model all match the key.
+5. Every cited `document_version_id` is **still active and not deleted**. Re-checked on read; any failure is treated as a miss and the entry is purged.
+6. **Input moderation, session auth, rate limits and idempotency still run** on cache hits. Only retrieval, generation and output moderation are skipped.
+7. Questions that look like they contain personal data (email/phone/ID patterns) are **never written** to the cache.
+8. Cache hits still create normal `messages`, `message_sources` and a `usage_events` row with `operation = 'answer_cache_hit'`, cost 0. No budget reservation is needed beyond a minimal hold.
+9. Cached answers are replayed through the same SSE contract (`meta` → `delta` chunks → `sources` → `done`) so the widget needs no special path. They are sent in a few large `delta` events rather than token by token.
+
+#### Contact-routing schema additions (into P3 `001_core.sql`)
+- `public_bot_config`: `escalation_label`, `escalation_messages jsonb` (per language), `contact_email`, `contact_phone`, `contact_whatsapp_url`, `contact_page_url` (replaces/aliases `escalation_url`), `business_hours jsonb`, `timezone`. CHECK constraints for format where SQL can enforce it; full validation in backend.
+- `client_settings.handoff_policy jsonb`: repeated-miss threshold, enabled triggers.
+- `messages.handoff_reason text` CHECK in (`no_knowledge`, `out_of_scope`, `human_requested`, `blocked`, `unavailable`, `repeated_no_knowledge`).
+- Index on `(bot_id, handoff_reason, created_at)` via conversations for the knowledge-gaps view.
+
+#### Cache schema additions (into P3 migrations)
+- `bot_profiles.settings_version int` and `bot_profiles.corpus_version bigint`. `activate_document_version` and `mark_document_deleted` increment `corpus_version` in the same transaction; settings PATCH increments `settings_version`.
+- `query_embedding_cache (key_hash pk, embedding_model, embedding vector(DIM), created_at, last_hit_at, expires_at)`
+- `moderation_cache (key_hash pk, policy_version, verdict, created_at, expires_at)`
+- `answer_cache (id, bot_id, cache_key_hash unique, language, answer_text, source_refs jsonb, corpus_version, settings_version, prompt_template_version, chat_model, hit_count, created_at, last_hit_at, expires_at)`
+- All cache tables: RLS enabled, **no anon/authenticated grants**, API/worker only. Admins see only aggregate hit-rate via the safe status RPC.
+- Cleanup job (P9) deletes expired rows. Conversation/retention deletion does not need to touch caches because no visitor or session identifiers are stored in them.
+
+#### Related latency work (not caching, same phase)
+- HTTP keep-alive / connection pooling to Supabase and providers (undici `Agent`); reuse one client per process.
+- Run the query embedding and input moderation **in parallel**, not one after the other.
+- Send the SSE `meta` event and flush headers immediately so the widget leaves `connecting` fast.
+- Keep the API and worker in the same region as Supabase (ARCHITECTURE §8). Warm instances (paid Render, no sleeping).
+- Rolling-batch output moderation (if chosen in D3) lets tokens stream instead of waiting for the full answer.
+
+#### Tests
+- **Isolation:** bot A can never get bot B's cache entry (keys and queries always include `bot_id`).
+- **Invalidation:** activate a new version → stale retrieval/answer caches miss; delete a document → no cached answer citing it is served; settings change → C1/C2/C7 refresh.
+- **Safety:** cache hit still blocked by input moderation and rate limits; follow-up turns never hit C7; partial/failed answers never cached; PII-pattern questions not stored.
+- **Kill switch:** flag off → every layer bypassed, behaviour identical to P7.
+- **Measurement (P11):** p50/p95 TTFT and total latency recorded for cold miss, warm miss (C1–C6 hits) and answer-cache hit.
+
+**Acceptance:** all tests green; measured p95 TTFT improves on the P7 baseline for warm-miss traffic; hit rates visible in metrics.
 
 ### P8 — Widget (`widget/`)
 - `widget.ts`: read `data-*` attributes from `document.currentScript`; singleton guard (`window.__ragbotWidget`/`customElements.get`) so duplicate script tags reuse one instance.
@@ -153,27 +222,30 @@ Pipeline per ARCHITECTURE §3:
 - `session.ts`: create/refresh visitor session; token in memory (sessionStorage only if P0 approves); reset clears local state.
 - `api.ts`: `fetch` + SSE parser over `ReadableStream`; `AbortController` for Stop; idempotency key per send; reconcile on reconnect, never auto-resend after partial output.
 - `ui.ts`: component tree from UI_SCHEMA §3 in Shadow DOM; state machine `booting → closed ↔ ready → connecting → streaming → ready` plus `limited`, `blocked`, `unavailable`.
+- `ContactCard` component (UI_SCHEMA addition): renders on `handoff` events and in `blocked` / `unavailable` states. It shows the escalation message, `mailto:` / `tel:` / `https:` links built only from validated config, and business hours with an "open now / closed" hint from the time zone. Keyboard and screen-reader accessible; pinned above the composer when `prominent`. It stays usable offline from cached or bundled config when the API is down.
+- Footer escalation link always present (existing UI_SCHEMA item), using the same config.
 - `render.ts`: `textContent` only by default; optional Markdown via maintained sanitiser with raw HTML, remote images, iframes and `javascript:` URLs disabled; source list from validated `sources` event only.
 - Accessibility: `role=log`, batched live-region announcements, focus trap/restore, Escape to close, labelled buttons, visible focus, `prefers-reduced-motion`, RTL support if languages require.
 - Mobile: viewport-constrained panel, composer stays visible with on-screen keyboard (`visualViewport`).
 - `scripts/build.mjs`: esbuild → single IIFE `dist/v1.0.0/widget.js` (CSS inlined into the shadow root), source maps not published publicly; `vercel.json` sets JS content type and `Cache-Control: public, max-age=31536000, immutable` for versioned paths.
 - `public/index.html`: demo host page only.
 
-**Tests:** Playwright E2E on representative host pages (aggressive global CSS, CSP-strict page, SPA), mobile viewport, keyboard-only, axe a11y scan, XSS payloads in answers/config/sources, streaming cancel, partial response display.
+**Tests:** contact card for each handoff reason, `tel:`/`mailto:` links correct, malicious config values (`javascript:` URL, HTML in message) rejected, card shown when API unreachable; Playwright E2E on representative host pages (aggressive global CSS, CSP-strict page, SPA), mobile viewport, keyboard-only, axe a11y scan, XSS payloads in answers/config/sources, streaming cancel, partial response display.
 
 **Open gap:** `FeedbackButtons` appear in UI_SCHEMA but there is no feedback endpoint or table — either defer (hide component) or add `message_feedback` table + `POST /v1/feedback` (needs PRD update).
 
 ### P9 — Analysis, entries, settings, retention
 - `jobs/analyze-conversation.ts`: debounced by dedupe key per conversation; summary, sentiment, intent → `conversation_analysis` with `analysis_version`; never on the answer path (W-10).
 - `POST /v1/entries`: only approved `schema_key`s; schema validation; consent timestamp required; minimal personal data (W-13).
-- `PATCH /v1/admin/bot-settings`: whitelisted fields only, audited, role-checked; embedding changes require explicit reindex workflow.
+- Knowledge-gaps RPC for admins: aggregated unanswered questions by `handoff_reason` and frequency, so clients can add missing documents.
+- `PATCH /v1/admin/bot-settings`: whitelisted fields only (now including contact block, escalation messages, business hours, repeated-miss threshold; bumps `settings_version`), audited, role-checked; embedding changes require explicit reindex workflow.
 - `POST /v1/admin/conversations/:id/delete`: retention-aware deletion (messages, sources, analysis, entries).
 - `jobs/cleanup.ts`: delete storage originals + chunks for deleted documents, abandoned staging uploads, expired sessions/rate buckets, stale reservations, records past retention.
 
 **Tests:** analysis does not delay first `delta`; invalid entry payloads rejected; non-whitelisted settings rejected; deleted data audit shows nothing retained beyond policy.
 
 ### P10 — Observability & ops
-- Metrics: request latency (first-event and total), queue age, job failures, rate/budget denials, fallback frequency, indexing failures, provider usage/cost.
+- Metrics: request latency (first-event and total, split by cache path), cache hit rate per layer (C1–C7), queue age, job failures, rate/budget denials, fallback frequency, indexing failures, provider usage/cost.
 - Alerts: provider auth/billing errors, queue age threshold, dead-letter jobs, budget ≥80%, readiness failures.
 - `render.yaml`: API web service (health `/health/ready`) and worker, workspace build/start commands, env var keys (no values).
 - `scripts/deploy-client.mjs`: reads `clients/<client>/deployment.example.json` (public IDs only), sets up widget build per client.
@@ -209,6 +281,7 @@ Follow README "Deployment order per client" steps 1–10 exactly. Record schema/
 | W-12 Limits | P5 | Race/limit tests |
 | W-13 Data entries | P9 | Schema rejection tests |
 | W-14 Safe presentation | P8 | XSS suite |
+| W-16 Contact routing | P2, P3, P7, P8, P9 | Handoff trigger tests, unanswerable eval set, contact card E2E |
 | W-15 Indexing | P6 | Queue suite |
 
 ---
@@ -225,13 +298,19 @@ Follow README "Deployment order per client" steps 1–10 exactly. Record schema/
 | Free-tier cold starts in demos mistaken for production | README production baseline: paid Render services |
 | Scanned PDFs silently empty | `OCR_REQUIRED` rejection unless OCR configured |
 | Documentation inconsistencies (see `handover.md §6`) | Resolve in P0 before contracts are frozen in P2 |
+| Stale or deleted knowledge served from cache | Version-keyed caches (`corpus_version`, `settings_version`), citation re-check on read, answer cache opt-in |
+| Cache leaks data across bots or visitors | `bot_id` in every key; first-turn-only answer cache; no session IDs or raw queries stored; PII-pattern filter |
+| Bot invents contact details or dead-ends the visitor | Contact info only from config via `handoff` event; model contact text de-linked; unanswerable eval set |
+| Slow first response | P7.5 caching layers, parallel embed + moderate, warm paid instances, provider prompt caching |
 
 ---
 
 ## 5. Definition of done (v1.0.0)
-- All W-01…W-15 acceptance conditions demonstrated with linked tests.
+- At least one validated contact channel configured per client (go-live gate).
+- All W-01…W-16 acceptance conditions demonstrated with linked tests.
 - Full TECH_SPECS §9 matrix executed; results recorded in `docs/release/1.0.0.md`.
-- Latency measured and recorded (not just targeted).
+- Latency measured and recorded (not just targeted), for cold, warm-miss and cache-hit paths.
+- Cache invalidation and isolation tests green; answer cache defaults to off unless the client opted in.
 - Rollback rehearsed; backup restore rehearsed incl. Storage.
 - No secrets in repo, bundles, logs, or prompts (secret scan in CI).
 - `status.md` shows all phases complete; `handover.md` updated with as-built deviations.

@@ -12,13 +12,15 @@
 1. Install through one script tag on an existing HTML/CSS/JavaScript website.
 2. Answer from approved PDF, Markdown, and TXT knowledge with verified source references.
 3. Give each client a configured identity, tone, scope, supported languages, and escalation message.
-4. Store conversations and usage securely for authorised client administrators.
-5. Support moderation, multilingual retrieval, sentiment, intent, and conversation summaries.
-6. Support tested primary/fallback chat providers without exposing credentials.
-7. Bound public-endpoint abuse and spending.
+4. When the knowledge base cannot answer, route the visitor to the client's configured human contact details instead of leaving them at a dead end.
+5. Store conversations and usage securely for authorised client administrators.
+6. Support moderation, multilingual retrieval, sentiment, intent, and conversation summaries.
+7. Support tested primary/fallback chat providers without exposing credentials.
+8. Bound public-endpoint abuse and spending.
 
 ## 3. Non-goals
 - Agentic tools, arbitrary connectors, autonomous actions, refunds, orders, or bookings.
+- Live human-agent chat takeover, ticket creation, or callback scheduling. v1 routing means **showing** the client's configured contact details; it does not transfer the conversation or contact anyone on the visitor's behalf.
 - Email, SMS, social media, or voice adapters.
 - End-user BYOK, provider-key management in the dashboard, or model training.
 - Autonomous extraction of arbitrary personal data from chat.
@@ -28,6 +30,8 @@
 ## 4. Users and journeys
 ### Visitor
 Load website → open widget → see AI/privacy notice → ask question → receive streamed answer and sources → ask follow-up → end conversation.
+
+Unanswerable path: ask question the knowledge base cannot answer → receive a short, honest "I don't have that information" reply in the conversation language → see a contact card with the client's configured contact details (for example email, phone, hours, contact page) → tap to email, call, or open the contact page.
 ### Client administrator
 Use the separate dashboard to update knowledge, review permitted records, and configure allowed bot settings.
 ### FDE/operator
@@ -40,7 +44,7 @@ Provision isolated services, install branding, configure secrets and limits, run
 | W-02 | Encapsulated UI | Host CSS does not break the widget; widget styles do not modify host elements. |
 | W-03 | Streaming chat | Ordered events render incremental text; aborted and interrupted requests have explicit states. |
 | W-04 | Grounded retrieval | Only active, eligible document versions are searched using the configured embedding model. |
-| W-05 | Missing knowledge | No suitable evidence produces a scoped refusal/escalation rather than an invented answer. |
+| W-05 | Missing knowledge | No suitable evidence produces a scoped "not available" reply plus contact routing (W-16) rather than an invented answer. |
 | W-06 | Identity | Configured name, greeting, language policy, and business scope apply to every answer. |
 | W-07 | Citations | Source IDs resolve to retrieved records; private bucket URLs and arbitrary model URLs are not exposed. |
 | W-08 | Fallback | Eligible transient failures trigger bounded retries/fallback before public output begins. |
@@ -51,6 +55,28 @@ Provision isolated services, install branding, configure secrets and limits, run
 | W-13 | Data entries | Only approved, explicitly submitted forms create validated entries; no unrestricted LLM writes. |
 | W-14 | Safe presentation | Plain text by default; optional Markdown is sanitised, with remote images and raw HTML disabled. |
 | W-15 | Indexing | Durable jobs are retried, version activation is atomic, and failed replacements preserve old knowledge. |
+| W-16 | Contact routing | Missing knowledge, out-of-scope questions, explicit requests for a human, blocked input, and service unavailability all show a contact card built from server configuration. The model never writes contact details itself. |
+
+### 5.1 Contact routing (W-16) details
+- **Triggers** (each is recorded as a `handoff_reason`):
+  - `no_knowledge`: retrieval found nothing above the calibrated threshold.
+  - `out_of_scope`: the question falls outside the configured business scope.
+  - `human_requested`: the visitor asks for a person, agent, or contact.
+  - `blocked`: input moderation blocked the message.
+  - `unavailable`: providers failed after retries and fallback.
+  - `repeated_no_knowledge`: the same conversation hit `no_knowledge` N times, where N is configurable (default 2). The contact card is pinned more prominently.
+- **Contact details are client configuration**, set in the admin panel and stored in public config, because they are meant for visitors anyway. They include:
+  - display label and short escalation message (localised per supported language)
+  - email
+  - phone in E.164 format
+  - WhatsApp link (optional)
+  - contact-page URL
+  - business hours and time zone
+- **Validation:** email format, E.164 phone, `https:` URLs only, plain text with no HTML. At least one contact channel is required before go-live; missing contact configuration fails the release gate.
+- **Trust:** contact details reach the widget as a structured server event and are rendered by the widget from configuration. Model-generated phone numbers, emails, or URLs are never turned into links.
+- **Tone:** the reply admits the gap plainly, does not guess, and does not pretend a human has been notified.
+- **Analytics:** handoff reason and the unanswered question are recorded so admins can see knowledge gaps and add missing content. These records follow the conversation retention policy.
+- **Availability:** the contact card also shows when the API is unreachable, using the last known public config or bundled branding.
 
 ## 6. Knowledge lifecycle
 1. Dashboard requests a document registration after backend validation.
@@ -85,3 +111,4 @@ Provision isolated services, install branding, configure secrets and limits, run
 - Prompt/output moderation policy and latency trade-off.
 - Retention period, disclosure rules, provider data processing terms, and client jurisdiction.
 - Hosting resources and per-client commercial limits.
+- Per-client contact channels, business hours, localised escalation messages, and the repeated-miss threshold for contact routing.

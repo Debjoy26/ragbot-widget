@@ -7,7 +7,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
 ```html
 <script
   src="https://client-a-widget.example.com/v1.0.0/widget.js"
-  data-bot-id="website-support"
+  data-bot-slug="website-support"
   data-api-url="https://client-a-api.example.com"
   data-supabase-url="https://PROJECT_REF.supabase.co"
   data-supabase-publishable-key="sb_publishable_REPLACE_ME"
@@ -18,6 +18,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
 - `data-api-url` is the API base; requests use `/v1/...` routes.
 - Public Supabase access is limited to the dedicated public configuration relation.
 - Fixed branding may also be bundled for first paint; server safety settings always take precedence.
+- `data-bot-slug` carries the bot slug (sent as `bot_slug` to the API); the server returns the UUID `bot_id` in public config.
 - Duplicate initialisation must reuse an existing instance rather than attach multiple launchers.
 
 ## 3. Component hierarchy
@@ -37,6 +38,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
           AnswerBody
           SourceList
           FeedbackButtons
+        ContactCard [escalation message, email/phone/WhatsApp/contact-page links, business hours, open-now hint]
         StatusNotice
       OptionalApprovedForm
       Composer [textarea, send/stop]
@@ -51,12 +53,13 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
 | ready | Greeting/transcript and composer | Send |
 | connecting | Request indicator | Stream/error/timeout |
 | streaming | Incremental assistant text and Stop | Done/abort/error |
-| analysing | No blocking indicator required | Background only |
 | limited | Retry-after or daily-limit message | Retry/reset |
-| blocked | Policy message, safe escalation | New allowed request |
-| unavailable | Service error and bounded retry | User retry |
+| blocked | Policy message plus ContactCard | New allowed request |
+| unavailable | Service error, bounded retry, plus ContactCard from cached/bundled config | User retry |
 ```
-Only one active generation per conversation in the first release. Prevent duplicate sends. Stop aborts the browser request and requests upstream cancellation; usage already incurred is still recorded.
+Conversation analysis is background metadata, not a visible state.
+A `handoff` event does not change state: the ContactCard is appended to the transcript and the widget returns to `ready`. When `prominent` is true, the card is also pinned above the composer until dismissed.
+Only one active generation per conversation in the first release. Prevent duplicate sends. Stop aborts the browser request; the API treats the client disconnect as a cancellation and aborts the upstream provider call. Usage already incurred is still recorded.
 
 ## 5. Public configuration shape
 ```json
@@ -71,10 +74,20 @@ Only one active generation per conversation in the first release. Prevent duplic
   "privacy_url": "https://client.example.com/privacy",
   "supported_languages": ["en", "hi"],
   "escalation_label": "Contact support",
-  "escalation_url": "https://client.example.com/contact"
+  "escalation_messages": {
+    "en": "I don't have that information. Our team can help:",
+    "hi": "मेरे पास यह जानकारी नहीं है। हमारी टीम आपकी मदद कर सकती है:"
+  },
+  "contact_email": "support@client.example.com",
+  "contact_phone": "+911234567890",
+  "contact_whatsapp_url": "https://wa.me/911234567890",
+  "contact_page_url": "https://client.example.com/contact",
+  "business_hours": { "mon-fri": "09:00-18:00", "sat": "10:00-14:00" },
+  "timezone": "Asia/Kolkata"
 }
 ```
 Validate colour/URL values; do not permit arbitrary HTML, script, CSS, or backend instructions in public configuration.
+Contact fields: email format, E.164 phone, `https:` URLs only, plain-text messages. Omitted channels are hidden; at least one channel is required. Public config may be cached in `localStorage` (stale-while-revalidate with ETag) so the launcher, greeting and ContactCard work instantly and when the API is down.
 
 ## 6. Rendering and accessibility
 - Use `textContent` for plain text. Sanitise optional Markdown with a maintained library.
@@ -85,6 +98,13 @@ Validate colour/URL values; do not permit arbitrary HTML, script, CSS, or backen
 - Set message direction from language where appropriate; test long and right-to-left content if supported.
 - On mobile, constrain to viewport height and preserve composer visibility with the on-screen keyboard.
 - Do not aggressively announce every token to screen readers; batch updates.
+
+## 6.1 Contact card rules
+- Built only from public config plus the `handoff` event; never from model text.
+- Links: `mailto:` from `contact_email`, `tel:` from `contact_phone`, `https:` for WhatsApp and contact page. Each is a labelled button with a visible focus state.
+- Show business hours in the configured time zone with an "open now / closed" hint; never claim a human has been notified.
+- Phone numbers, emails or URLs that appear in model text are shown as plain text, not links.
+- Announced once to screen readers when it appears.
 
 ## 7. Visitor session policy
 Keep the short-lived session token in memory by default. Optional sessionStorage persistence requires an explicit policy. Never store provider credentials or admin tokens in widget state. Session reset should clear locally held context and start a new authorised conversation.

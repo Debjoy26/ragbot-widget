@@ -45,11 +45,12 @@ The dashboard may read RLS-protected records directly. Settings updates and dest
 }
 ```
 Headers: `Authorization: Bearer <visitor-token>`, `Idempotency-Key: <uuid>`, JSON content type. No browser-supplied retrieved context, provider API key, system prompt, or assistant history is accepted.
-Events: `meta` (request/conversation/message IDs), `delta` (approved text), `sources` (validated display references), `done` (final status), `error` (safe code/request ID/retry hint). Provider names/usage may be retained server-side rather than exposed publicly.
+Events: `meta` (request/conversation/message IDs), `delta` (approved text), `sources` (validated display references), `handoff` (contact routing), `done` (final status), `error` (safe code/request ID/retry hint).
+`handoff` payload: `{ "reason": "no_knowledge" | "out_of_scope" | "human_requested" | "blocked" | "unavailable" | "repeated_no_knowledge", "message": "<localised escalation message from config>", "prominent": boolean, "contact": { email?, phone?, whatsapp_url?, page_url?, business_hours?, timezone? } }`. Contact values come from current server configuration only, never from model output. On `unavailable`, `handoff` follows the `error` event. Provider names/usage may be retained server-side rather than exposed publicly.
 A duplicate idempotency key cannot spend twice; reconcile ongoing/completed requests. If replay is unsupported, return the completed result/status instead of regenerating.
 
 ## 5. Errors
-Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORBIDDEN`, `RATE_LIMITED`, `BUDGET_EXCEEDED`, `FILE_UNSUPPORTED`, `INDEXING_FAILED`, `PROVIDER_UNAVAILABLE`, `STREAM_INTERRUPTED`. Use appropriate HTTP status before streaming; after headers are sent, use an error event. Do not reveal stack traces or raw provider response bodies.
+Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORBIDDEN`, `RATE_LIMITED`, `BUDGET_EXCEEDED`, `FILE_UNSUPPORTED`, `OCR_REQUIRED`, `INDEXING_FAILED`, `PROVIDER_UNAVAILABLE`, `STREAM_INTERRUPTED`. Use appropriate HTTP status before streaming; after headers are sent, use an error event. Do not reveal stack traces or raw provider response bodies.
 
 ## 6. Retrieval/embedding
 - Choose one embedding space and dimension per active indexed corpus; use its compatible query encoder.
@@ -59,6 +60,30 @@ Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORB
 - Map citation tokens to retrieved chunks and deny invented source IDs/URLs.
 - Embedding-provider outages do not trigger a silent switch to an incompatible embedding model.
 - Multilingual tests include cross-language questions/documents where promised.
+
+## 6.1 Contact routing (PRD W-16)
+- `no_knowledge`: no evidence above the calibrated threshold → skip generation; send the configured localised message plus `handoff`.
+- `out_of_scope`: scope check fails → `handoff`.
+- `human_requested`: visitor asks for a person/contact → respond with `handoff` directly, skipping retrieval and generation.
+- `blocked`: input moderation blocks → policy message plus `handoff`.
+- `unavailable`: providers exhausted after retries/fallback → `error` then `handoff`.
+- `repeated_no_knowledge`: configurable count of misses per conversation (default 2) → `handoff` with `prominent: true`.
+- The model returns a structured `insufficient_evidence` flag; when set, the API emits `handoff` even if evidence was retrieved.
+- Phone numbers, emails and URLs in model text that don't match configured contact details or validated sources are not linked.
+- `messages.handoff_reason` is persisted; admins read aggregated gaps via the `knowledge_gaps` RPC.
+
+## 6.2 Caching (latency)
+All caches are bot-scoped, version-keyed, backend-only, and can be disabled by a kill switch in `client_settings.cache_policy`.
+| Layer | Key | Storage | Invalidation |
+|---|---|---|---|
+| Provider prompt caching | Byte-identical prefix per bot, settings version and prompt template | Provider | Prefix changes on version change |
+| Bot config | `bot_id` + `settings_version` | In-process LRU | 30–60 s TTL and version bump |
+| Public config | `bot_slug` + ETag | Browser storage + HTTP stale-while-revalidate | ETag change |
+| Query embedding | hash(model, dims, normalised query) | LRU + `query_embedding_cache` | Key changes with model |
+| Retrieval results (chunk IDs only) | bot, `corpus_version`, embedding hash, k, threshold, language | LRU | `corpus_version` bump; ≤10 min TTL |
+| Moderation verdict | hash(model, policy version, text) | LRU + `moderation_cache` | Key changes with policy |
+| Answer (opt-in) | bot, corpus/settings/prompt versions, model, language, hash(question) | `answer_cache` | Any version change; TTL from config |
+Answer-cache hits are first-turn only, still pass session auth, rate limits, idempotency and input moderation, re-check that cited versions are active, never store contact details or PII-pattern questions, and record a zero-cost `usage_events` row. Run query embedding and input moderation in parallel; flush SSE headers and `meta` immediately; reuse keep-alive connections.
 
 ## 7. Files and jobs
 File limits are required client configuration. Validate actual MIME/content, byte count, path, parser behaviour, and encryption/scan status. Treat MD/TXT as data, never instructions or executable content. Reject unsupported scans with `OCR_REQUIRED` rather than silently marking empty documents ready.
@@ -75,12 +100,13 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 - Generic untrusted prompts/documents never grant access or change server configuration.
 
 ## 9. Test and release matrix
-- Unit: validation, prompt assembly, citation mapping, token expiry, fallback eligibility.
+- Unit: validation, prompt assembly, citation mapping, token expiry, fallback eligibility, handoff triggers, contact-field validation.
+- Cache: cross-bot isolation, invalidation on activation/deletion/settings change, kill switch, no caching of partial/failed answers.
 - Integration: actual grants/RLS; vector dimension mismatch; membership revocation; source deletion; ownership rejection.
 - Queue: duplicate delivery, lease expiry, kill/restart, retries, incomplete embeddings, atomic replacement.
 - Security: forged visitor ID, cross-session history, prompt injection, XSS, file spoofing, budget races.
-- E2E: embed on representative host pages, mobile, accessibility, streaming cancellation, partial response.
-- Evaluation: known answers, refusal cases, multilingual cases, both primary/fallback, calibrated thresholds.
+- E2E: embed on representative host pages, mobile, accessibility, streaming cancellation, partial response, contact card for each handoff reason and when the API is unreachable.
+- Evaluation: known answers, refusal cases that always yield `handoff` with no invented contact details, multilingual cases, both primary/fallback, calibrated thresholds.
 - Operations: deployment rollback, storage/database restore rehearsal, retained/deleted personal data audit.
 
 ## 10. Operational constraints

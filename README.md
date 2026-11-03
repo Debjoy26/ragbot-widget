@@ -22,8 +22,8 @@ ragbot_widget/
 ├── api/
 │   ├── src/
 │   │   ├── server.ts
-│   │   ├── routes/{chat,sessions,documents,settings,entries,health}.ts
-│   │   ├── services/{auth,retrieval,llm,moderation,limits,conversations}.ts
+│   │   ├── routes/{chat,sessions,conversations,documents,settings,entries,health}.ts
+│   │   ├── services/{auth,retrieval,llm,moderation,limits,conversations,handoff,cache}.ts
 │   │   └── lib/{supabase,config,logger}.ts
 │   ├── package.json
 │   └── .env.example
@@ -64,6 +64,9 @@ Brace notation abbreviates multiple files. Use npm workspaces and one committed 
 - `DATABASE_SCHEMA.md`: authoritative shared data contract.
 - `ARCHITECTURE.md`: runtime flows and security boundaries.
 - `TECH_SPECS.md`: APIs, dependencies, limits, and tests.
+- `plan.md`: phased implementation plan.
+- `status.md`: progress tracker.
+- `handover.md`: context and invariants for whoever picks up the work.
 
 ## Local setup contract
 Install a supported Node.js LTS release; pin its exact version and compatible dependency versions during implementation. Provision a development Supabase project or local stack and test provider credentials.

@@ -20,6 +20,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P5 | Visitor sessions & abuse controls | ⬜ | Needs rate/budget limits (P0) |
 | P6 | Ingestion pipeline (worker) | ⬜ | Needs OCR decision + file limits (P0) |
 | P7 | Retrieval & chat | ⬜ | Needs chat/fallback/moderation providers (P0) |
+| P7.5 | Caching & latency | ⬜ | Needs D13 (answer-cache policy); schema additions go into P3 |
 | P8 | Widget | ⬜ | Needs Markdown + token-persistence decisions (P0) |
 | P9 | Analysis, entries, settings, retention | ⬜ | Needs retention policy (P0) |
 | P10 | Observability & ops | ⬜ | |
@@ -30,7 +31,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] Planning docs written: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`
 - [x] Docs reviewed end-to-end; 10 inconsistencies/gaps logged (`handover.md §6`)
 - [x] `plan.md`, `handover.md`, `status.md` created
-- [ ] Planning docs committed to git (currently untracked; repo has no commits)
+- [x] Caching & latency phase (P7.5) added to plan and TECH_SPECS
+- [x] Contact routing (W-16) added to PRD, plan, DATABASE_SCHEMA, UI_SCHEMA, TECH_SPECS
+- [x] Planning docs committed and pushed to `main`
 
 ## 3. Open decisions (P0)
 
@@ -48,17 +51,19 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | D10 | Bot challenge on `/v1/sessions` | P5 | TBD | ⬜ |
 | D11 | Node LTS + dependency pins | P1 | TBD | ⬜ |
 | D12 | Feedback buttons: defer or add endpoint | P8 | TBD | ⬜ |
+| D14 | Per-client contact channels, hours, localised escalation messages, repeated-miss threshold | P3, P7, P8 | TBD | ⬜ |
+| D13 | Answer cache: enable per client? TTL? Which provider prompt caching? | P7.5 | TBD | ⬜ |
 
 ## 4. Doc fixes pending (from `handover.md §6`)
-- [ ] Add `escalation_label` to `public_bot_config`
-- [ ] Resolve `data-bot-id` (slug) vs `bot_slug` vs UUID `bot_id` naming
-- [ ] Add `OCR_REQUIRED` to TECH_SPECS §5 error list
+- [x] Add `escalation_label` to `public_bot_config`
+- [x] Resolve `data-bot-id` (slug) vs `bot_slug` vs UUID `bot_id` naming
+- [x] Add `OCR_REQUIRED` to TECH_SPECS §5 error list
 - [ ] Decide on feedback buttons (D12)
-- [ ] Document Stop → server abort on client disconnect
-- [ ] Rename `request_runs.session_id` → `visitor_session_id`
+- [x] Document Stop → server abort on client disconnect
+- [x] Rename `request_runs.session_id` → `visitor_session_id`
 - [ ] Clarify public-config fetch path (Supabase REST direct)
-- [ ] Add `routes/conversations.ts` to README layout
-- [ ] Mark `analysing` as background metadata, not a UI state
+- [x] Add `routes/conversations.ts` to README layout
+- [x] Mark `analysing` as background metadata, not a UI state
 - [ ] Enforce exclusion of `system` messages in history query spec
 
 ## 5. Requirements coverage
@@ -80,6 +85,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | W-13 | Data entries | ⬜ | ⬜ |
 | W-14 | Safe presentation | ⬜ | ⬜ |
 | W-15 | Indexing | ⬜ | ⬜ |
+| W-16 | Contact routing | ⬜ | ⬜ |
 
 ## 6. Release gates (PRD §8)
 
@@ -94,12 +100,13 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Commit the planning docs to `main` as the initial commit.
-2. Hold P0 decision session; fill owners for D1–D12.
-3. Apply the doc fixes in §4.
-4. Start P1 scaffold once D11 is decided.
+1. Hold P0 decision session; fill owners for D1–D12.
+2. Apply the remaining doc fixes in §4.
+3. Start P1 scaffold once D11 is decided.
 
 ## 8. Change log
 | Date | Change |
 |---|---|
 | 2026-11-03 | Created status tracker; project in planning, no code. |
+| 2026-11-03 | Added W-16 contact routing across docs; resolved 7 doc inconsistencies; decision D14. |
+| 2026-11-03 | Added P7.5 caching & latency phase and decision D13. |
