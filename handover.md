@@ -1,7 +1,7 @@
 # Handover — ragbot_widget
 
 > For the engineer (or agent) picking up this project. Read this first, then `status.md` for current progress and `plan.md` for the build order.
-> Last updated: 2026-11-03.
+> Last updated: 2026-11-04.
 
 ---
 
@@ -11,8 +11,9 @@ An embeddable, client-branded, retrieval-augmented (RAG) chatbot that a client i
 This repo also owns the **shared backend** — Render API, Render worker, and the Supabase schema — used by both this widget and the separate `ragbot_adminpanel` repo. The admin panel is a second frontend, **not** a second backend.
 
 ## 2. Current state (honest summary)
-- **Only planning documents and P0 decision records exist.** There is no application code, no `package.json`, and no migrations. P0 decisions D1–D14 are approved (2026-11-03); ADRs are in `docs/decisions/` (0001–0013, **uncommitted**).
-- Root planning documents are committed on `main`. Only `docs/` is untracked.
+- **Planning docs and P0 decision records (ADRs 0001–0013, committed in `5e416b6`) exist. ADR 0014 (provider-agnostic AI config) is uncommitted.** The P1 monorepo scaffold and the ADR 0014 config are implemented locally and **uncommitted**. The 7 local gates pass (`docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`) but CI has not run. The local Supabase stack runs (`supabase start` and `db reset` exit 0, 2026-11-04; logs in `docs/evidence/P1/supabase-2026-11-04/`).
+- **No feature code yet:** no API routes, no database migrations, no widget behaviour. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
+- **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
 
 | File | What it is authoritative for |
@@ -62,16 +63,28 @@ Break any of these and you've introduced a security or correctness bug:
 16. **Single migration history** in `supabase/migrations` here; admin repo must not add competing migrations.
 
 ## 5. Decisions (P0) — approved 2026-11-03
-All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0013; D8 and D9 share 0009). Do not re-decide these without a new ADR. Index and states: `status.md §3`.
+All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0014; D8 and D9 share 0009). ADR 0014 (2026-11-04) revises the provider and model parts of D1–D3 (ADRs 0002–0004); the 1536 dimension is kept. Do not re-decide these without a new ADR. Index and states: `status.md §3`.
 
 Remaining open items (not done):
 - **a)** Production daily budget cap per client: not set; fails closed (ADR 0007).
 - **b)** Jurisdiction (India/DPDP) is an assumption; owner to confirm per client; provider DPAs outstanding (ADR 0006).
-- **c)** D1 embedding validation on real documents not run; needs owner approval for real provider API calls (ADR 0002).
-- **d)** Supabase CLI not installed locally; install needs owner approval (ADR 0001).
+- **c)** Gemini embeddings verified to return 1536 dims only (2026-11-04). Retrieval-quality check on real documents not run (ADR 0002).
+- **d)** ~~Supabase CLI install~~ done 2026-11-04: CLI 3.0.0 pinned as devDependency.
 - **e)** Non-Anthropic provider details (OpenAI, Voyage, Cloudflare) not verified (ADRs 0002, 0003, 0004, 0010).
 - **f)** ~~Spec edits~~ done 2026-11-03: UI_SCHEMA §3/§7, ARCHITECTURE §3 (item 7), TECH_SPECS §2 (item 10).
-- **g)** Nothing committed; ADRs are uncommitted.
+- **g)** ~~Nothing committed~~ P0 committed as `5e416b6`. P1 files are uncommitted.
+- **h)** ~~Docker not installed~~ Resolved 2026-11-04: Docker installed by owner; local stack verified (§2).
+- **i)** No secret scanner in CI yet (proposed for P10).
+- **j)** GitHub Actions pinned by major tag, not commit SHA.
+- **k)** Resolved: ADR 0014.
+- **l)** Users must run `nvm use`. The system Node 24.18.0 is rejected by the engine pin.
+- **m)** `npm audit`: production 0 vulnerabilities; dev-only 11 moderate (one `minimatch` advisory via ESLint).
+- **n)** Gemini free tier may use submitted content to improve Google products. Client or visitor data only through a paid-tier Gemini project. Owner to confirm billing is enabled before any client data (ADR 0014, ADR 0006).
+- **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
+- **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
+- **q)** Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).
+- **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
+- **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
 
 ## 6. Inconsistencies / gaps found in the docs
 Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** items 1, 2 (embed attribute is now `data-bot-slug`), 3, 5, 6, 8, 9. **Decided 2026-11-03:** item 4 (ADR 0011; UI_SCHEMA §3 updated). **Resolved 2026-11-03 (P0 close):** 7, 10. **Still open:** none.
@@ -91,7 +104,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. Execute `plan.md` P1 (scaffold) → P2 (shared contracts) → P3 (migrations + RLS tests).
+4. P1 scaffold is implemented locally (2026-11-04). It awaits a commit, a CI run and owner acceptance. Then P2 (shared contracts) → P3 (migrations + RLS tests), each on owner go-ahead.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
@@ -99,7 +112,10 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 - Render: account for API web service + background worker (paid for production).
 - Vercel: projects for widget and admin panel.
 - Provider keys: chat (primary + fallback), embeddings, moderation, optional OCR — each with provider-side spending caps.
-- Env vars (see `README.md`): `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `LLM_PRIMARY_API_KEY`, `LLM_FALLBACK_API_KEY`, `EMBEDDING_API_KEY`, `VISITOR_TOKEN_SECRET`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`. Worker does **not** get `VISITOR_TOKEN_SECRET`.
+- Env vars (from `README.md` "Environment variables"):
+  - API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
+  - Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. The worker does **not** get `VISITOR_TOKEN_SECRET`.
+- AI role variables follow ADR 0014 (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, optional `<ROLE>_API_KEY`, `<ROLE>_BASE_URL`). See `README.md` and `api/.env.example` / `worker/.env.example`.
 
 ## 9. Related repos
 - `ragbot_adminpanel` — dashboard; consumes this repo's schema and admin API. Coordinate any schema/API change with it and bump the schema version.
@@ -110,3 +126,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-03 | Planning | Implementation | Docs baseline v1.0 reviewed; plan/status/handover created. No code yet. |
 | 2026-11-03 | Planning | Implementation | Added caching (P7.5) and contact routing (W-16); synced all docs. |
 | 2026-11-03 | P0 (owner + Opus) | P1 (pending owner go-ahead) | D1–D14 approved as recommended; ADRs 0001–0013 written in `docs/decisions/` (uncommitted). Status/handover updated by `haiku-docs`. Open items in §5 (a–g). No code, tests or Supabase changes. |
+| 2026-11-04 | Opus (owner-approved) | P2 (on owner go-ahead) | P0 accepted and committed (`5e416b6`). P1 scaffold implemented locally, uncommitted; 8 local gates exit 0; CI not run; no feature code. Open items §5 (a–m). Docs updated by `haiku-docs`. |
+| 2026-11-04 | Owner direction via Opus | P2 (on owner go-ahead) | ADR 0014 accepted: provider-agnostic AI config, Gemini default; revises D1–D3 provider/model parts. Config loader and tests added (21 unit passed; 7 local gates exit 0). Real Gemini calls: model list and two `hello` embeddings. P1 still 🟡 (uncommitted, CI not run). Open items §5 (a–r). Docs updated by `haiku-docs`. |
+| 2026-11-04 | Owner (Docker) / Opus | P2 (on owner go-ahead) | Docker installed by owner. Local Supabase stack verified: `supabase start` and `db reset` exit 0; local and remote PostgreSQL 17.11 and pgvector 0.8.2 match. P1 still 🟡 (CI needs commit and push). Docs updated by `haiku-docs`. |
+| 2026-11-04 | Owner / Opus (correction) | P2 (on owner go-ahead) | Correction P1-DOC4: §5 s withdrawn (CLI accepts `001_…` names, verified by a probe migration since removed; only `.gitkeep` skipped). Plan/README unchanged. Docs updated by `haiku-docs`. |

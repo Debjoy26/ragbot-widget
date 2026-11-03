@@ -1,6 +1,6 @@
 # ADR 0004 — Moderation provider and streaming policy
 
-- **Decision:** D3 · **Status:** Accepted · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
+- **Decision:** D3 · **Status:** Accepted — **provider/model superseded by ADR 0014** · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
 - **Blocks:** P7
 
 ## Decision

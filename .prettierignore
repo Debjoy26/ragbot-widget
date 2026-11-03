@@ -1,0 +1,5 @@
+# Spec/planning docs are hand-formatted; don't reflow them.
+*.md
+package-lock.json
+**/dist/
+supabase/

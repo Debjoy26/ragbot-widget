@@ -83,9 +83,10 @@ npm run build
 These commands are a required script interface for the future codebase; this documentation bundle does not contain runnable application code. Run the three development processes in separate terminals.
 
 ## Environment variables
-API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `LLM_PRIMARY_API_KEY`, `LLM_FALLBACK_API_KEY` if enabled, `EMBEDDING_API_KEY`, `VISITOR_TOKEN_SECRET`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`.
-Worker: database/storage credentials plus embedding, analysis, and optional OCR credentials. Never assume the worker needs the visitor-signing key.
-Provider/model names, maximum attempts, and deadlines are validated configuration. Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.
+API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
+Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never give the worker the visitor-signing key.
+AI roles are provider-agnostic (ADR 0014): `<ROLE>_PROVIDER` (`gemini` | `openai` | `anthropic` | `openai_compatible`), `<ROLE>_MODEL`, optional `<ROLE>_API_KEY` (else `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), and `<ROLE>_BASE_URL` for `openai_compatible`. Missing values fail closed. Changing the embedding model requires a full reindex. See `api/.env.example` and `worker/.env.example`.
+Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.
 
 ## Deployment order per client
 1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket.

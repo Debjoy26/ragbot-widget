@@ -1,0 +1,14 @@
+{
+  "name": "@ragbot/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/worker.js",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../.env src/worker.ts",
+    "start": "node dist/worker.js"
+  },
+  "dependencies": {
+    "@ragbot/shared": "0.1.0"
+  }
+}

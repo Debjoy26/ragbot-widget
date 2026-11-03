@@ -1,6 +1,6 @@
 # ADR 0002 — Embedding model and vector dimension
 
-- **Decision:** D1 · **Status:** Accepted · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
+- **Decision:** D1 · **Status:** Accepted — **provider/model superseded by ADR 0014** · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
 - **Blocks:** P3 (`002_vectors.sql`), P6, P7
 
 ## Decision

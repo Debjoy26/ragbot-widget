@@ -1,6 +1,6 @@
 # ADR 0003 — Primary and fallback chat providers
 
-- **Decision:** D2 · **Status:** Accepted · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
+- **Decision:** D2 · **Status:** Accepted — **provider/model superseded by ADR 0014** · **Date:** 2026-11-03 · **Approved by:** owner (P0 session)
 - **Blocks:** P7
 
 ## Decision
