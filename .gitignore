@@ -1,0 +1,29 @@
+# Dependencies & build output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment / secrets (only .env.example files are committed)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Supabase local state
+supabase/.temp/
+supabase/.branches/
+
+# Claude Code per-user settings
+.claude/settings.local.json
+
+# Test & tooling artefacts
+playwright-report/
+test-results/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
