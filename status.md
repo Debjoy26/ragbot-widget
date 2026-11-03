@@ -34,6 +34,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] Caching & latency phase (P7.5) added to plan and TECH_SPECS
 - [x] Contact routing (W-16) added to PRD, plan, DATABASE_SCHEMA, UI_SCHEMA, TECH_SPECS
 - [x] Planning docs committed and pushed to `main`
+- [x] Supabase MCP connected to dev project `rbejeqwxyxtklehuzibv` (verified 2026-11-03: empty `public` schema, no migrations)
+- [x] `CLAUDE.md` dev contract v0.1 + sub-agents in `.claude/agents/` (`sonnet-implementer`, `haiku-docs`, `reviewer`, `security-reviewer`). None spawned yet, so model resolution is unverified. Committed to `main`.
 
 ## 3. Open decisions (P0)
 
