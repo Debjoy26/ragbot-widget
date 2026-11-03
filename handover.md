@@ -11,9 +11,9 @@ An embeddable, client-branded, retrieval-augmented (RAG) chatbot that a client i
 This repo also owns the **shared backend** — Render API, Render worker, and the Supabase schema — used by both this widget and the separate `ragbot_adminpanel` repo. The admin panel is a second frontend, **not** a second backend.
 
 ## 2. Current state (honest summary)
-- **Committed on `origin/main`:** planning docs, P0 decision records (ADRs 0001–0013, `5e416b6`) and the P1 monorepo scaffold (`f848fb3`). CI run 41698369772 for `f848fb3` completed with success. P1 meets its acceptance conditions and awaits owner acceptance (not ✅).
-- **Uncommitted:** ADR 0014 (provider config), P2 shared contracts and P3 database migrations. P2 and P3 are implemented and verified locally (Opus integration; local Supabase: `db reset`, `db lint`, `supabase test db` exit 0). Security review P3-R1 has findings open (§5 u–y). Nothing is accepted yet. Logs: `docs/evidence/P1/`, `docs/evidence/P2-P3/`.
-- **No API routes, widget behaviour or provider adapters yet.** P2 contracts and P3 migrations exist locally (uncommitted). Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
+- **Committed on `origin/main`:** planning docs, P0 decision records (ADRs 0001–0013, `5e416b6`) and the P1 monorepo scaffold (`f848fb3`). CI run 41698369772 for `f848fb3` completed with success. P1 acceptance criteria met; owner acceptance pending (not ✅).
+- **Branch `phase/p2-p3` at `6b24002`:** P2 shared contracts and P3 database migrations, with debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`). Final gates pass locally: unit 157 passed; pgTAP 17 files, 1465 passed; `db lint` clean; all npm gates exit 0. P2 and P3 acceptance criteria met; owner acceptance pending. CI for the merged commit: pending (to be confirmed after push). P3-D2 was not separately security-reviewed. **The P23-DOC2 packet does not state the commit state of ADR 0014** (it was uncommitted at the last check). Nothing is accepted by the owner yet. Logs: `docs/evidence/P1/`, `docs/evidence/P2-P3/`.
+- **No API routes, widget behaviour or provider adapters yet.** P2 contracts and P3 migrations exist on branch `phase/p2-p3`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
 - **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
 
@@ -87,14 +87,21 @@ Remaining open items (not done):
 - **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
 - **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P9).
-- **u)** M1 (confirmed by Opus): no MFA (aal2) check on DB read paths. Authenticated members can read transcripts, `data_entries` and audit via PostgREST without MFA, bypassing the API MFA check. Decision D-a.
-- **v)** M2 (confirmed): no DB guard against an embedding-model switch; match and activate do not compare `embedding_model`.
-- **w)** M3 (confirmed): `data_entries` are never purged, only detached on conversation purge (DPDP exposure). Decision D-b.
-- **x)** L1 (confirmed): `audit_logs` is not append-only for service_role.
-- **y)** M4 and M5 (reviewer-reported, not yet confirmed by Opus): M4 knowledge_gaps question attribution can pick the wrong message on timestamp ties and returns untruncated visitor text. M5 no atomic `begin_request_run`; idempotency and concurrency cap rely only on a unique constraint.
-- **z)** Lower items L2–L14 (reviewer-reported, unconfirmed): settle without cap lock; no job complete or heartbeat RPCs; global PUBLIC EXECUTE default; `public_bot_config` readable for disabled bots; dead service_role grants on member RPCs; answer_cache stale rows; analyst can see `storage_path`; immediate session hard-delete; fixed-window burst; HNSW plan untested at scale; seed enabled in `config.toml`; bucket has no `allowed_mime_types`; cross-bot citation links unenforced in DB. Which lows go into a debug cycle is D-c.
-- **aa)** Test gaps: no real concurrency tests (sequential only); no column-level grant census. Integration (vitest) and E2E still have no tests.
-- **ab)** Owner decisions needed: **D-a** MFA (enforce aal2 in DB policies and RPCs, or admin reads only via API with direct grants revoked). **D-b** `data_entries` retention period, or cascade with the conversation. **D-c** approve debug cycle P3-D1 for M1–M5 and L1, and which lows.
+- **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
+- **v)** ~~M2~~ Resolved in P3-D1 (embedding guard: activation and match check the model; changing the model while chunks exist raises RB012).
+- **w)** ~~M3~~ Resolved in P3-D1 (ADR 0016: `data_entries` deleted with their conversation; orphans purged by `purge_expired_data_entries`). Owner confirmation open (ag).
+- **x)** ~~L1~~ Resolved in P3-D1 (`audit_logs` append-only; service role has SELECT and INSERT only; TRUNCATE rejected in P3-D2).
+- **y)** ~~M4 and M5~~ Resolved in P3-D1 and P3-D2 (M4 was partial after re-review P3-R2 and was completed by P3-D2 N3; M5 is the atomic `begin_request_run`). Real multi-connection tests still open (ac).
+- **z)** Deferred by decision: L8, L11, L12, L14, N6, N9; purge fail-closed-for-all-bots is a design choice. Other lows (L2–L7, L9, L10, L13; N1–N5, N7) fixed in P3-D1 and P3-D2.
+- **aa)** Partly resolved: census tests added in P3-D1 (column-level grant census gap). Real concurrency tests moved to ac. Integration (vitest) and E2E still have no tests.
+- **ab)** Owner decisions resolved: **D-a** via ADR 0015 (MFA aal2 enforced in the DB). **D-b** via ADR 0016 (`data_entries` cascade with the conversation; confirmation open, ag). **D-c** via approved debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`).
+- **ac)** Real multi-connection race tests for `begin_request_run`, reserve/settle, `claim_jobs` and rate limits. Planned for P5/P6. Current tests are sequential only.
+- **ad)** MFA: Supabase Auth TOTP must be enabled per client project (local config has it off), and admins must enrol. Real GoTrue aal2 tokens are not tested (claims are forged in tests). P9/P12.
+- **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle; schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P5/P6/P9.
+- **af)** P2 contract notes (item t) still open for P4 and later.
+- **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
+- **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P9), management API, audit redaction, signed URLs. Documented for P5/P9.
+- **ai)** P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.
 
 ## 6. Inconsistencies / gaps found in the docs
 Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** items 1, 2 (embed attribute is now `data-bot-slug`), 3, 5, 6, 8, 9. **Decided 2026-11-03:** item 4 (ADR 0011; UI_SCHEMA §3 updated). **Resolved 2026-11-03 (P0 close):** 7, 10. **Still open:** none.
@@ -114,7 +121,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. P1 is committed (`f848fb3`) with CI green; it awaits owner acceptance. P2 and P3 are implemented locally and uncommitted. Next: owner decisions D-a, D-b, D-c (§5 ab), then commit after fixes. P4 only on owner go-ahead.
+4. P1 is committed (`f848fb3`) with CI green, awaiting owner acceptance. P2 and P3 are on `phase/p2-p3` at `6b24002`, with debug cycles P3-D1 and P3-D2 done, awaiting owner acceptance. Owner confirms ADR 0016 (§5 ag). P4 only on owner go-ahead; it must address the API obligations in §5 ae.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
@@ -141,3 +148,4 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-04 | Owner (Docker) / Opus | P2 (on owner go-ahead) | Docker installed by owner. Local Supabase stack verified: `supabase start` and `db reset` exit 0; local and remote PostgreSQL 17.11 and pgvector 0.8.2 match. P1 still 🟡 (CI needs commit and push). Docs updated by `haiku-docs`. |
 | 2026-11-04 | Owner / Opus (correction) | P2 (on owner go-ahead) | Correction P1-DOC4: §5 s withdrawn (CLI accepts `001_…` names, verified by a probe migration since removed; only `.gitkeep` skipped). Plan/README unchanged. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Owner / Opus | P4 (on owner go-ahead) | P1 committed and pushed (`f848fb3`); CI run 41698369772 green; awaiting owner acceptance. P2 and P3 implemented and verified locally, uncommitted. Security review P3-R1: M1–M5 and L1 open (§5 u–y). Owner decisions D-a, D-b, D-c pending (§5 ab). Nothing accepted. Docs updated by `haiku-docs`. |
+| 2026-11-04 | Owner / Opus | P4 (on owner go-ahead) | Debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`) done. ADR 0015 (MFA aal2) accepted; ADR 0016 (`data_entries` cascade) accepted, owner confirmation open. Final gates on `phase/p2-p3` @ `6b24002`: unit 157; pgTAP 1465; `db lint` clean. P1, P2 and P3 acceptance criteria met, owner acceptance pending. CI for the merged commit pending. Docs updated by `haiku-docs`. |
