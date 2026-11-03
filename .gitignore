@@ -17,6 +17,7 @@ supabase/.branches/
 
 # Claude Code per-user settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # Test & tooling artefacts
 playwright-report/

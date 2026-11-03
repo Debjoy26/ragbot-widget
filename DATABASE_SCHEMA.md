@@ -67,6 +67,21 @@ This is one schema in the client-specific Supabase project, not a database per f
 
 RLS does not itself provide column-level security. Use column grants, minimal security-invoker views with correct privileges, or narrowly scoped RPCs for safe settings/status reads. Revoke default permissions on internal tables/functions. Authenticated role alone does not imply active admin membership. Supabase privileged credentials bypass RLS, so application checks remain mandatory.
 
+### Matrix rulings (2026-11-04, implemented in `003_grants_rls_storage.sql`)
+Ambiguous cells above are resolved fail-closed:
+- Analyst **may** read `documents`/`document_versions` metadata; analyst has **no** access to `data_entries` (admin/owner read).
+- No authenticated role reads or writes `bot_profiles`/`client_settings` directly; settings change only through the API (field-level admin RPC deferred to P9).
+- Membership is project-wide (one database per client): `admin_memberships(user_id unique, role, active)`; `is_active_member(roles)` re-reads the live row on every call, so revocation is immediate.
+- Safe aggregate RPCs callable by authenticated users, each re-checking active membership: `job_status_summary()`, `usage_daily_summary(from, to)` (≤ 92 days; cache hit-rate derives from `operation = 'answer_cache_hit'`), `knowledge_gaps(from, to, limit)` (≤ 92 days, limit ≤ 200).
+- `audit_logs`: admin/owner read; only the service role writes.
+
+### Database conventions fixed in P3
+- Custom SQLSTATEs: `RB001` budget exceeded · `RB002` budget policy missing/invalid · `RB003` reservation not active · `RB004` request conflict · `RB010` document not found · `RB011` activation failed · `RB020` retention policy missing · `22023` invalid argument.
+- `client_settings` JSON keys read by SQL: `budget_policy.daily_cap_usd`, `retention_policy.conversation_days`, `retention_policy.usage_months`. Missing values fail closed.
+- `match_document_chunks(bot_id, query_embedding, match_count 1..50, min_similarity)` rejects out-of-range `match_count` (no clamping).
+- Fail-closed defaults: `documents.disclosure_policy` defaults to `excluded`; `bot_profiles.enabled` defaults to `false`; policy columns and `jobs.max_attempts` have no default.
+- Rate-limit and cache keys are 64-char lowercase hex digests (CHECK).
+
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.
 - Upload staging paths are authorised by a short-lived signed upload URL issued after backend validation, or equivalent tightly scoped policies.

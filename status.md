@@ -1,7 +1,7 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-04**
-> Overall: **🟡 P1 implemented locally — local gates pass; CI run and owner acceptance pending**
+> Overall: **🟡 P1 CI green, awaiting owner acceptance. P2 and P3 implemented and verified locally, uncommitted; security findings open, awaiting owner decisions**
 > Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0014; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
@@ -13,9 +13,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | # | Phase | State | Blocker / note |
 |---|---|---|---|
 | P0 | Decisions & prerequisites | ✅ | D1–D14 approved and phase accepted by owner 2026-11-03 (ADRs 0001–0013). Open items carried forward: §3a |
-| P1 | Monorepo scaffold & tooling | 🟡 | Implemented 2026-11-04, uncommitted. Local gates pass: 7 commands exit 0 on clean `npm ci` (`docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`). Unit: 21 passed (3 scaffold, 18 provider config). Local Supabase stack verified (§2). Integration and E2E: no tests yet. Only remaining acceptance item: CI green, which needs commit and push. Awaiting owner approval. Open: §3a i–r (s withdrawn) |
-| P2 | Shared contracts | ⬜ | Waits on remaining doc fixes (§4); UI_SCHEMA edits pending |
-| P3 | Database & storage migrations | ⬜ | D1 (ADR 0002) and D5 (ADR 0006) decided; `002_vectors.sql` unblocked. D1 validation check pending (§3a c); `005_retention.sql` jurisdiction per client open (§3a b) |
+| P1 | Monorepo scaffold & tooling | 🟡 | Committed and pushed as `f848fb3`. CI run 41698369772 completed/success. All P1 acceptance conditions met; awaiting owner acceptance (not ✅). Local gates: `docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`. Integration and E2E: no tests yet. Open: §3a i–r |
+| P2 | Shared contracts | 🟡 | Implemented by sonnet worker P2-T1, verified and integrated by Opus. Uncommitted. Contract changes: `EmbeddingProvider.embed` returns `{vectors, inputTokens}`; `ModerationResult` has usage; `temperature` removed from `ChatStreamRequest`. Integrated gates (main checkout, Node 24.22.2, local Supabase): lint, format:check, typecheck, test, build exit 0; unit 157 passed, 0 failed, 0 skipped. Open: §3a t, ac |
+| P3 | Database & storage migrations | 🟡 | Implemented by sonnet worker P3-T1, verified and integrated by Opus. Uncommitted. 5 migrations, seed, 11 pgTAP files (932 tests): `db reset`, `db lint --local`, `supabase test db` exit 0. Remote dev project untouched. DATABASE_SCHEMA.md updated (matrix rulings, RB001–RB020, client_settings keys). Security review P3-R1: no critical or high. M1–M5 and L1 open (§3a u–y). Concurrency tests missing (§3a aa). D1 validation check pending (§3a c). Awaiting owner decisions (§3a ac) |
 | P4 | API foundation | ⬜ | |
 | P5 | Visitor sessions & abuse controls | ⬜ | Limits (ADR 0007) and Turnstile (ADR 0010) decided; production daily cap open, fails closed (§3a a) |
 | P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007) |
@@ -41,6 +41,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] ADR 0014 accepted 2026-11-04: provider-agnostic AI config, Gemini default. Env-driven roles, fail-closed loader and capability matrix in `shared/src/providers.ts`, `api`/`worker` `.env.example` and README env section updated. Revises D1–D3 provider/model parts; dimension 1536 kept (uncommitted)
 - [x] Local Supabase stack verified 2026-11-04: Docker installed by owner (docker.io 28.5.2, service active, user in `docker` group). `npx supabase start` exit 0 (12 containers up: 10 report healthy; `edge_runtime` and `rest` have no healthcheck). `npx supabase db reset` exit 0 (no migrations, no `seed.sql`). Local PostgreSQL 17.11, pgvector 0.8.2 available. Remote dev project (read-only MCP `SELECT` and `list_migrations`) also shows PostgreSQL 17.11, vector 0.8.2 available, 0 public tables, 0 migrations. Logs, keys redacted: `docs/evidence/P1/supabase-2026-11-04/`
 - [x] Real Gemini calls, owner-directed, no client data (2026-11-04): model list (200) and two `embedContent` calls on the word "hello" with `outputDimensionality` 1536 (200, 1536 values each). Evidence: `docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`
+- [x] P1 CI green: run 41698369772 for `f848fb3` completed/success (read via `gh` 2.103.3, installed in `~/.local/bin`, checksum verified). Commits `5e416b6` (P0) and `f848fb3` (P1) pushed to `origin/main`
+- [x] P2 (shared contracts) and P3 (DB migrations, seed, pgTAP) implemented in parallel with sonnet workers (worktrees, base `f848fb3`), verified and integrated by Opus into the main checkout. Uncommitted. Logs (gitignored): `docs/evidence/P2-P3/`. Remote dev project untouched. `supabase test db` pulled the `pg_prove` Docker image over the network (CLI behaviour)
 
 ## 3. Open decisions (P0)
 
@@ -83,6 +85,15 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **q)** Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).
 - **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
+- **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P9).
+- **u)** M1 (confirmed by Opus): no MFA (aal2) check on DB read paths. Authenticated members can read transcripts, `data_entries` and audit via PostgREST without MFA, bypassing the API MFA check. Decision D-a.
+- **v)** M2 (confirmed): no DB guard against an embedding-model switch; match and activate do not compare `embedding_model`.
+- **w)** M3 (confirmed): `data_entries` are never purged, only detached on conversation purge (DPDP exposure). Decision D-b.
+- **x)** L1 (confirmed): `audit_logs` is not append-only for service_role.
+- **y)** M4 and M5 (reviewer-reported, not yet confirmed by Opus): M4 knowledge_gaps question attribution can pick the wrong message on timestamp ties and returns untruncated visitor text. M5 no atomic `begin_request_run`; idempotency and concurrency cap rely only on a unique constraint.
+- **z)** Lower items L2–L14 (reviewer-reported, unconfirmed): settle without cap lock; no job complete or heartbeat RPCs; global PUBLIC EXECUTE default; `public_bot_config` readable for disabled bots; dead service_role grants on member RPCs; answer_cache stale rows; analyst can see `storage_path`; immediate session hard-delete; fixed-window burst; HNSW plan untested at scale; seed enabled in `config.toml`; bucket has no `allowed_mime_types`; cross-bot citation links unenforced in DB. Which lows go into a debug cycle is D-c.
+- **aa)** Test gaps: no real concurrency tests (sequential only); no column-level grant census. Integration (vitest) and E2E still have no tests.
+- **ab)** Owner decisions needed: **D-a** MFA (enforce aal2 in DB policies and RPCs, or admin reads only via API with direct grants revoked). **D-b** `data_entries` retention period, or cascade with the conversation. **D-c** approve debug cycle P3-D1 for M1–M5 and L1, and which lows.
 
 ## 4. Doc fixes pending (from `handover.md §6`)
 - [x] Add `escalation_label` to `public_bot_config`
@@ -132,11 +143,12 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner approves the P1 commit and push (needed to run CI).
-2. Owner accepts P1 after CI is green.
-3. Owner confirms paid-tier Gemini billing before any client data (§3a n), and decides whether to add a second provider key for independent fallback (§3a o).
-4. Owner provides the production daily cap (§3a a) and confirms jurisdiction per client (§3a b) when available. Owner decides on the retrieval-quality check for embeddings (§3a c).
-5. P2 only on owner go-ahead. Provider adapters (§3a r) come with P6/P7.
+1. Owner accepts P1 (CI green, run 41698369772).
+2. Owner decides D-a (MFA), D-b (`data_entries` retention) and D-c (debug cycle P3-D1 and its scope) (§3a ab).
+3. Commit P2 and P3 after the approved fixes.
+4. Owner confirms paid-tier Gemini billing before any client data (§3a n), and decides whether to add a second provider key for independent fallback (§3a o).
+5. Owner provides the production daily cap (§3a a) and confirms jurisdiction per client (§3a b) when available. Owner decides on the retrieval-quality check for embeddings (§3a c).
+6. P4 only on owner go-ahead. Provider adapters (§3a r) come with P6/P7.
 
 ## 8. Change log
 | Date | Change |
@@ -149,10 +161,12 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | 2026-11-04 | ADR 0014 accepted: provider-agnostic AI config, Gemini default; revises D1–D3 provider/model parts (dimension 1536 kept). Config loader and tests added: 21 unit passed; 7 local gates exit 0. Real Gemini calls (no client data): model list and two `hello` embeddings, 200, 1536 dims. P1 still 🟡 (uncommitted, CI not run). Open items §3a n–r. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Docker installed by owner. Local Supabase stack verified: `supabase start` and `db reset` exit 0; local and remote PostgreSQL 17.11 and pgvector 0.8.2 match. P1 still 🟡 (CI needs commit and push). Logs: `docs/evidence/P1/supabase-2026-11-04/`. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Correction (P1-DOC4): earlier finding §3a s (migration naming) withdrawn. The CLI accepts `001_…` names, verified with a probe migration (since removed); only `.gitkeep` is skipped. Container count corrected to 12 up, 10 healthy, `edge_runtime` and `rest` without healthcheck. Plan/README unchanged. |
+| 2026-11-04 | P1 committed and pushed (`f848fb3`); CI run 41698369772 green. P2 and P3 implemented and verified locally by sonnet workers and Opus (uncommitted). Security review P3-R1: M1–M5 and L1 open. Owner decisions D-a, D-b, D-c pending (§3a ab). P1 not accepted; P2 and P3 not accepted. Docs updated by `haiku-docs`. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
-- `sonnet-implementer`, `reviewer`, `security-reviewer`: no spawn is recorded in the P0-DOC1 evidence packet.
+- `reviewer`: no spawn recorded.
 - 2026-11-04 (P1): no new agents spawned. P1 was implemented directly by Opus.
 - 2026-11-04 (ADR 0014): no new agents spawned. The real Gemini calls were made by Opus, not by a worker.
 - 2026-11-04 (Supabase local stack): no new agents spawned. The stack and MCP read-only checks were run by Opus.
+- 2026-11-04 (P2 ∥ P3, first spawns): `sonnet-implementer` ×2 (P2-T1 and P3-T1; configured `claude-sonnet-5-5`; worktree isolation; base `f848fb3`). `security-reviewer` ×1 (P3-R1; configured `claude-sonnet-5-5`; read-only). Actual model resolution is not observable. Self-reports are **unverified**.

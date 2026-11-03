@@ -236,3 +236,142 @@ export function loadWorkerAiConfig(env: Env): WorkerAiConfig {
 export function describeProvider(config: ProviderConfig): string {
   return `${config.role}=${config.provider}:${config.model}`;
 }
+
+// ---------------------------------------------------------------------------
+// Provider interfaces (P2). Interfaces and error types only — adapters that make
+// network calls live in api/ and worker/ (P6/P7). Nothing here touches the network.
+// ---------------------------------------------------------------------------
+
+/** Classification every adapter must map upstream failures onto (never raw bodies). */
+export const PROVIDER_ERROR_KINDS = [
+  'transient',
+  'rate_limited',
+  'auth',
+  'billing',
+  'permanent',
+] as const;
+export type ProviderErrorKind = (typeof PROVIDER_ERROR_KINDS)[number];
+
+/** Only transient and rate-limited failures may be retried or fail over; the rest are configuration/request faults. */
+export function isRetryableErrorKind(kind: ProviderErrorKind): boolean {
+  return kind === 'transient' || kind === 'rate_limited';
+}
+
+/**
+ * Classified provider failure. The message must be written by the adapter and must
+ * never contain the upstream response body, request content, URLs or keys.
+ */
+export class ProviderError extends Error {
+  override readonly name = 'ProviderError';
+  readonly kind: ProviderErrorKind;
+  readonly retryAfterSeconds: number | null;
+
+  constructor(
+    kind: ProviderErrorKind,
+    message: string,
+    options: { readonly retryAfterSeconds?: number; readonly cause?: unknown } = {},
+  ) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.kind = kind;
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+  }
+
+  /** auth, billing and permanent errors are never retryable. */
+  isRetryable(): boolean {
+    return isRetryableErrorKind(this.kind);
+  }
+}
+
+export interface ProviderChatMessage {
+  readonly role: 'user' | 'assistant';
+  readonly content: string;
+}
+
+export interface ChatStreamRequest {
+  /** Fixed, cacheable prefix (see prompts.ts). */
+  readonly system: string;
+  readonly messages: readonly ProviderChatMessage[];
+  readonly maxOutputTokens: number;
+  // No temperature/top_p: current Claude models reject sampling parameters, and RAG
+  // answers use provider defaults. Adapters must not add them.
+  /** Aborting must cancel the upstream call (client disconnect means cancellation). */
+  readonly signal?: AbortSignal;
+}
+
+export interface ChatStreamChunk {
+  readonly text: string;
+}
+
+export interface ChatUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cachedInputTokens?: number;
+}
+
+/**
+ * Streams text chunks; the generator's return value is the final usage so the
+ * caller can record cost. Throws ProviderError.
+ */
+export type ChatStream = AsyncGenerator<ChatStreamChunk, ChatUsage, void>;
+
+export interface ChatProvider {
+  readonly provider: ProviderKind;
+  readonly model: string;
+  stream(request: ChatStreamRequest): ChatStream;
+}
+
+export type EmbeddingTaskType = 'query' | 'document';
+
+export interface EmbeddingResult {
+  readonly vectors: number[][];
+  /** Billable input tokens; null only when the provider does not report usage. */
+  readonly inputTokens: number | null;
+}
+
+export interface EmbedOptions {
+  readonly taskType: EmbeddingTaskType;
+  readonly signal?: AbortSignal;
+}
+
+export interface EmbeddingProvider {
+  readonly provider: ProviderKind;
+  readonly model: string;
+  /** Always VECTOR_DIMENSIONS. */
+  readonly dimensions: typeof VECTOR_DIMENSIONS;
+  /**
+   * One vector of VECTOR_DIMENSIONS per input, in input order, plus usage so query and
+   * ingestion embeddings count toward budgets (TECH_SPECS §8).
+   */
+  embed(texts: readonly string[], options: EmbedOptions): Promise<EmbeddingResult>;
+}
+
+export type ModerationVerdict = 'allow' | 'block';
+
+export interface ModerationResult {
+  readonly verdict: ModerationVerdict;
+  /** Provider/policy category labels; informational only. */
+  readonly categories: readonly string[];
+  /** Set for llm_classifier mode (billable); null for free moderation endpoints. */
+  readonly usage: ChatUsage | null;
+}
+
+export interface ModerationProvider {
+  readonly provider: ProviderKind;
+  readonly model: string;
+  moderate(text: string, options?: { readonly signal?: AbortSignal }): Promise<ModerationResult>;
+}
+
+/** Throws a permanent ProviderError when a provider returns the wrong shape (never silently pads/truncates). */
+export function assertEmbeddingShape(
+  vectors: readonly (readonly number[])[],
+  expectedCount: number,
+): void {
+  if (vectors.length !== expectedCount) {
+    throw new ProviderError('permanent', 'embedding provider returned an unexpected vector count');
+  }
+  for (const v of vectors) {
+    if (v.length !== VECTOR_DIMENSIONS || v.some((n) => !Number.isFinite(n))) {
+      throw new ProviderError('permanent', 'embedding provider returned an invalid vector');
+    }
+  }
+}
