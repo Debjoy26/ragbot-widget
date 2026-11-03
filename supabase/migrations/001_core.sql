@@ -8,6 +8,9 @@
 alter default privileges in schema public revoke all on tables from anon, authenticated;
 alter default privileges in schema public revoke all on sequences from anon, authenticated;
 alter default privileges in schema public revoke all on functions from anon, authenticated;
+-- Postgres grants EXECUTE on new functions to PUBLIC by default. Remove that for everything the
+-- migration owner (postgres) creates from here on (global form: not limited to one schema).
+alter default privileges for role postgres revoke execute on functions from public;
 
 -- ---------------------------------------------------------------------------
 -- Generic helper: keep updated_at honest. SECURITY INVOKER, fixed search path.
@@ -85,6 +88,9 @@ create table public.public_bot_config (
   contact_page_url     text,
   business_hours       jsonb,
   timezone             text,
+  -- Mirrors bot_profiles.enabled (maintained ONLY by the triggers below; any value written here
+  -- is overwritten). anon cannot read bot_profiles, so the public RLS policy filters on this column.
+  is_published         boolean not null default false,
   updated_at           timestamptz not null default now(),
   constraint public_bot_config_bot_slug_key unique (bot_slug),
   constraint public_bot_config_bot_id_slug_key unique (bot_id, bot_slug),
@@ -107,11 +113,43 @@ create table public.public_bot_config (
 create trigger public_bot_config_set_updated_at before update on public.public_bot_config
   for each row execute function public.set_updated_at();
 
+-- is_published is derived, never caller-controlled (fail closed: unknown bot -> false).
+create function public.public_bot_config_sync_published()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.is_published := coalesce((select b.enabled from public.bot_profiles b where b.id = new.bot_id), false);
+  return new;
+end;
+$$;
+revoke all on function public.public_bot_config_sync_published() from public, anon, authenticated;
+create trigger public_bot_config_sync_published before insert or update on public.public_bot_config
+  for each row execute function public.public_bot_config_sync_published();
+
+-- Disabling/enabling a bot (un)publishes its public config in the same transaction.
+create function public.bot_profiles_sync_published()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  update public.public_bot_config set is_published = new.enabled where bot_id = new.id;
+  return null;
+end;
+$$;
+revoke all on function public.bot_profiles_sync_published() from public, anon, authenticated;
+create trigger bot_profiles_sync_published after update of enabled on public.bot_profiles
+  for each row when (old.enabled is distinct from new.enabled)
+  execute function public.bot_profiles_sync_published();
+
 -- ---------------------------------------------------------------------------
 -- client_settings: internal limits/policies. No defaults for policies: missing = fail closed (ADR 0007).
 -- JSON keys used by DB functions:
 --   budget_policy.daily_cap_usd (numeric >= 0)      -> reserve_request_budget
---   retention_policy.conversation_days (int > 0)    -> purge_expired_conversations
+--   rate_policy.concurrent_requests_per_session (int > 0) -> begin_request_run
+--   retention_policy.conversation_days (int > 0)    -> purge_expired_conversations, purge_expired_data_entries
 --   retention_policy.usage_months (int > 0)         -> purge_expired_usage_records
 -- Other structure is validated in backend code (Zod).
 -- ---------------------------------------------------------------------------
@@ -246,6 +284,10 @@ create table public.request_runs (
   constraint request_runs_idempotency_key unique (bot_id, visitor_session_id, idempotency_key),
   constraint request_runs_state_check check (state in ('reserved', 'running', 'succeeded', 'failed', 'partial')),
   constraint request_runs_reserved_tokens_check check (reserved_tokens >= 0),
+  -- Canonical lowercase UUID string (the client's Idempotency-Key) and sha256 hex of the request.
+  constraint request_runs_idempotency_key_format check
+    (idempotency_key ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+  constraint request_runs_request_hash_format check (request_hash ~ '^[0-9a-f]{64}$'),
   constraint request_runs_session_fk foreign key (visitor_session_id, bot_id)
     references public.visitor_sessions (id, bot_id) on delete cascade
 );
@@ -294,6 +336,8 @@ create table public.conversation_analysis (
 create trigger conversation_analysis_set_updated_at before update on public.conversation_analysis
   for each row execute function public.set_updated_at();
 
+-- ADR 0016: entries live exactly as long as their conversation (ON DELETE CASCADE). Entries with no
+-- conversation are purged by purge_expired_data_entries() after retention_policy.conversation_days.
 create table public.data_entries (
   id              uuid primary key default gen_random_uuid(),
   bot_id          uuid not null references public.bot_profiles (id) on delete cascade,
@@ -304,7 +348,7 @@ create table public.data_entries (
   created_at      timestamptz not null default now(),
   constraint data_entries_payload_type check (jsonb_typeof(payload) = 'object'),
   constraint data_entries_conversation_fk foreign key (conversation_id, bot_id)
-    references public.conversations (id, bot_id) on delete set null (conversation_id)
+    references public.conversations (id, bot_id) on delete cascade
 );
 
 -- ---------------------------------------------------------------------------

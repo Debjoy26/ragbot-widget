@@ -1,6 +1,6 @@
 -- Retention helpers (ADR 0006): fail closed on missing config; purge by configured age; expiry helpers.
 begin;
-select plan(22);
+select plan(38);
 
 -- The seed bot already has full retention config; give the fixture bot its own.
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
@@ -10,7 +10,8 @@ insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget
 
 insert into public.visitor_sessions (id, bot_id, expires_at) values
   ('a1000000-0000-4000-8000-0000000000aa', 'b1000000-0000-4000-8000-0000000000aa', now() - interval '1 minute'),
-  ('a2000000-0000-4000-8000-0000000000ab', 'b1000000-0000-4000-8000-0000000000aa', now() + interval '1 hour');
+  ('a2000000-0000-4000-8000-0000000000ab', 'b1000000-0000-4000-8000-0000000000aa', now() + interval '1 hour'),
+  ('a3000000-0000-4000-8000-0000000000ac', 'b1000000-0000-4000-8000-0000000000aa', now() - interval '10 seconds');
 insert into public.conversations (id, bot_id, visitor_session_id, created_at, last_message_at) values
   ('c1000000-0000-4000-8000-0000000000aa', 'b1000000-0000-4000-8000-0000000000aa', 'a1000000-0000-4000-8000-0000000000aa', now() - interval '120 days', now() - interval '100 days'),
   ('c2000000-0000-4000-8000-0000000000ab', 'b1000000-0000-4000-8000-0000000000aa', 'a2000000-0000-4000-8000-0000000000ab', now() - interval '120 days', now() - interval '10 days');
@@ -19,6 +20,11 @@ insert into public.messages (conversation_id, role, content) values
   ('c2000000-0000-4000-8000-0000000000ab', 'user', 'recent question');
 insert into public.data_entries (id, bot_id, conversation_id, schema_key, payload) values
   ('de000000-0000-4000-8000-0000000000aa', 'b1000000-0000-4000-8000-0000000000aa', 'c1000000-0000-4000-8000-0000000000aa', 'k', '{}');
+-- ADR 0016: entries with no conversation age out after conversation_days (created_at clock).
+insert into public.data_entries (id, bot_id, conversation_id, schema_key, payload, created_at) values
+  ('de000000-0000-4000-8000-0000000000ab', 'b1000000-0000-4000-8000-0000000000aa', null, 'k', '{}', now() - interval '100 days'),
+  ('de000000-0000-4000-8000-0000000000ac', 'b1000000-0000-4000-8000-0000000000aa', null, 'k', '{}', now() - interval '10 days'),
+  ('de000000-0000-4000-8000-0000000000ad', 'b1000000-0000-4000-8000-0000000000aa', 'c2000000-0000-4000-8000-0000000000ab', 'k', '{}', now() - interval '200 days');
 insert into public.usage_events (bot_id, operation, created_at) values
   ('b1000000-0000-4000-8000-0000000000aa', 'chat', now() - interval '14 months'),
   ('b1000000-0000-4000-8000-0000000000aa', 'chat', now() - interval '12 months'),
@@ -43,6 +49,7 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok('select public.purge_expired_conversations(100)', 'RB020', null, 'retention: bot without client_settings -> purge_expired_conversations fails closed');
 select throws_ok('select public.purge_expired_usage_records(100)', 'RB020', null, 'retention: bot without client_settings -> purge_expired_usage_records fails closed');
+select throws_ok('select public.purge_expired_data_entries(100)', 'RB020', null, 'retention (M3): bot without client_settings -> purge_expired_data_entries fails closed');
 reset role;
 insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
   ('b2000000-0000-4000-8000-0000000000ab', array['https://e.test'], '{}', '{}', '{"conversation_days": "ninety"}', '{}', '{}', '{}');
@@ -50,6 +57,8 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok('select public.purge_expired_conversations(100)', 'RB020', null, 'retention: non-numeric conversation_days fails closed');
 select throws_ok('select public.purge_expired_usage_records(100)', 'RB020', null, 'retention: missing usage_months fails closed');
+select throws_ok('select public.purge_expired_data_entries(100)', 'RB020', null, 'retention (M3): non-numeric conversation_days -> purge_expired_data_entries fails closed');
+select is((select count(*)::int from public.data_entries where id in ('de000000-0000-4000-8000-0000000000ab', 'de000000-0000-4000-8000-0000000000ac')), 2, 'retention (M3): failed-closed data-entry purge deleted nothing');
 select is((select count(*)::int from public.conversations where id in ('c1000000-0000-4000-8000-0000000000aa', 'c2000000-0000-4000-8000-0000000000ab')), 2, 'retention: failed-closed purges deleted nothing');
 reset role;
 update public.client_settings set retention_policy = '{"conversation_days": 0, "usage_months": 0}' where bot_id = 'b2000000-0000-4000-8000-0000000000ab';
@@ -63,7 +72,11 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 -- Argument bounds.
 select throws_ok('select public.purge_expired_conversations(0)', '22023', null, 'retention: batch 0 rejected');
-select throws_ok('select public.expire_visitor_sessions(null)', '22023', null, 'retention: null batch rejected');
+select throws_ok('select public.expire_visitor_sessions(null, 30)', '22023', null, 'retention: null batch rejected');
+select throws_ok('select public.expire_visitor_sessions(10, null)', '22023', null, 'retention (L9): null grace rejected (no default)');
+select throws_ok('select public.expire_visitor_sessions(10, 0)', '22023', null, 'retention (L9): grace 0 rejected');
+select throws_ok('select public.expire_visitor_sessions(10, 86401)', '22023', null, 'retention (L9): grace > 86400 rejected');
+select throws_ok('select public.purge_expired_data_entries(0)', '22023', null, 'retention (M3): data-entry batch 0 rejected');
 
 -- Purge by configured age.
 select is(public.purge_expired_conversations(100), 1, 'retention: exactly the conversation older than 90 days is purged');
@@ -71,17 +84,35 @@ select is((select count(*)::int from public.conversations where id = 'c1000000-0
 select is((select count(*)::int from public.conversations where id = 'c2000000-0000-4000-8000-0000000000ab'), 1, 'retention: recent conversation kept');
 select is((select count(*)::int from public.messages where content = 'old question'), 0, 'retention: messages cascade with the conversation');
 select is((select count(*)::int from public.messages where content = 'recent question'), 1, 'retention: recent messages kept');
-select is((select conversation_id from public.data_entries where id = 'de000000-0000-4000-8000-0000000000aa'), null, 'retention: data_entries are detached, not deleted (retention for entries is an open item)');
+select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000aa'), 0, 'retention (M3, ADR 0016): data_entries are deleted with their conversation (cascade)');
+select is((select count(*)::int from public.data_entries where id in ('de000000-0000-4000-8000-0000000000ab', 'de000000-0000-4000-8000-0000000000ac', 'de000000-0000-4000-8000-0000000000ad')), 3, 'retention (M3): conversation purge leaves unrelated entries alone');
+select is(public.purge_expired_data_entries(100), 1, 'retention (M3): exactly the conversation-less entry older than 90 days is purged');
+select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000ab'), 0, 'retention (M3): old orphan entry deleted');
+select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000ac'), 1, 'retention (M3): recent orphan entry kept');
+select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000ad'), 1, 'retention (M3): old entry of a LIVE conversation is not touched by the orphan purge');
 
 select is((public.purge_expired_usage_records(100) ->> 'usage_events')::int, 1, 'retention: only the usage event older than 13 months is purged');
 select is((select count(*)::int from public.usage_events where bot_id = 'b1000000-0000-4000-8000-0000000000aa'), 2, 'retention: newer usage events kept');
 
-select is(public.expire_visitor_sessions(100), 1, 'retention: expired visitor session deleted');
+select is(public.expire_visitor_sessions(100, 30), 1, 'retention: visitor session expired longer ago than the grace period deleted');
+select is((select count(*)::int from public.visitor_sessions where id = 'a3000000-0000-4000-8000-0000000000ac'), 1, 'retention (L9): session that expired within the grace period is kept');
+select is(public.expire_visitor_sessions(100, 5), 1, 'retention (L9): a shorter grace period deletes the recently expired session');
 select is((select count(*)::int from public.visitor_sessions where id = 'a2000000-0000-4000-8000-0000000000ab'), 1, 'retention: live session kept');
 select is(public.purge_expired_rate_limit_buckets(100), 1, 'retention: expired rate-limit bucket deleted');
 select is((select count(*)::int from public.rate_limit_buckets where key_hash = repeat('b', 64)), 1, 'retention: live bucket kept');
 select is(public.purge_expired_caches(100), '{"answer_cache": 1, "moderation_cache": 1, "query_embedding_cache": 0}'::jsonb, 'retention: only expired cache rows are purged');
 select is((select count(*)::int from public.answer_cache where cache_key_hash = repeat('b', 64)), 1, 'retention: live cache row kept');
+
+-- L7: answer_cache rows from an older corpus_version / settings_version are purged although unexpired.
+reset role;
+insert into public.answer_cache (bot_id, cache_key_hash, language, answer_text, corpus_version, settings_version, prompt_template_version, chat_model, expires_at) values
+  ('b1000000-0000-4000-8000-0000000000aa', repeat('c', 64), 'en', 'x', 3, 0, 'p', 'm', now() + interval '1 hour'),
+  ('b1000000-0000-4000-8000-0000000000aa', repeat('d', 64), 'en', 'x', 3, 1, 'p', 'm', now() + interval '1 hour');
+update public.bot_profiles set corpus_version = 3 where id = 'b1000000-0000-4000-8000-0000000000aa';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is((public.purge_expired_caches(100) ->> 'answer_cache')::int, 2, 'retention (L7): unexpired rows with a stale corpus_version (b: 0 < 3) or stale settings_version (c: 0 < 1) are purged');
+select is((select array_agg(cache_key_hash order by cache_key_hash) from public.answer_cache where bot_id = 'b1000000-0000-4000-8000-0000000000aa'), array[repeat('d', 64)], 'retention (L7): the row matching current corpus and settings versions survives');
 
 reset role;
 select * from finish();

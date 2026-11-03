@@ -1,6 +1,6 @@
 -- activate_document_version atomicity + corpus_version, mark_document_deleted.
 begin;
-select plan(36);
+select plan(39);
 
 create schema tests;
 grant usage on schema tests to public;
@@ -9,6 +9,8 @@ language sql immutable as $$
   select (array_agg(case when g = i then 1.0 else 0.0 end order by g))::real[]::extensions.vector
   from generate_series(1, 1536) g
 $$;
+-- Functions created by the migration owner are no longer executable by PUBLIC (P3-D1 L4): grant the test helper.
+grant execute on function tests.unit_vec(integer) to public;
 
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
   ('b1000000-0000-4000-8000-0000000000c1', 'a-bot1', 'x', array['en'], 'm', 1536);
@@ -26,6 +28,12 @@ insert into public.document_versions (id, document_id, version_number, storage_p
   ('e4000000-0000-4000-8000-0000000000c4', 'd1000000-0000-4000-8000-0000000000c1', 4, 'a/v4', 'text/plain', 'embedding'),
   ('e5000000-0000-4000-8000-0000000000c5', 'd1000000-0000-4000-8000-0000000000c1', 5, 'a/v5', 'text/plain', 'uploaded'),
   ('e6000000-0000-4000-8000-0000000000c6', 'd2000000-0000-4000-8000-0000000000c2', 1, 'a/vo', 'text/plain', 'embedding');
+-- Versions v1..vo were embedded with the bot's model 'm' (activation requires model equality, P3-D1 M2).
+update public.document_versions set embedding_model = 'm';
+-- v7: candidate embedded with ANOTHER model; v8: candidate with no embedding model recorded.
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status, embedding_model) values
+  ('e7000000-0000-4000-8000-0000000000c7', 'd1000000-0000-4000-8000-0000000000c1', 7, 'a/v7', 'text/plain', 'embedding', 'other-model'),
+  ('e8000000-0000-4000-8000-0000000000c8', 'd1000000-0000-4000-8000-0000000000c1', 8, 'a/v8', 'text/plain', 'embedding', null);
 update public.documents set active_version_id = 'e1000000-0000-4000-8000-0000000000c1' where id = 'd1000000-0000-4000-8000-0000000000c1';
 
 insert into public.document_chunks (document_version_id, chunk_index, content, embedding) values
@@ -36,7 +44,9 @@ insert into public.document_chunks (document_version_id, chunk_index, content, e
   ('e3000000-0000-4000-8000-0000000000c3', 0, 'v3-c0', tests.unit_vec(1)),
   ('e4000000-0000-4000-8000-0000000000c4', 0, 'v4-c0', tests.unit_vec(1)),
   ('e4000000-0000-4000-8000-0000000000c4', 2, 'v4-c2', tests.unit_vec(1)),
-  ('e6000000-0000-4000-8000-0000000000c6', 0, 'vo-c0', tests.unit_vec(1));
+  ('e6000000-0000-4000-8000-0000000000c6', 0, 'vo-c0', tests.unit_vec(1)),
+  ('e7000000-0000-4000-8000-0000000000c7', 0, 'v7-c0', tests.unit_vec(1)),
+  ('e8000000-0000-4000-8000-0000000000c8', 0, 'v8-c0', tests.unit_vec(1));
 
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
@@ -57,6 +67,12 @@ select throws_ok(
 select throws_ok(
   $q$select public.activate_document_version('d1000000-0000-4000-8000-0000000000c1', 'e2000000-0000-4000-8000-0000000000c2', 3)$q$,
   'RB011', null, 'activate: expected count larger than actual is rejected');
+select throws_ok(
+  $q$select public.activate_document_version('d1000000-0000-4000-8000-0000000000c1', 'e7000000-0000-4000-8000-0000000000c7', 1)$q$,
+  'RB011', null, 'activate (M2): version embedded with a different model than the bot is rejected');
+select throws_ok(
+  $q$select public.activate_document_version('d1000000-0000-4000-8000-0000000000c1', 'e8000000-0000-4000-8000-0000000000c8', 1)$q$,
+  'RB011', null, 'activate (M2): version with a null embedding_model is rejected');
 select throws_ok(
   $q$select public.activate_document_version('d1000000-0000-4000-8000-0000000000c1', 'e2000000-0000-4000-8000-0000000000c2', 0)$q$,
   '22023', null, 'activate: expected count 0 rejected');
@@ -149,6 +165,11 @@ select is(
 select is(
   public.activate_document_version('d2000000-0000-4000-8000-0000000000c2', 'e6000000-0000-4000-8000-0000000000c6', 1),
   2::bigint, 'activate: first version of a new document activates and bumps corpus_version (2)');
+
+-- M2 guard: with chunks present the bot's embedding model is frozen (reindex required).
+select throws_ok(
+  $q$update public.bot_profiles set embedding_model = 'other-model' where id = 'b1000000-0000-4000-8000-0000000000c1'$q$,
+  'RB012', null, 'bot_profiles (M2): embedding model change is rejected once the bot has chunks');
 
 -- ---- mark_document_deleted ----
 select is(

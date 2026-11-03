@@ -82,6 +82,19 @@ Ambiguous cells above are resolved fail-closed:
 - Fail-closed defaults: `documents.disclosure_policy` defaults to `excluded`; `bot_profiles.enabled` defaults to `false`; policy columns and `jobs.max_attempts` have no default.
 - Rate-limit and cache keys are 64-char lowercase hex digests (CHECK).
 
+### Security hardening (debug cycle P3-D1, 2026-11-04)
+- **MFA in the database (ADR 0015):** every authenticated private read (documents, versions, conversations, messages, sources, analysis, data entries, audit logs) and the three aggregate RPCs require `is_active_member_mfa(roles)` = active membership **and** JWT `aal = 'aal2'`. `is_active_member(roles)` stays as a role probe only.
+- **Embedding guard:** `activate_document_version` requires the version's `embedding_model` to equal the bot's (RB011); `match_document_chunks` only returns chunks whose version model equals the bot's; changing `bot_profiles.embedding_model`/`embedding_dimensions` while chunks exist raises **RB012** (reindex required).
+- **Data entries (ADR 0016):** deleted with their conversation (cascade); orphans purged by `purge_expired_data_entries(batch)` after `retention_policy.conversation_days`.
+- **Request start:** `begin_request_run(bot, session, idempotency_key, request_hash)` (service-only) locks the session row and returns `new | duplicate | hash_mismatch | concurrency_limited`; cap from `client_settings.rate_policy.concurrent_requests_per_session` (missing → RB002); invalid/expired/revoked session → RB004. `idempotency_key` must be a lowercase UUID; `request_hash` 64 lowercase hex.
+- **Jobs:** `complete_job`, `fail_job` (dead-letters at `max_attempts`, error truncated to 1000 chars), `heartbeat_job` require `state = 'running'` and `locked_by = worker`, else **RB013**.
+- **Budget:** `settle_budget_reservation(bot_id, reservation_id, actual_amount)` locks the bot's settings row and rejects foreign/expired/non-reserved reservations (RB003).
+- **Audit logs:** append-only — service role has SELECT/INSERT only, and a trigger rejects UPDATE/DELETE (42501), except the FK set-null when an auth user is deleted.
+- **Public config:** `public_bot_config.is_published` is derived from `bot_profiles.enabled` by triggers; anon/authenticated only see published rows.
+- **Retention/caches:** `expire_visitor_sessions(batch, grace_seconds 1..86400)` (grace required); `purge_expired_caches` also drops `answer_cache` rows from older corpus/settings versions.
+- **Other:** rate-limit counter clamps at `limit + 1`; global default `EXECUTE` on new functions revoked from PUBLIC; `knowledge` bucket limited to PDF/Markdown/plain text; `knowledge_gaps` pairs answers to questions by `request_id`, returns ≤ 500 chars, hides `blocked` from analysts.
+- **Known limits:** races are tested sequentially only (real multi-connection tests in P5/P6); `fail_job` requeues without backoff; stuck `reserved`/`running` runs count toward the per-session cap until the session expires.
+
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.
 - Upload staging paths are authorised by a short-lived signed upload URL issued after backend validation, or equivalent tightly scoped policies.

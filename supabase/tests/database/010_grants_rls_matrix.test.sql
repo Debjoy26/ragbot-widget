@@ -3,11 +3,13 @@
 -- owner, service_role) x operations (select, insert, update, delete) for EVERY public table.
 -- Legend: 'rows visible' = privilege + RLS allow; 'granted but RLS hides' = table grant exists but
 -- policy returns zero rows to this actor; 'permission denied' = SQLSTATE 42501.
+-- P3-D1: member actors carry an aal2 (MFA) JWT claim (ADR 0015); the aal1 variants below prove that
+-- an active member WITHOUT aal2 sees nothing. audit_logs is append-only even for service_role (L1).
 -- Orchestrator rulings applied: analyst reads documents/versions (metadata), not data_entries;
 -- bot_profiles/client_settings/memberships/sessions/budgets/request_runs/jobs/usage/caches: no
 -- authenticated access; audit_logs admin/owner read only.
 begin;
-select plan(528);
+select plan(552);
 
 -- Fixtures (inserted as the migration owner; rolled back at the end).
 insert into auth.users (id, aud, role, email) values
@@ -18,9 +20,9 @@ insert into auth.users (id, aud, role, email) values
   ('55555555-0000-4000-8000-000000000055', 'authenticated', 'authenticated', 'spare@example.test');
 insert into public.admin_memberships (user_id, role) values ('22222222-0000-4000-8000-000000000022', 'analyst'), ('33333333-0000-4000-8000-000000000033', 'admin'), ('44444444-0000-4000-8000-000000000044', 'owner');
 
-insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
-  ('b1000000-0000-4000-8000-000000000001', 't-bot1', 'x', array['en'], 'm', 1536),
-  ('b2000000-0000-4000-8000-000000000002', 't-bot2', 'x', array['en'], 'm', 1536);
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
+  ('b1000000-0000-4000-8000-000000000001', 't-bot1', 'x', array['en'], 'm', 1536, true),
+  ('b2000000-0000-4000-8000-000000000002', 't-bot2', 'x', array['en'], 'm', 1536, false);
 insert into public.public_bot_config (bot_id, bot_slug, display_name, supported_languages) values ('b1000000-0000-4000-8000-000000000001', 't-bot1', 'Bot 1', array['en']);
 insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values ('b1000000-0000-4000-8000-000000000001', array['https://example.test'],
   '{"message_per_session": {"limit": 20, "window_seconds": 600}}'::jsonb,
@@ -35,7 +37,7 @@ update public.documents set active_version_id = 'e1000000-0000-4000-8000-0000000
 insert into public.document_chunks (id, document_version_id, chunk_index, content, embedding) values ('c1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 0, 'chunk', (select array_agg(0.1::real) from generate_series(1, 1536))::extensions.vector);
 insert into public.visitor_sessions (id, bot_id, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', now() + interval '1 hour');
 insert into public.conversations (id, bot_id, visitor_session_id) values ('f1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001'), ('f2000000-0000-4000-8000-000000000002', 'b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001');
-insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash) values ('91000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k1', 'h1');
+insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash) values ('91000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '11111111-1111-4111-8111-111111111111', repeat('1', 64));
 insert into public.messages (id, conversation_id, request_id, role, content) values ('81000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', '91000000-0000-4000-8000-000000000001', 'user', 'question');
 insert into public.message_sources (message_id, chunk_id, document_version_id, source_label) values ('81000000-0000-4000-8000-000000000001', 'c1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 'label');
 insert into public.conversation_analysis (conversation_id) values ('f1000000-0000-4000-8000-000000000001');
@@ -95,7 +97,7 @@ select throws_ok($q$insert into public.conversations (bot_id, visitor_session_id
 select throws_ok($q$update public.conversations set id = id where false$q$, '42501', null, 'anon: update conversations -> denied');
 select throws_ok($q$delete from public.conversations where false$q$, '42501', null, 'anon: delete conversations -> denied');
 select throws_ok($q$select count(*) from public.request_runs$q$, '42501', null, 'anon: select request_runs -> permission denied');
-select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, '42501', null, 'anon: insert request_runs -> denied');
+select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, '42501', null, 'anon: insert request_runs -> denied');
 select throws_ok($q$update public.request_runs set id = id where false$q$, '42501', null, 'anon: update request_runs -> denied');
 select throws_ok($q$delete from public.request_runs where false$q$, '42501', null, 'anon: delete request_runs -> denied');
 select throws_ok($q$select count(*) from public.messages$q$, '42501', null, 'anon: select messages -> permission denied');
@@ -150,7 +152,7 @@ reset role;
 
 -- ===== actor: nonmember =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"11111111-0000-4000-8000-000000000011","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"11111111-0000-4000-8000-000000000011","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select count(*) from public.admin_memberships$q$, '42501', null, 'nonmember: select admin_memberships -> permission denied');
 select throws_ok($q$insert into public.admin_memberships (user_id, role) values ('55555555-0000-4000-8000-000000000055', 'analyst')$q$, '42501', null, 'nonmember: insert admin_memberships -> denied');
 select throws_ok($q$update public.admin_memberships set user_id = user_id where false$q$, '42501', null, 'nonmember: update admin_memberships -> denied');
@@ -194,7 +196,7 @@ select throws_ok($q$insert into public.conversations (bot_id, visitor_session_id
 select throws_ok($q$update public.conversations set id = id where false$q$, '42501', null, 'nonmember: update conversations -> denied');
 select throws_ok($q$delete from public.conversations where false$q$, '42501', null, 'nonmember: delete conversations -> denied');
 select throws_ok($q$select count(*) from public.request_runs$q$, '42501', null, 'nonmember: select request_runs -> permission denied');
-select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, '42501', null, 'nonmember: insert request_runs -> denied');
+select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, '42501', null, 'nonmember: insert request_runs -> denied');
 select throws_ok($q$update public.request_runs set id = id where false$q$, '42501', null, 'nonmember: update request_runs -> denied');
 select throws_ok($q$delete from public.request_runs where false$q$, '42501', null, 'nonmember: delete request_runs -> denied');
 select is((select count(*) from public.messages)::int, 0, 'nonmember: select messages -> granted but RLS hides all rows');
@@ -249,7 +251,7 @@ reset role;
 
 -- ===== actor: analyst =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"22222222-0000-4000-8000-000000000022","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"22222222-0000-4000-8000-000000000022","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select count(*) from public.admin_memberships$q$, '42501', null, 'analyst: select admin_memberships -> permission denied');
 select throws_ok($q$insert into public.admin_memberships (user_id, role) values ('55555555-0000-4000-8000-000000000055', 'analyst')$q$, '42501', null, 'analyst: insert admin_memberships -> denied');
 select throws_ok($q$update public.admin_memberships set user_id = user_id where false$q$, '42501', null, 'analyst: update admin_memberships -> denied');
@@ -293,7 +295,7 @@ select throws_ok($q$insert into public.conversations (bot_id, visitor_session_id
 select throws_ok($q$update public.conversations set id = id where false$q$, '42501', null, 'analyst: update conversations -> denied');
 select throws_ok($q$delete from public.conversations where false$q$, '42501', null, 'analyst: delete conversations -> denied');
 select throws_ok($q$select count(*) from public.request_runs$q$, '42501', null, 'analyst: select request_runs -> permission denied');
-select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, '42501', null, 'analyst: insert request_runs -> denied');
+select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, '42501', null, 'analyst: insert request_runs -> denied');
 select throws_ok($q$update public.request_runs set id = id where false$q$, '42501', null, 'analyst: update request_runs -> denied');
 select throws_ok($q$delete from public.request_runs where false$q$, '42501', null, 'analyst: delete request_runs -> denied');
 select cmp_ok((select count(*) from public.messages)::int, '>=', 1, 'analyst: select messages -> rows visible');
@@ -348,7 +350,7 @@ reset role;
 
 -- ===== actor: admin =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"33333333-0000-4000-8000-000000000033","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"33333333-0000-4000-8000-000000000033","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select count(*) from public.admin_memberships$q$, '42501', null, 'admin: select admin_memberships -> permission denied');
 select throws_ok($q$insert into public.admin_memberships (user_id, role) values ('55555555-0000-4000-8000-000000000055', 'analyst')$q$, '42501', null, 'admin: insert admin_memberships -> denied');
 select throws_ok($q$update public.admin_memberships set user_id = user_id where false$q$, '42501', null, 'admin: update admin_memberships -> denied');
@@ -392,7 +394,7 @@ select throws_ok($q$insert into public.conversations (bot_id, visitor_session_id
 select throws_ok($q$update public.conversations set id = id where false$q$, '42501', null, 'admin: update conversations -> denied');
 select throws_ok($q$delete from public.conversations where false$q$, '42501', null, 'admin: delete conversations -> denied');
 select throws_ok($q$select count(*) from public.request_runs$q$, '42501', null, 'admin: select request_runs -> permission denied');
-select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, '42501', null, 'admin: insert request_runs -> denied');
+select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, '42501', null, 'admin: insert request_runs -> denied');
 select throws_ok($q$update public.request_runs set id = id where false$q$, '42501', null, 'admin: update request_runs -> denied');
 select throws_ok($q$delete from public.request_runs where false$q$, '42501', null, 'admin: delete request_runs -> denied');
 select cmp_ok((select count(*) from public.messages)::int, '>=', 1, 'admin: select messages -> rows visible');
@@ -447,7 +449,7 @@ reset role;
 
 -- ===== actor: owner =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"44444444-0000-4000-8000-000000000044","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"44444444-0000-4000-8000-000000000044","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select count(*) from public.admin_memberships$q$, '42501', null, 'owner: select admin_memberships -> permission denied');
 select throws_ok($q$insert into public.admin_memberships (user_id, role) values ('55555555-0000-4000-8000-000000000055', 'analyst')$q$, '42501', null, 'owner: insert admin_memberships -> denied');
 select throws_ok($q$update public.admin_memberships set user_id = user_id where false$q$, '42501', null, 'owner: update admin_memberships -> denied');
@@ -491,7 +493,7 @@ select throws_ok($q$insert into public.conversations (bot_id, visitor_session_id
 select throws_ok($q$update public.conversations set id = id where false$q$, '42501', null, 'owner: update conversations -> denied');
 select throws_ok($q$delete from public.conversations where false$q$, '42501', null, 'owner: delete conversations -> denied');
 select throws_ok($q$select count(*) from public.request_runs$q$, '42501', null, 'owner: select request_runs -> permission denied');
-select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, '42501', null, 'owner: insert request_runs -> denied');
+select throws_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, '42501', null, 'owner: insert request_runs -> denied');
 select throws_ok($q$update public.request_runs set id = id where false$q$, '42501', null, 'owner: update request_runs -> denied');
 select throws_ok($q$delete from public.request_runs where false$q$, '42501', null, 'owner: delete request_runs -> denied');
 select cmp_ok((select count(*) from public.messages)::int, '>=', 1, 'owner: select messages -> rows visible');
@@ -544,6 +546,45 @@ select throws_ok($q$update public.answer_cache set id = id where false$q$, '4250
 select throws_ok($q$delete from public.answer_cache where false$q$, '42501', null, 'owner: delete answer_cache -> denied');
 reset role;
 
+-- ===== actor: analyst with aal1 session (active member, NO MFA): private tables yield zero rows =====
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"22222222-0000-4000-8000-000000000022","aal":"aal1","role":"authenticated"}', true);
+select is((select count(*) from public.documents)::int, 0, 'analyst aal1: select documents -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.document_versions)::int, 0, 'analyst aal1: select document_versions -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversations)::int, 0, 'analyst aal1: select conversations -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.messages)::int, 0, 'analyst aal1: select messages -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.message_sources)::int, 0, 'analyst aal1: select message_sources -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversation_analysis)::int, 0, 'analyst aal1: select conversation_analysis -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.data_entries)::int, 0, 'analyst aal1: select data_entries -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.audit_logs)::int, 0, 'analyst aal1: select audit_logs -> RLS hides all rows (MFA required)');
+reset role;
+
+-- ===== actor: admin with aal1 session (active member, NO MFA): private tables yield zero rows =====
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"33333333-0000-4000-8000-000000000033","aal":"aal1","role":"authenticated"}', true);
+select is((select count(*) from public.documents)::int, 0, 'admin aal1: select documents -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.document_versions)::int, 0, 'admin aal1: select document_versions -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversations)::int, 0, 'admin aal1: select conversations -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.messages)::int, 0, 'admin aal1: select messages -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.message_sources)::int, 0, 'admin aal1: select message_sources -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversation_analysis)::int, 0, 'admin aal1: select conversation_analysis -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.data_entries)::int, 0, 'admin aal1: select data_entries -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.audit_logs)::int, 0, 'admin aal1: select audit_logs -> RLS hides all rows (MFA required)');
+reset role;
+
+-- ===== actor: owner with aal1 session (active member, NO MFA): private tables yield zero rows =====
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"44444444-0000-4000-8000-000000000044","aal":"aal1","role":"authenticated"}', true);
+select is((select count(*) from public.documents)::int, 0, 'owner aal1: select documents -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.document_versions)::int, 0, 'owner aal1: select document_versions -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversations)::int, 0, 'owner aal1: select conversations -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.messages)::int, 0, 'owner aal1: select messages -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.message_sources)::int, 0, 'owner aal1: select message_sources -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.conversation_analysis)::int, 0, 'owner aal1: select conversation_analysis -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.data_entries)::int, 0, 'owner aal1: select data_entries -> RLS hides all rows (MFA required)');
+select is((select count(*) from public.audit_logs)::int, 0, 'owner aal1: select audit_logs -> RLS hides all rows (MFA required)');
+reset role;
+
 -- ===== actor: service_role =====
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
@@ -590,7 +631,7 @@ select lives_ok($q$insert into public.conversations (bot_id, visitor_session_id)
 select lives_ok($q$update public.conversations set id = id where false$q$, 'service_role: update conversations -> allowed');
 select lives_ok($q$delete from public.conversations where false$q$, 'service_role: delete conversations -> allowed');
 select cmp_ok((select count(*) from public.request_runs)::int, '>=', 1, 'service_role: select request_runs -> rows visible');
-select lives_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', 'k-ins', 'h')$q$, 'service_role: insert request_runs -> allowed');
+select lives_ok($q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash) values ('b1000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000001', '22222222-2222-4222-8222-222222222222', repeat('2', 64))$q$, 'service_role: insert request_runs -> allowed');
 select lives_ok($q$update public.request_runs set id = id where false$q$, 'service_role: update request_runs -> allowed');
 select lives_ok($q$delete from public.request_runs where false$q$, 'service_role: delete request_runs -> allowed');
 select cmp_ok((select count(*) from public.messages)::int, '>=', 1, 'service_role: select messages -> rows visible');
@@ -627,8 +668,8 @@ select lives_ok($q$update public.budget_reservations set id = id where false$q$,
 select lives_ok($q$delete from public.budget_reservations where false$q$, 'service_role: delete budget_reservations -> allowed');
 select cmp_ok((select count(*) from public.audit_logs)::int, '>=', 1, 'service_role: select audit_logs -> rows visible');
 select lives_ok($q$insert into public.audit_logs (action, resource_type) values ('ins', 'test')$q$, 'service_role: insert audit_logs -> allowed');
-select lives_ok($q$update public.audit_logs set id = id where false$q$, 'service_role: update audit_logs -> allowed');
-select lives_ok($q$delete from public.audit_logs where false$q$, 'service_role: delete audit_logs -> allowed');
+select throws_ok($q$update public.audit_logs set id = id where false$q$, '42501', null, 'service_role: update audit_logs -> denied (append-only, P3-D1 L1)');
+select throws_ok($q$delete from public.audit_logs where false$q$, '42501', null, 'service_role: delete audit_logs -> denied (append-only, P3-D1 L1)');
 select cmp_ok((select count(*) from public.query_embedding_cache)::int, '>=', 1, 'service_role: select query_embedding_cache -> rows visible');
 select lives_ok($q$insert into public.query_embedding_cache (key_hash, embedding_model, embedding, expires_at) values ('3333333333333333333333333333333333333333333333333333333333333333', 'm', (select array_agg(0.1::real) from generate_series(1, 1536))::extensions.vector, now() + interval '1 hour')$q$, 'service_role: insert query_embedding_cache -> allowed');
 select lives_ok($q$update public.query_embedding_cache set key_hash = key_hash where false$q$, 'service_role: update query_embedding_cache -> allowed');

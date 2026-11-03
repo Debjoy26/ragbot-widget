@@ -5,10 +5,14 @@
 -- Custom SQLSTATEs (stable contract for api/ P5):
 --   RB001  budget_exceeded           reserve_request_budget: daily cap would be exceeded
 --   RB002  budget_policy_missing     reserve_request_budget: client_settings/daily cap missing or invalid (fail closed)
---   RB003  reservation_not_active    settle/release on a reservation that is not in state 'reserved'
---   RB004  request_conflict          reserve_request_budget: request missing, wrong bot, or reservation not reusable
+--   RB003  reservation_not_active    settle/release on a reservation that is not in state 'reserved' (settle: also
+--                                    unknown / other bot's / expired reservation)
+--   RB004  request_conflict          reserve_request_budget: request missing, wrong bot, or reservation not reusable;
+--                                    begin_request_run: unknown, expired or revoked visitor session
 --   RB010  document_not_found        activate/mark_deleted: unknown or deleted document / wrong version
---   RB011  activation_failed         activate_document_version: validation failed (chunk count, status)
+--   RB011  activation_failed         activate_document_version: validation failed (chunk count, status, embedding model)
+--   RB012  embedding_change_requires_reindex  (trigger in 002) embedding model/dimension change while chunks exist
+--   RB013  lease_not_held            complete_job/fail_job/heartbeat_job: job not running or locked by another worker
 
 -- ---------------------------------------------------------------------------
 -- claim_jobs: atomically claim due work with a lease. FOR UPDATE SKIP LOCKED, so concurrent
@@ -99,6 +103,7 @@ declare
   v_ver     public.document_versions%rowtype;
   v_chunks  integer;
   v_corpus  bigint;
+  v_model   text;
 begin
   if p_document_id is null or p_version_id is null or p_expected_chunks is null or p_expected_chunks < 1 then
     raise exception 'activate_document_version: document, version and a positive expected chunk count are required'
@@ -123,6 +128,13 @@ begin
 
   if v_ver.status <> 'embedding' then
     raise exception 'activate_document_version: version status must be embedding' using errcode = 'RB011';
+  end if;
+
+  -- The version must have been embedded with the bot's current embedding model (never mix models).
+  select b.embedding_model into v_model from public.bot_profiles b where b.id = v_doc.bot_id;
+  if v_ver.embedding_model is null or v_model is null or v_ver.embedding_model <> v_model then
+    raise exception 'activate_document_version: version embedding model does not match the bot embedding model'
+      using errcode = 'RB011';
   end if;
 
   select count(*) into v_chunks from public.document_chunks where document_version_id = p_version_id;
@@ -282,23 +294,35 @@ begin
 end;
 $$;
 
--- Reconcile a reservation with the actual (conservatively estimated) cost.
-create function public.settle_budget_reservation(p_reservation_id uuid, p_actual_amount numeric)
+-- Reconcile a reservation with the actual (conservatively estimated) cost. The bot id is an
+-- ownership check; the bot's client_settings row is locked like reserve_request_budget does (so a
+-- settle cannot interleave with a cap check). An expired (even if not yet swept) or foreign
+-- reservation cannot be settled: RB003.
+create function public.settle_budget_reservation(p_bot_id uuid, p_reservation_id uuid, p_actual_amount numeric)
 returns void
 language plpgsql
 set search_path = ''
 as $$
+declare
+  v_res public.budget_reservations%rowtype;
 begin
-  if p_reservation_id is null or p_actual_amount is null or p_actual_amount < 0 then
-    raise exception 'settle_budget_reservation: reservation and non-negative amount are required'
+  if p_bot_id is null or p_reservation_id is null or p_actual_amount is null or p_actual_amount < 0 then
+    raise exception 'settle_budget_reservation: bot, reservation and non-negative amount are required'
       using errcode = '22023';
   end if;
-  update public.budget_reservations
-     set state = 'settled', amount = p_actual_amount
-   where id = p_reservation_id and state = 'reserved';
+
+  perform 1 from public.client_settings cs where cs.bot_id = p_bot_id for update;
   if not found then
+    raise exception 'settle_budget_reservation: no client settings for bot' using errcode = 'RB002';
+  end if;
+
+  select * into v_res from public.budget_reservations br
+   where br.id = p_reservation_id and br.bot_id = p_bot_id for update;
+  if not found or v_res.state <> 'reserved' or v_res.expires_at <= now() then
     raise exception 'settle_budget_reservation: reservation is not active' using errcode = 'RB003';
   end if;
+
+  update public.budget_reservations set state = 'settled', amount = p_actual_amount where id = v_res.id;
 end;
 $$;
 
@@ -321,7 +345,8 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- record_rate_limit_attempt: atomic fixed-window counter (upsert). Always counts the attempt;
--- returns the post-increment count and whether it is within p_limit. p_key_hash must be a
+-- returns the post-increment count and whether it is within p_limit. The counter stops growing at
+-- p_limit + 1 (abusers cannot inflate it, and a lowered limit never rewinds it). p_key_hash must be a
 -- 64-char lowercase hex digest (table CHECK) so plain IPs/identifiers cannot be stored.
 -- ---------------------------------------------------------------------------
 create function public.record_rate_limit_attempt(
@@ -353,11 +378,174 @@ begin
   insert into public.rate_limit_buckets as b (key_hash, window_start, window_seconds, request_count, expires_at)
   values (p_key_hash, v_start, p_window_seconds, 1, v_start + make_interval(secs => p_window_seconds))
   on conflict (key_hash, window_start, window_seconds)
-  do update set request_count = b.request_count + 1
+  do update set request_count = case
+                              when b.request_count::bigint >= p_limit::bigint + 1 then b.request_count
+                              else b.request_count + 1
+                            end
   returning b.request_count into v_count;
 
   return query
   select v_count, v_count <= p_limit, v_start, v_start + make_interval(secs => p_window_seconds);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- begin_request_run: atomic request start (idempotency + per-session concurrency cap).
+-- Locks the visitor_sessions row FOR UPDATE, so two concurrent starts for one session are serialised
+-- and cannot both pass the cap check. Outcomes:
+--   'new'                 run inserted (state 'reserved'); run_id is the new run
+--   'duplicate'           same (bot, session, key) AND same request_hash already exists; run_id = existing run
+--   'hash_mismatch'       same key but a different request_hash (client bug / replay tampering); run_id null
+--   'concurrency_limited' running/reserved runs of this session >= rate_policy.concurrent_requests_per_session
+-- Rejects an unknown, other-bot, expired or revoked session with RB004. The cap is read from
+-- client_settings.rate_policy and FAILS CLOSED (RB002) when settings or the key are missing/invalid.
+-- Key must be a canonical lowercase UUID string, hash 64 lowercase hex (also enforced by CHECKs).
+-- Known limitation: there is no reaper for runs stuck in 'reserved'/'running'; they count against the
+-- cap until the session is deleted (expire_visitor_sessions cascades runs).
+-- ---------------------------------------------------------------------------
+create function public.begin_request_run(
+  p_bot_id             uuid,
+  p_visitor_session_id uuid,
+  p_idempotency_key    text,
+  p_request_hash       text
+)
+returns table (run_id uuid, outcome text)
+language plpgsql
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_sess     public.visitor_sessions%rowtype;
+  v_cap_text text;
+  v_cap      integer;
+  v_existing public.request_runs%rowtype;
+  v_active   integer;
+  v_id       uuid;
+begin
+  if p_bot_id is null or p_visitor_session_id is null or p_idempotency_key is null or p_request_hash is null
+     or p_idempotency_key !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+     or p_request_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'begin_request_run: bot, session, canonical uuid idempotency key and sha256 hex hash are required'
+      using errcode = '22023';
+  end if;
+
+  select * into v_sess from public.visitor_sessions s
+   where s.id = p_visitor_session_id and s.bot_id = p_bot_id for update;
+  if not found or v_sess.revoked_at is not null or v_sess.expires_at <= now() then
+    raise exception 'begin_request_run: visitor session is not valid' using errcode = 'RB004';
+  end if;
+
+  select cs.rate_policy ->> 'concurrent_requests_per_session' into v_cap_text
+    from public.client_settings cs where cs.bot_id = p_bot_id;
+  if not found then
+    raise exception 'begin_request_run: no client settings for bot' using errcode = 'RB002';
+  end if;
+  if v_cap_text is null or v_cap_text !~ '^[1-9][0-9]{0,3}$' then
+    raise exception 'begin_request_run: concurrent_requests_per_session is missing or invalid' using errcode = 'RB002';
+  end if;
+  v_cap := v_cap_text::integer;
+
+  select * into v_existing from public.request_runs r
+   where r.bot_id = p_bot_id and r.visitor_session_id = p_visitor_session_id and r.idempotency_key = p_idempotency_key;
+  if found then
+    if v_existing.request_hash = p_request_hash then
+      return query select v_existing.id, 'duplicate'::text;
+    else
+      return query select null::uuid, 'hash_mismatch'::text;
+    end if;
+    return;
+  end if;
+
+  select count(*)::integer into v_active from public.request_runs r
+   where r.bot_id = p_bot_id and r.visitor_session_id = p_visitor_session_id
+     and r.state in ('running', 'reserved');
+  if v_active >= v_cap then
+    return query select null::uuid, 'concurrency_limited'::text;
+    return;
+  end if;
+
+  insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash)
+  values (p_bot_id, p_visitor_session_id, p_idempotency_key, p_request_hash)
+  returning id into v_id;
+  return query select v_id, 'new'::text;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Job lifecycle (worker side). Every call proves lease ownership: the job must be 'running' AND
+-- locked_by = p_worker, otherwise RB013 (e.g. a stale worker after the job was re-claimed).
+-- ---------------------------------------------------------------------------
+create function public.complete_job(p_job_id uuid, p_worker text)
+returns void
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' then
+    raise exception 'complete_job: job and worker id are required' using errcode = '22023';
+  end if;
+  update public.jobs
+     set state = 'succeeded', completed_at = now(), locked_until = null, locked_by = null, last_error = null
+   where id = p_job_id and state = 'running' and locked_by = p_worker;
+  if not found then
+    raise exception 'complete_job: lease not held' using errcode = 'RB013';
+  end if;
+end;
+$$;
+
+-- Records a failed attempt. attempts was incremented at claim time: attempts >= max_attempts
+-- dead-letters the job ('failed' + completed_at), otherwise it is requeued ('queued', available now;
+-- backoff is the caller's concern). Returns the resulting state. last_error is truncated to 1000 chars.
+create function public.fail_job(p_job_id uuid, p_worker text, p_error text)
+returns text
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_state text;
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' or p_error is null then
+    raise exception 'fail_job: job, worker id and error text are required' using errcode = '22023';
+  end if;
+  update public.jobs j
+     set state = case when j.attempts >= j.max_attempts then 'failed' else 'queued' end,
+         completed_at = case when j.attempts >= j.max_attempts then now() else null end,
+         available_at = case when j.attempts >= j.max_attempts then j.available_at else now() end,
+         locked_until = null,
+         locked_by = null,
+         last_error = left(p_error, 1000)
+   where j.id = p_job_id and j.state = 'running' and j.locked_by = p_worker
+  returning j.state into v_state;
+  if not found then
+    raise exception 'fail_job: lease not held' using errcode = 'RB013';
+  end if;
+  return v_state;
+end;
+$$;
+
+-- Extends the lease of a job this worker still holds. Returns the new locked_until.
+create function public.heartbeat_job(p_job_id uuid, p_worker text, p_lease_seconds integer)
+returns timestamptz
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_until timestamptz;
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' then
+    raise exception 'heartbeat_job: job and worker id are required' using errcode = '22023';
+  end if;
+  if p_lease_seconds is null or p_lease_seconds < 1 or p_lease_seconds > 3600 then
+    raise exception 'heartbeat_job: lease seconds must be between 1 and 3600' using errcode = '22023';
+  end if;
+  update public.jobs
+     set locked_until = now() + make_interval(secs => p_lease_seconds)
+   where id = p_job_id and state = 'running' and locked_by = p_worker
+  returning locked_until into v_until;
+  if not found then
+    raise exception 'heartbeat_job: lease not held' using errcode = 'RB013';
+  end if;
+  return v_until;
 end;
 $$;
 
@@ -368,7 +556,11 @@ revoke all on function public.claim_jobs(text, integer, integer, text[]) from pu
 revoke all on function public.activate_document_version(uuid, uuid, integer) from public, anon, authenticated;
 revoke all on function public.mark_document_deleted(uuid, integer) from public, anon, authenticated;
 revoke all on function public.reserve_request_budget(uuid, uuid, numeric, integer) from public, anon, authenticated;
-revoke all on function public.settle_budget_reservation(uuid, numeric) from public, anon, authenticated;
+revoke all on function public.settle_budget_reservation(uuid, uuid, numeric) from public, anon, authenticated;
+revoke all on function public.begin_request_run(uuid, uuid, text, text) from public, anon, authenticated;
+revoke all on function public.complete_job(uuid, text) from public, anon, authenticated;
+revoke all on function public.fail_job(uuid, text, text) from public, anon, authenticated;
+revoke all on function public.heartbeat_job(uuid, text, integer) from public, anon, authenticated;
 revoke all on function public.release_budget_reservation(uuid) from public, anon, authenticated;
 revoke all on function public.record_rate_limit_attempt(text, integer, integer) from public, anon, authenticated;
 
@@ -376,6 +568,10 @@ grant execute on function public.claim_jobs(text, integer, integer, text[]) to s
 grant execute on function public.activate_document_version(uuid, uuid, integer) to service_role;
 grant execute on function public.mark_document_deleted(uuid, integer) to service_role;
 grant execute on function public.reserve_request_budget(uuid, uuid, numeric, integer) to service_role;
-grant execute on function public.settle_budget_reservation(uuid, numeric) to service_role;
+grant execute on function public.settle_budget_reservation(uuid, uuid, numeric) to service_role;
+grant execute on function public.begin_request_run(uuid, uuid, text, text) to service_role;
+grant execute on function public.complete_job(uuid, text) to service_role;
+grant execute on function public.fail_job(uuid, text, text) to service_role;
+grant execute on function public.heartbeat_job(uuid, text, integer) to service_role;
 grant execute on function public.release_budget_reservation(uuid) to service_role;
 grant execute on function public.record_rate_limit_attempt(text, integer, integer) to service_role;

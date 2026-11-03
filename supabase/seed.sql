@@ -17,6 +17,7 @@ insert into public.bot_profiles (
   true
 );
 
+-- is_published is derived from bot_profiles.enabled by trigger (the dev bot is enabled, so this row is published).
 insert into public.public_bot_config (
   bot_id, bot_slug, display_name, greeting, suggested_questions, primary_color, position,
   privacy_url, supported_languages, escalation_label, escalation_messages,

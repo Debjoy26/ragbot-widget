@@ -1,6 +1,6 @@
 -- Vector dimension enforcement and match_document_chunks filtering/bounds.
 begin;
-select plan(26);
+select plan(33);
 
 -- Test-only helper (rolled back). Unit vector with 1.0 at position i.
 create schema tests;
@@ -10,6 +10,8 @@ language sql immutable as $$
   select (array_agg(case when g = i then 1.0 else 0.0 end order by g))::real[]::extensions.vector
   from generate_series(1, 1536) g
 $$;
+-- Functions created by the migration owner are no longer executable by PUBLIC (P3-D1 L4): grant the test helper.
+grant execute on function tests.unit_vec(integer) to public;
 
 -- Two bots. Documents:
 --   A  bot1 public_answer, active ready version  -> eligible ('A-active')
@@ -39,6 +41,24 @@ insert into public.document_versions (id, document_id, version_number, storage_p
   ('e4000000-0000-4000-8000-0000000000a5', 'd4000000-0000-4000-8000-0000000000a4', 1, 'v/p1', 'text/plain', 'embedding'),
   ('e5000000-0000-4000-8000-0000000000a6', 'd5000000-0000-4000-8000-0000000000a5', 1, 'v/q1', 'text/plain', 'embedding'),
   ('e6000000-0000-4000-8000-0000000000a7', 'd6000000-0000-4000-8000-0000000000a6', 1, 'v/b1', 'text/plain', 'ready');
+
+-- Versions were embedded with the bot's model 'm' (activation/match require model equality, P3-D1 M2).
+update public.document_versions set embedding_model = 'm';
+-- M2 fixtures: documents whose active ready version was embedded with ANOTHER model / no model recorded.
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('d7000000-0000-4000-8000-0000000000a7', 'b1000000-0000-4000-8000-0000000000a1', 'Doc M', 'ready', 'public_answer'),
+  ('d8000000-0000-4000-8000-0000000000a8', 'b1000000-0000-4000-8000-0000000000a1', 'Doc N', 'ready', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status, embedding_model) values
+  ('e7000000-0000-4000-8000-0000000000a8', 'd7000000-0000-4000-8000-0000000000a7', 1, 'v/m1', 'text/plain', 'ready', 'other-model'),
+  ('e8000000-0000-4000-8000-0000000000a9', 'd8000000-0000-4000-8000-0000000000a8', 1, 'v/n1', 'text/plain', 'ready', null);
+update public.documents set active_version_id = 'e7000000-0000-4000-8000-0000000000a8' where id = 'd7000000-0000-4000-8000-0000000000a7';
+update public.documents set active_version_id = 'e8000000-0000-4000-8000-0000000000a9' where id = 'd8000000-0000-4000-8000-0000000000a8';
+insert into public.document_chunks (document_version_id, chunk_index, content, embedding) values
+  ('e7000000-0000-4000-8000-0000000000a8', 0, 'M-othermodel', tests.unit_vec(1)),
+  ('e8000000-0000-4000-8000-0000000000a9', 0, 'N-nomodel', tests.unit_vec(1));
+-- A bot with no chunks (its embedding model may still be changed).
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
+  ('b3000000-0000-4000-8000-0000000000a3', 'v-bot3', 'x', array['en'], 'm', 1536);
 
 update public.documents set active_version_id = 'e1000000-0000-4000-8000-0000000000a2' where id = 'd1000000-0000-4000-8000-0000000000a1';
 update public.documents set active_version_id = 'e2000000-0000-4000-8000-0000000000a3' where id = 'd2000000-0000-4000-8000-0000000000a2';
@@ -136,6 +156,32 @@ select throws_ok($q$select * from public.match_document_chunks('b1000000-0000-40
 select throws_ok(
   $q$select * from public.match_document_chunks('b1000000-0000-4000-8000-0000000000a1', (select array_agg(0.1::real) from generate_series(1, 768))::extensions.vector, 5)$q$,
   '22000', null, 'match: 768-dim query vector rejected');
+
+-- M2: chunks of a version embedded with a different (or unrecorded) model are never matched.
+select is(
+  (select count(*)::int from public.match_document_chunks('b1000000-0000-4000-8000-0000000000a1', tests.unit_vec(1), 50) where content in ('M-othermodel', 'N-nomodel')),
+  0, 'match (M2): chunks whose version embedding_model differs from / is null versus bot embedding_model are excluded');
+reset role;
+update public.bot_profiles set embedding_model = 'other-model' where id = 'b3000000-0000-4000-8000-0000000000a3';
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select is((select embedding_model from public.bot_profiles where id = 'b3000000-0000-4000-8000-0000000000a3'), 'other-model',
+  'M2 guard: embedding_model of a bot WITHOUT chunks can be changed');
+select throws_ok(
+  $q$update public.bot_profiles set embedding_model = 'other-model' where id = 'b1000000-0000-4000-8000-0000000000a1'$q$,
+  'RB012', null, 'M2 guard: embedding_model change is rejected while the bot has chunks (RB012)');
+select throws_ok(
+  $q$update public.bot_profiles set embedding_dimensions = 768 where id = 'b1000000-0000-4000-8000-0000000000a1'$q$,
+  'RB012', null, 'M2 guard: embedding_dimensions change is rejected while the bot has chunks (RB012)');
+select lives_ok(
+  $q$update public.bot_profiles set embedding_model = embedding_model, embedding_dimensions = 1536, enabled = true where id = 'b1000000-0000-4000-8000-0000000000a1'$q$,
+  'M2 guard: updates that keep model/dimension (and other columns) still work');
+select is((select embedding_model from public.bot_profiles where id = 'b1000000-0000-4000-8000-0000000000a1'), 'm',
+  'M2 guard: the rejected change left embedding_model untouched');
+select is(
+  (select count(*)::int from public.match_document_chunks('b1000000-0000-4000-8000-0000000000a1', tests.unit_vec(1), 50)
+     where content = 'A-active'),
+  1, 'match (M2): same-model chunks are still returned');
 
 -- mark_document_deleted excludes the document from retrieval at once and bumps corpus_version.
 select is(

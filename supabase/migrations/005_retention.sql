@@ -10,9 +10,11 @@
 --
 -- Custom SQLSTATE: RB020 retention_policy_missing.
 
--- Detach nothing; delete expired visitor sessions (cascades request_runs; conversations are kept
--- until conversation retention and just lose the session link).
-create function public.expire_visitor_sessions(p_batch integer)
+-- Delete visitor sessions that expired more than p_grace_seconds ago (cascades request_runs;
+-- conversations are kept until conversation retention and just lose the session link). The grace
+-- period (1..86400, required, no default) keeps recently expired sessions around so in-flight
+-- requests and their idempotency records are not cut off.
+create function public.expire_visitor_sessions(p_batch integer, p_grace_seconds integer)
 returns integer
 language plpgsql
 set search_path = ''
@@ -22,9 +24,12 @@ begin
   if p_batch is null or p_batch < 1 or p_batch > 10000 then
     raise exception 'expire_visitor_sessions: batch must be 1..10000' using errcode = '22023';
   end if;
+  if p_grace_seconds is null or p_grace_seconds < 1 or p_grace_seconds > 86400 then
+    raise exception 'expire_visitor_sessions: grace seconds must be 1..86400' using errcode = '22023';
+  end if;
   with doomed as (
     select s.id from public.visitor_sessions s
-     where s.expires_at < now()
+     where s.expires_at < now() - make_interval(secs => p_grace_seconds)
      order by s.expires_at
      limit p_batch
      for update skip locked
@@ -61,6 +66,8 @@ end;
 $$;
 
 -- Expired rows in all three cache tables. Caches hold no visitor/session identifiers.
+-- answer_cache rows are also deleted when their corpus_version or settings_version is below the
+-- bot's current value (stale entries can never be served again).
 create function public.purge_expired_caches(p_batch integer)
 returns jsonb
 language plpgsql
@@ -81,7 +88,15 @@ begin
    where key_hash in (select c.key_hash from public.moderation_cache c where c.expires_at < now() limit p_batch);
   get diagnostics v_m = row_count;
   delete from public.answer_cache
-   where id in (select c.id from public.answer_cache c where c.expires_at < now() limit p_batch);
+   where id in (
+     select c.id
+       from public.answer_cache c
+       join public.bot_profiles b on b.id = c.bot_id
+      where c.expires_at < now()
+         or c.corpus_version < b.corpus_version
+         or c.settings_version < b.settings_version
+      limit p_batch
+   );
   get diagnostics v_a = row_count;
   return jsonb_build_object('query_embedding_cache', v_q, 'moderation_cache', v_m, 'answer_cache', v_a);
 end;
@@ -111,10 +126,8 @@ begin
 end;
 $$;
 
--- Delete conversations (and, by cascade, messages, sources, analysis) older than
--- retention_policy.conversation_days. data_entries are detached (conversation_id set null),
--- not deleted: their retention is not defined by ADR 0006 and is an open item.
--- The age clock is coalesce(last_message_at, created_at).
+-- Delete conversations (and, by cascade, messages, sources, analysis AND data_entries: ADR 0016)
+-- older than retention_policy.conversation_days. The age clock is coalesce(last_message_at, created_at).
 create function public.purge_expired_conversations(p_batch integer)
 returns integer
 language plpgsql
@@ -154,6 +167,55 @@ begin
        for update skip locked
     )
     delete from public.conversations c using doomed where c.id = doomed.id;
+    get diagnostics v_cnt = row_count;
+    v_n := v_n + v_cnt;
+  end loop;
+  return v_n;
+end;
+$$;
+
+-- data_entries that have no conversation (conversation_id null) are not reached by the conversation
+-- cascade; delete those older than retention_policy.conversation_days (ADR 0016). Fails closed (RB020)
+-- when any bot lacks a valid conversation_days. Batch-bounded; returns the number of rows deleted.
+create function public.purge_expired_data_entries(p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_n   integer := 0;
+  v_cnt integer;
+  r     record;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 10000 then
+    raise exception 'purge_expired_data_entries: batch must be 1..10000' using errcode = '22023';
+  end if;
+
+  if exists (
+    select 1
+      from public.bot_profiles b
+      left join public.client_settings cs on cs.bot_id = b.id
+     where cs.bot_id is null
+        or coalesce(cs.retention_policy ->> 'conversation_days', '') !~ '^[1-9][0-9]{0,5}$'
+  ) then
+    raise exception 'purge_expired_data_entries: conversation retention is not configured for every bot'
+      using errcode = 'RB020';
+  end if;
+
+  for r in
+    select cs.bot_id, (cs.retention_policy ->> 'conversation_days')::integer as days
+      from public.client_settings cs
+  loop
+    delete from public.data_entries d
+     where d.id in (
+       select e.id from public.data_entries e
+        where e.bot_id = r.bot_id
+          and e.conversation_id is null
+          and e.created_at < now() - make_interval(days => r.days)
+        order by e.created_at
+        limit greatest(p_batch - v_n, 0)
+        for update skip locked
+     );
     get diagnostics v_cnt = row_count;
     v_n := v_n + v_cnt;
   end loop;
@@ -217,16 +279,18 @@ begin
 end;
 $$;
 
-revoke all on function public.expire_visitor_sessions(integer) from public, anon, authenticated;
+revoke all on function public.expire_visitor_sessions(integer, integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_rate_limit_buckets(integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_caches(integer) from public, anon, authenticated;
 revoke all on function public.expire_stale_budget_reservations(integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_conversations(integer) from public, anon, authenticated;
 revoke all on function public.purge_expired_usage_records(integer) from public, anon, authenticated;
+revoke all on function public.purge_expired_data_entries(integer) from public, anon, authenticated;
 
-grant execute on function public.expire_visitor_sessions(integer) to service_role;
+grant execute on function public.expire_visitor_sessions(integer, integer) to service_role;
 grant execute on function public.purge_expired_rate_limit_buckets(integer) to service_role;
 grant execute on function public.purge_expired_caches(integer) to service_role;
 grant execute on function public.expire_stale_budget_reservations(integer) to service_role;
 grant execute on function public.purge_expired_conversations(integer) to service_role;
 grant execute on function public.purge_expired_usage_records(integer) to service_role;
+grant execute on function public.purge_expired_data_entries(integer) to service_role;

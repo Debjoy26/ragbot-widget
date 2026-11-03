@@ -49,7 +49,7 @@ insert into public.usage_events (bot_id, operation, input_tokens, output_tokens,
 
 -- ===== nonmember + anon: nothing / denied =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f4","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f4","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select * from public.knowledge_gaps((now() at time zone 'UTC')::date - 7, (now() at time zone 'UTC')::date, 10)$q$, '42501', null, 'nonmember: knowledge_gaps denied');
 select throws_ok($q$select * from public.job_status_summary()$q$, '42501', null, 'nonmember: job_status_summary denied');
 select throws_ok($q$select * from public.usage_daily_summary((now() at time zone 'UTC')::date - 7, (now() at time zone 'UTC')::date)$q$, '42501', null, 'nonmember: usage_daily_summary denied');
@@ -62,7 +62,7 @@ reset role;
 
 -- ===== analyst: aggregates only =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f1","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f1","aal":"aal2","role":"authenticated"}', true);
 
 select results_eq(
   $q$select job_type, job_state, job_count from public.job_status_summary() order by 1, 2$q$,
@@ -113,17 +113,17 @@ reset role;
 
 -- ===== admin / owner: same RPCs work =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f2","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f2","aal":"aal2","role":"authenticated"}', true);
 select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 7, (now() at time zone 'UTC')::date, 10)), 2, 'admin: knowledge_gaps returns the two gaps');
 select is((select sum(job_count)::int from public.job_status_summary()), 4, 'admin: job_status_summary counts all jobs');
-select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f3","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f3","aal":"aal2","role":"authenticated"}', true);
 select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 7, (now() at time zone 'UTC')::date, 10)), 2, 'owner: knowledge_gaps returns the two gaps');
 select is((select count(*)::int from public.usage_daily_summary((now() at time zone 'UTC')::date - 1, (now() at time zone 'UTC')::date)), 2, 'owner: usage_daily_summary works');
 reset role;
 
 -- ===== direct table access stays closed for the same actors =====
 set local role authenticated;
-select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f1","role":"authenticated"}', true);
+select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000f1","aal":"aal2","role":"authenticated"}', true);
 select throws_ok($q$select * from public.jobs$q$, '42501', null, 'analyst: jobs table itself stays closed (RPC only)');
 select throws_ok($q$select * from public.usage_events$q$, '42501', null, 'analyst: usage_events table itself stays closed (RPC only)');
 reset role;

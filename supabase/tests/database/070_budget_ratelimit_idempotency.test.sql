@@ -2,7 +2,7 @@
 -- Limitation: true parallel reservation races need concurrent connections (P5 integration test);
 -- here serialisation is by construction (client_settings row lock) and sequential behaviour is asserted.
 begin;
-select plan(52);
+select plan(64);
 
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
   ('b1000000-0000-4000-8000-0000000000d1', 'b-capped', 'x', array['en'], 'm', 1536),
@@ -23,35 +23,35 @@ insert into public.visitor_sessions (id, bot_id, expires_at) values
 
 -- request_runs: r1..r6 on the capped bot, rn/rs/rb on the other bots.
 insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash) values
-  ('91000000-0000-4000-8000-0000000000d1', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k1', 'h'),
-  ('92000000-0000-4000-8000-0000000000d2', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k2', 'h'),
-  ('93000000-0000-4000-8000-0000000000d3', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k3', 'h'),
-  ('94000000-0000-4000-8000-0000000000d4', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k4', 'h'),
-  ('95000000-0000-4000-8000-0000000000d5', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k5', 'h'),
-  ('96000000-0000-4000-8000-0000000000d6', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k6', 'h'),
-  ('9a000000-0000-4000-8000-0000000000da', 'b2000000-0000-4000-8000-0000000000d2', 'a3000000-0000-4000-8000-0000000000d3', 'k1', 'h'),
-  ('9b000000-0000-4000-8000-0000000000db', 'b3000000-0000-4000-8000-0000000000d3', 'a4000000-0000-4000-8000-0000000000d4', 'k1', 'h'),
-  ('9c000000-0000-4000-8000-0000000000dc', 'b4000000-0000-4000-8000-0000000000d4', 'a5000000-0000-4000-8000-0000000000d5', 'k1', 'h');
+  ('91000000-0000-4000-8000-0000000000d1', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000001', repeat('a', 64)),
+  ('92000000-0000-4000-8000-0000000000d2', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000002', repeat('a', 64)),
+  ('93000000-0000-4000-8000-0000000000d3', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000003', repeat('a', 64)),
+  ('94000000-0000-4000-8000-0000000000d4', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000004', repeat('a', 64)),
+  ('95000000-0000-4000-8000-0000000000d5', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000005', repeat('a', 64)),
+  ('96000000-0000-4000-8000-0000000000d6', 'b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000006', repeat('a', 64)),
+  ('9a000000-0000-4000-8000-0000000000da', 'b2000000-0000-4000-8000-0000000000d2', 'a3000000-0000-4000-8000-0000000000d3', '00000000-0000-4000-8000-000000000001', repeat('a', 64)),
+  ('9b000000-0000-4000-8000-0000000000db', 'b3000000-0000-4000-8000-0000000000d3', 'a4000000-0000-4000-8000-0000000000d4', '00000000-0000-4000-8000-000000000001', repeat('a', 64)),
+  ('9c000000-0000-4000-8000-0000000000dc', 'b4000000-0000-4000-8000-0000000000d4', 'a5000000-0000-4000-8000-0000000000d5', '00000000-0000-4000-8000-000000000001', repeat('a', 64));
 
 -- ---- Idempotency (handover §4.7): scoped unique key ----
 select throws_ok(
   $q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash)
-     values ('b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k1', 'other')$q$,
+     values ('b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000001', repeat('b', 64))$q$,
   '23505', null, 'idempotency: duplicate (bot, visitor_session, key) is rejected');
 select lives_ok(
   $q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash)
-     values ('b1000000-0000-4000-8000-0000000000d1', 'a2000000-0000-4000-8000-0000000000d2', 'k1', 'h')$q$,
+     values ('b1000000-0000-4000-8000-0000000000d1', 'a2000000-0000-4000-8000-0000000000d2', '00000000-0000-4000-8000-000000000001', repeat('a', 64))$q$,
   'idempotency: the same key in another session is a different scope');
 select throws_ok(
   $q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash)
-     values ('b2000000-0000-4000-8000-0000000000d2', 'a1000000-0000-4000-8000-0000000000d1', 'k-x', 'h')$q$,
+     values ('b2000000-0000-4000-8000-0000000000d2', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000007', repeat('a', 64))$q$,
   '23503', null, 'ownership: request_run cannot pair a session with a different bot (composite FK)');
 select throws_ok(
   $q$insert into public.conversations (bot_id, visitor_session_id) values ('b2000000-0000-4000-8000-0000000000d2', 'a1000000-0000-4000-8000-0000000000d1')$q$,
   '23503', null, 'ownership: conversation cannot pair a session with a different bot (composite FK)');
 select throws_ok(
   $q$insert into public.request_runs (bot_id, visitor_session_id, idempotency_key, request_hash, state)
-     values ('b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', 'k-bad-state', 'h', 'bogus')$q$,
+     values ('b1000000-0000-4000-8000-0000000000d1', 'a1000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-000000000008', repeat('a', 64), 'bogus')$q$,
   '23514', null, 'request_runs: invalid state rejected');
 
 set local role service_role;
@@ -113,19 +113,41 @@ select throws_ok(
   'RB004', null, 'budget: a released reservation for the same request is not silently reused');
 
 select lives_ok(
-  $q$select public.settle_budget_reservation((select id from public.budget_reservations where request_id = '92000000-0000-4000-8000-0000000000d2'), 0.5)$q$,
+  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', (select id from public.budget_reservations where request_id = '92000000-0000-4000-8000-0000000000d2'), 0.5)$q$,
   'budget: settle to the actual amount succeeds');
 select is((select state || ':' || amount::text from public.budget_reservations where request_id = '92000000-0000-4000-8000-0000000000d2'), 'settled:0.500000', 'budget: settled reservation carries the actual amount');
 select throws_ok(
-  $q$select public.settle_budget_reservation((select id from public.budget_reservations where request_id = '92000000-0000-4000-8000-0000000000d2'), 0.5)$q$,
+  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', (select id from public.budget_reservations where request_id = '92000000-0000-4000-8000-0000000000d2'), 0.5)$q$,
   'RB003', null, 'budget: settling twice is rejected');
-select throws_ok($q$select public.settle_budget_reservation(gen_random_uuid(), -1)$q$, '22023', null, 'budget: negative settle amount rejected');
+select throws_ok($q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', gen_random_uuid(), -1)$q$, '22023', null, 'budget: negative settle amount rejected');
 
 -- Expired reservations stop counting and are swept.
 reset role;
 update public.budget_reservations set expires_at = now() - interval '1 minute' where request_id = '93000000-0000-4000-8000-0000000000d3';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+-- L2: settle ownership / expiry / locking (the 93 reservation is active but past expires_at, not yet swept).
+select throws_ok(
+  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', (select id from public.budget_reservations where request_id = '93000000-0000-4000-8000-0000000000d3'), 0.1)$q$,
+  'RB003', null, 'budget (L2): settling an expired (unswept) reservation is rejected');
+select is((select state from public.budget_reservations where request_id = '93000000-0000-4000-8000-0000000000d3'), 'reserved',
+  'budget (L2): the rejected settle left the reservation untouched');
+insert into public.budget_reservations (id, bot_id, request_id, amount, expires_at) values
+  ('e5000000-0000-4000-8000-0000000000d5', 'b1000000-0000-4000-8000-0000000000d1', '95000000-0000-4000-8000-0000000000d5', 0.2, now() + interval '1 hour');
+select throws_ok(
+  $q$select public.settle_budget_reservation('b2000000-0000-4000-8000-0000000000d2', 'e5000000-0000-4000-8000-0000000000d5', 0.1)$q$,
+  'RB003', null, 'budget (L2): settling another bot''s reservation is rejected (ownership check)');
+select is((select state from public.budget_reservations where id = 'e5000000-0000-4000-8000-0000000000d5'), 'reserved',
+  'budget (L2): the foreign-bot settle left the reservation active');
+select lives_ok(
+  $q$select public.settle_budget_reservation('b1000000-0000-4000-8000-0000000000d1', 'e5000000-0000-4000-8000-0000000000d5', 0.1)$q$,
+  'budget (L2): the owning bot can settle an unexpired reservation');
+select throws_ok(
+  $q$select public.settle_budget_reservation('b3000000-0000-4000-8000-0000000000d3', gen_random_uuid(), 0.1)$q$,
+  'RB002', null, 'budget (L2): settle for a bot without client_settings fails closed');
+select throws_ok(
+  $q$select public.settle_budget_reservation(null, gen_random_uuid(), 0.1)$q$,
+  '22023', null, 'budget (L2): settle requires a bot id');
 select lives_ok(
   $q$select public.reserve_request_budget('b1000000-0000-4000-8000-0000000000d1', '94000000-0000-4000-8000-0000000000d4', 4, 60)$q$,
   'budget: an expired (unsettled) reservation no longer counts toward the cap (0.5 settled + 4 <= 5)');
@@ -146,6 +168,13 @@ select is((select window_start from rl1), (select window_start from rl3), 'rate 
 select is((select window_expires_at from rl1), (select window_start + interval '60 seconds' from rl1), 'rate limit: window expires one window length after start');
 select is((select count(*)::int from public.rate_limit_buckets where key_hash = repeat('a', 64) and window_seconds = 60), 1, 'rate limit: one bucket row per key/window');
 select is((select request_count from public.rate_limit_buckets where key_hash = repeat('a', 64) and window_seconds = 60), 3, 'rate limit: stored counter equals the number of attempts');
+create temp table rl4 as select * from public.record_rate_limit_attempt(repeat('a', 64), 60, 2);
+create temp table rl5 as select * from public.record_rate_limit_attempt(repeat('a', 64), 60, 2);
+select is((select request_count from rl5), 3, 'rate limit (L10): counter stops at limit + 1 (5th attempt still reports 3)');
+select is((select allowed from rl5), false, 'rate limit (L10): attempts past the limit stay refused');
+select is((select request_count from public.rate_limit_buckets where key_hash = repeat('a', 64) and window_seconds = 60), 3, 'rate limit (L10): stored counter is clamped at limit + 1');
+select is((select max(rc)::int from (select (public.record_rate_limit_attempt(repeat('c', 64), 60, 5)).request_count as rc from generate_series(1, 5)) s), 5, 'rate limit (L10): five attempts at limit 5 all counted');
+select is((select request_count from public.record_rate_limit_attempt(repeat('c', 64), 60, 1)), 5, 'rate limit (L10): a lowered limit never rewinds the counter');
 select is((select request_count from public.record_rate_limit_attempt(repeat('b', 64), 60, 2)), 1, 'rate limit: a different key has its own counter');
 select is((select request_count from public.record_rate_limit_attempt(repeat('a', 64), 600, 2)), 1, 'rate limit: a different window size has its own counter');
 select throws_ok($q$select * from public.record_rate_limit_attempt('203.0.113.7', 60, 2)$q$, '22023', null, 'rate limit: a plain IP is rejected (hex digest required)');

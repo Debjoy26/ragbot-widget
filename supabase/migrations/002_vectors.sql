@@ -20,7 +20,9 @@ create index document_chunks_embedding_hnsw_idx
 --
 -- Bounded k: p_match_count must be 1..50; anything else is REJECTED (not clamped).
 -- Filters (all mandatory, none caller-controlled): bot, document.active_version_id = chunk's
--- version, version status 'ready', document not deleted, disclosure_policy = 'public_answer'.
+-- version, version status 'ready', version embedding_model = the bot's embedding_model (chunks
+-- embedded with another model are never compared with the query vector), document not deleted,
+-- disclosure_policy = 'public_answer'.
 -- Iterative scan keeps the filtered HNSW search from returning fewer rows than exist.
 -- ---------------------------------------------------------------------------
 create function public.match_document_chunks(
@@ -75,7 +77,9 @@ begin
   from public.document_chunks c
   join public.document_versions v on v.id = c.document_version_id
   join public.documents d on d.id = v.document_id
+  join public.bot_profiles b on b.id = d.bot_id
   where d.bot_id = p_bot_id
+    and v.embedding_model = b.embedding_model
     and d.active_version_id = c.document_version_id
     and v.status = 'ready'
     and d.deleted_at is null
@@ -94,3 +98,33 @@ revoke all on function public.match_document_chunks(uuid, extensions.vector, int
   from public, anon, authenticated;
 grant execute on function public.match_document_chunks(uuid, extensions.vector, integer, double precision)
   to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Embedding model / dimension are immutable while the bot has chunks (handover §4.9):
+-- changing them is an explicit reindex (delete the chunks / documents first, then change).
+-- SQLSTATE RB012 embedding_change_requires_reindex.
+-- ---------------------------------------------------------------------------
+create function public.bot_profiles_guard_embedding_change()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if (new.embedding_model is distinct from old.embedding_model
+      or new.embedding_dimensions is distinct from old.embedding_dimensions)
+     and exists (
+       select 1
+         from public.documents d
+         join public.document_versions v on v.document_id = d.id
+         join public.document_chunks c on c.document_version_id = v.id
+        where d.bot_id = old.id
+     ) then
+    raise exception 'bot_profiles: embedding model change requires reindex' using errcode = 'RB012';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.bot_profiles_guard_embedding_change() from public, anon, authenticated;
+create trigger bot_profiles_guard_embedding_change
+  before update of embedding_model, embedding_dimensions on public.bot_profiles
+  for each row execute function public.bot_profiles_guard_embedding_change();
