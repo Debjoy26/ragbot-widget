@@ -45,10 +45,12 @@ ragbot_widget/
 │   │   ├── 004_jobs_limits_budgets.sql
 │   │   └── 005_retention.sql
 │   └── seed.sql
+├── database/                # FDE entry point: symlinks to supabase/ SQL, runbook
 ├── clients/client-a/deployment.example.json
 ├── scripts/{deploy-client,smoke-test}.mjs
 ├── tests/{unit,integration,evaluation,e2e}/
 ├── docs/
+├── Makefile                 # make help: install, create local or client database
 ├── package.json
 ├── package-lock.json
 ├── render.yaml
@@ -88,8 +90,43 @@ Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never 
 AI roles are provider-agnostic (ADR 0014): `<ROLE>_PROVIDER` (`gemini` | `openai` | `anthropic` | `openai_compatible`), `<ROLE>_MODEL`, optional `<ROLE>_API_KEY` (else `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), and `<ROLE>_BASE_URL` for `openai_compatible`. Missing values fail closed. Changing the embedding model requires a full reindex. See `api/.env.example` and `worker/.env.example`.
 Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.
 
+## FDE: set up a client database
+Run these from the repository root. You need Node from `.nvmrc`, plus Docker for the local steps. `make help` lists every command.
+
+```bash
+nvm use
+make install
+npx supabase login                     # once per machine
+```
+
+1. Create an empty Supabase project for the client and copy its 20-letter project ref.
+2. Preview the change. Check that the target name in the output is the right client:
+
+   ```bash
+   make db-plan PROJECT_REF=<ref>
+   ```
+
+3. Apply the schema. The CLI asks you to confirm, and the change is immediate:
+
+   ```bash
+   make db-create PROJECT_REF=<ref>
+   ```
+
+4. Check the result:
+
+   ```bash
+   make db-status PROJECT_REF=<ref>
+   make db-advisors PROJECT_REF=<ref>
+   ```
+
+5. Finish the manual steps in [`database/README.md`](database/README.md): enable TOTP, create the first admin, and add the client's bot and settings rows.
+
+To recreate a local database instead, run `make db-start`, then `make db-local`. This wipes local data.
+
+**Publishable key:** copy it from the client's Supabase project into the widget `<script>` tag on the client's website (`data-supabase-publishable-key`, see `UI_SCHEMA.md`). It is public and is not stored in this repository. Never put the secret key there.
+
 ## Deployment order per client
-1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket.
+1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref>`, see `database/README.md`).
 2. Provision the first admin and active membership through trusted operator tooling; configure Auth site/redirect URLs for the admin domain and require MFA for privileged operations.
 3. Test grants/RLS as anon, nonmember, analyst, admin, and privileged backend.
 4. Deploy Render API and worker from the repository root using their workspace build/start commands. Provision secrets separately for each client and configure the queue and retention settings.

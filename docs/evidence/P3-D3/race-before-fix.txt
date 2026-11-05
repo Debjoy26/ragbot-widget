@@ -1,0 +1,9 @@
+  second: exit 0 
+  first:  exit 0
+reply in flight, question moved => VIOLATION
+  second: exit 0 
+  first:  exit 0
+reply in flight, role changed => VIOLATION
+  second: exit 0 
+  first:  exit 0
+question move in flight, reply => VIOLATION

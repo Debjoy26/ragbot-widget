@@ -106,7 +106,7 @@ select lives_ok(format('select public.release_budget_reservation(%L, %L)', 'b100
 select throws_ok(format('select public.release_budget_reservation(%L, %L)', 'b1000000-0000-4000-8000-0000000000f1', (select id from res5)), 'RB003', null, 'N7b: releasing twice is rejected');
 
 -- ===========================================================================
--- N2: expire_stuck_request_runs frees stuck runs and releases their reservations
+-- N2: expire_stuck_request_runs frees stuck runs and expires their reservations (006; settle coverage in 180)
 -- ===========================================================================
 create temp table x1 as select * from public.begin_request_run('b4000000-0000-4000-8000-0000000000f4', 'a4000000-0000-4000-8000-0000000000f4', 1, '00000000-0000-4000-8000-0000000000a1', repeat('a', 64));
 select is((select outcome from x1), 'new', 'N2 setup: first run starts');
@@ -124,7 +124,7 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is(public.expire_stuck_request_runs(3600, 100), 1, 'N2: a run older than the threshold is failed');
 select is((select state from public.request_runs where id = (select run_id from x1)), 'failed', 'N2: the stuck run is failed');
 select isnt((select finished_at from public.request_runs where id = (select run_id from x1)), null, 'N2: finished_at is set');
-select is((select state from public.budget_reservations where id = (select id from xres)), 'released', 'N2: the stuck run''s active reservation is released');
+select is((select state from public.budget_reservations where id = (select id from xres)), 'expired', 'N2: the stuck run''s active reservation is expired (P3-D3 R3-1: stays settleable)');
 select is((select outcome from public.begin_request_run('b4000000-0000-4000-8000-0000000000f4', 'a4000000-0000-4000-8000-0000000000f4', 1, '00000000-0000-4000-8000-0000000000a2', repeat('b', 64))), 'new', 'N2: the slot is free again, begin_request_run returns new');
 select is(public.expire_stuck_request_runs(3600, 100), 0, 'N2: idempotent, a second sweep fails nothing more (the new run is recent)');
 
@@ -212,7 +212,7 @@ select throws_ok($q$insert into public.messages (conversation_id, reply_to_messa
 select throws_ok($q$insert into public.messages (conversation_id, reply_to_message_id, role, content) values ('c1000000-0000-4000-8000-0000000000c1', 'e1000000-0000-4000-8000-0000000000a1', 'user', 'x')$q$, '23514', null, 'N3: a user message cannot carry reply_to_message_id (CHECK)');
 select throws_ok($q$insert into public.messages (conversation_id, reply_to_message_id, role, content) values ('c1000000-0000-4000-8000-0000000000c1', 'e1000000-0000-4000-8000-0000000000a1', 'system', 'x')$q$, '23514', null, 'N3: a system message cannot carry reply_to_message_id (CHECK)');
 select throws_ok($q$insert into public.messages (id, conversation_id, reply_to_message_id, role, content) values ('e1000000-0000-4000-8000-0000000000b9', 'c1000000-0000-4000-8000-0000000000c1', 'e1000000-0000-4000-8000-0000000000b9', 'assistant', 'x')$q$, '23514', null, 'N3: a message cannot reply to itself');
-select throws_ok($q$insert into public.messages (conversation_id, reply_to_message_id, role, content) values ('c1000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-00000000dead', 'assistant', 'x')$q$, '23503', null, 'N3: a nonexistent target is rejected by the foreign key');
+select throws_ok($q$insert into public.messages (conversation_id, reply_to_message_id, role, content) values ('c1000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-00000000dead', 'assistant', 'x')$q$, '23514', null, 'N3: a nonexistent target is rejected (P3-D3 R3-2: by the trigger, before the foreign key)');
 select throws_ok($q$update public.messages set reply_to_message_id = 'e1000000-0000-4000-8000-0000000000a5' where id = 'e1000000-0000-4000-8000-0000000000b1'$q$, '23514', null, 'N3: UPDATE re-pointing to a non-user message is rejected');
 select throws_ok($q$update public.messages set conversation_id = 'c2000000-0000-4000-8000-0000000000c2' where id = 'e1000000-0000-4000-8000-0000000000b1'$q$, '23514', null, 'N3: UPDATE moving the answer to another conversation is rejected');
 select throws_ok($q$update public.messages set conversation_id = 'c2000000-0000-4000-8000-0000000000c2' where id = 'e1000000-0000-4000-8000-0000000000a1'$q$, '23514', null, 'N3: moving a question that has answers to another conversation is rejected');

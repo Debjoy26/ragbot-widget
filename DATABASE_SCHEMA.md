@@ -86,9 +86,9 @@ Ambiguous cells above are resolved fail-closed:
 - **MFA in the database (ADR 0015):** every authenticated private read (documents, versions, conversations, messages, sources, analysis, data entries, audit logs) and the three aggregate RPCs require `is_active_member_mfa(roles)` = active membership **and** JWT `aal = 'aal2'`. `is_active_member(roles)` stays as a role probe only.
 - **Embedding guard:** `activate_document_version` requires the version's `embedding_model` to equal the bot's (RB011); `match_document_chunks` only returns chunks whose version model equals the bot's; changing `bot_profiles.embedding_model`/`embedding_dimensions` while chunks exist raises **RB012** (reindex required).
 - **Data entries (ADR 0016):** deleted with their conversation (cascade); orphans purged by `purge_expired_data_entries(batch)` after `retention_policy.conversation_days`.
-- **Request start:** `begin_request_run(bot, session, idempotency_key, request_hash)` (service-only) locks the session row and returns `new | duplicate | hash_mismatch | concurrency_limited`; cap from `client_settings.rate_policy.concurrent_requests_per_session` (missing → RB002); invalid/expired/revoked session → RB004. `idempotency_key` must be a lowercase UUID; `request_hash` 64 lowercase hex.
+- **Request start:** `begin_request_run(bot, session, token_version, idempotency_key, request_hash)` (service-only) locks the session row and returns `new | duplicate | hash_mismatch | concurrency_limited`; cap from `client_settings.rate_policy.concurrent_requests_per_session` (missing → RB002); invalid/expired/revoked session → RB004. `idempotency_key` must be a lowercase UUID; `request_hash` 64 lowercase hex.
 - **Jobs:** `complete_job`, `fail_job` (dead-letters at `max_attempts`, error truncated to 1000 chars), `heartbeat_job` require `state = 'running'` and `locked_by = worker`, else **RB013**.
-- **Budget:** `settle_budget_reservation(bot_id, reservation_id, actual_amount)` locks the bot's settings row and rejects foreign/expired/non-reserved reservations (RB003).
+- **Budget:** `settle_budget_reservation(bot_id, reservation_id, actual_amount)` locks the bot's settings row. It accepts `reserved` or `expired` reservations and rejects foreign, `settled` or `released` ones (RB003).
 - **Audit logs:** append-only — service role has SELECT/INSERT only, and a trigger rejects UPDATE/DELETE (42501), except the FK set-null when an auth user is deleted.
 - **Public config:** `public_bot_config.is_published` is derived from `bot_profiles.enabled` by triggers; anon/authenticated only see published rows.
 - **Retention/caches:** `expire_visitor_sessions(batch, grace_seconds 1..86400)` (grace required); `purge_expired_caches` also drops `answer_cache` rows from older corpus/settings versions.
@@ -99,10 +99,14 @@ Ambiguous cells above are resolved fail-closed:
 - `begin_request_run(bot_id, visitor_session_id, token_version, idempotency_key, request_hash)` — token version must match the locked session row (RB004).
 - `settle_budget_reservation` accepts `reserved` (even past `expires_at`) or `expired`, so real spend from slow requests always counts toward the cap; `settled`/`released`/foreign → RB003. A late settle counts toward the UTC day the reservation was created.
 - `release_budget_reservation(bot_id, reservation_id)` — ownership check and settings-row lock (RB002/RB003).
-- `expire_stuck_request_runs(older_than_seconds 60..86400, batch 1..10000)` (service-only) fails stuck `reserved`/`running` runs and releases their reservations; the worker cleanup job must schedule it alongside `expire_visitor_sessions` and `purge_expired_data_entries`.
+- `expire_stuck_request_runs(older_than_seconds 60..86400, batch 1..10000)` (service-only) fails stuck `reserved`/`running` runs and expires their reservations (006); the worker cleanup job must schedule it alongside `expire_visitor_sessions` and `purge_expired_data_entries`.
 - `messages.reply_to_message_id` (assistant rows only; must reference a `user` message in the same conversation, enforced by trigger, 23514). The API sets it on every assistant insert. `knowledge_gaps` pairs by `reply_to_message_id`, then `request_id`, then latest prior user message; hiding `blocked` from analysts is UX-only (analysts can read messages directly).
 - `audit_logs` also rejects TRUNCATE (statement trigger). `is_active_member` is executable by `authenticated` only.
 - Retention purges fail closed for **all** bots if any bot lacks retention config (design choice; one bot per client project in practice).
+
+### Fixes from review P3-R3 (debug cycle P3-D3, migration 006, 2026-11-05)
+- `expire_stuck_request_runs` sets reservations to `expired`, not `released`. A reaped request that is still running can settle, so its real spend counts toward the cap. Until it settles, it holds no budget. The worker's threshold must exceed the longest possible request.
+- `messages_check_reply_to` locks the target row (`FOR SHARE`), so a concurrent move or role change of the question cannot break the pairing. A missing target, or one the writer cannot see, is rejected with 23514. A writer needs `UPDATE` on `messages` for the lock.
 
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.

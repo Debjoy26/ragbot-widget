@@ -1,7 +1,7 @@
 # Handover — ragbot_widget
 
 > For the engineer (or agent) picking up this project. Read this first, then `status.md` for current progress and `plan.md` for the build order.
-> Last updated: 2026-11-04.
+> Last updated: 2026-11-05.
 
 ---
 
@@ -11,9 +11,11 @@ An embeddable, client-branded, retrieval-augmented (RAG) chatbot that a client i
 This repo also owns the **shared backend** — Render API, Render worker, and the Supabase schema — used by both this widget and the separate `ragbot_adminpanel` repo. The admin panel is a second frontend, **not** a second backend.
 
 ## 2. Current state (honest summary)
-- **Committed on `origin/main`:** planning docs, P0 decision records (ADRs 0001–0013, `5e416b6`) and the P1 monorepo scaffold (`f848fb3`). CI run 41698369772 for `f848fb3` completed with success. P1 acceptance criteria met; owner acceptance pending (not ✅).
-- **Branch `phase/p2-p3` at `6b24002`:** P2 shared contracts and P3 database migrations, with debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`). Final gates pass locally: unit 157 passed; pgTAP 17 files, 1465 passed; `db lint` clean; all npm gates exit 0. P2 and P3 acceptance criteria met; owner acceptance pending. CI for the merged commit: pending (to be confirmed after push). P3-D2 was not separately security-reviewed. **The P23-DOC2 packet does not state the commit state of ADR 0014** (it was uncommitted at the last check). Nothing is accepted by the owner yet. Logs: `docs/evidence/P1/`, `docs/evidence/P2-P3/`.
-- **No API routes, widget behaviour or provider adapters yet.** P2 contracts and P3 migrations exist on branch `phase/p2-p3`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
+- **Committed on `origin/main`:** planning docs, P0 decision records (ADRs 0001–0013, `5e416b6`), the P1 monorepo scaffold (`f848fb3`; ADR 0014 in the same commit), ADRs 0015–0016 (`65cc738`). CI run 41698369772 for `f848fb3` completed with success. P1 acceptance criteria met; owner acceptance pending (not ✅).
+- **On `main` (origin/main `19438c5`; code `6b24002`):** P2 shared contracts and P3 database migrations, with debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`). Final gates pass locally: unit 157 passed; pgTAP 17 files, 1465 passed; `db lint` clean; all npm gates exit 0. P2 and P3 acceptance criteria met; owner acceptance pending. Security review P3-R3 (static, 2026-11-05) done; open findings §5 aj–ap. CI for the P2/P3 commits: not checked. P1, P2 and P3 are not accepted by the owner yet. Logs: `docs/evidence/P1/`, `docs/evidence/P2-P3/`, `docs/evidence/P3-R3/`.
+- **Remote dev project (2026-11-05, owner-approved):** migrations 001–005 applied to `rbejeqwxyxtklehuzibv` via `supabase db push --remote`; `seed.sql` not applied. Remote: 22 tables, RLS on all, 0 rows. Migrations 001–005 must not be edited; schema changes go in new migrations. Details: `status.md §2`, `docs/evidence/P3-R3/SUMMARY.md`.
+- **Local, uncommitted (2026-11-05, P3-D3):** migration `supabase/migrations/006_reaper_settle_reply_lock.sql` (fixes R3-1, R3-2) and pgTAP 180; not applied to the remote. Also a `Makefile` and `database/` (symlinks into `supabase/`; the single migration history stays in `supabase/migrations`). Evidence: `docs/evidence/P3-D3/SUMMARY.md`.
+- **No API routes, widget behaviour or provider adapters yet.** P2 contracts and P3 migrations are on `main`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
 - **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
 
@@ -64,7 +66,7 @@ Break any of these and you've introduced a security or correctness bug:
 16. **Single migration history** in `supabase/migrations` here; admin repo must not add competing migrations.
 
 ## 5. Decisions (P0) — approved 2026-11-03
-All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0014; D8 and D9 share 0009). ADR 0014 (2026-11-04) revises the provider and model parts of D1–D3 (ADRs 0002–0004); the 1536 dimension is kept. Do not re-decide these without a new ADR. Index and states: `status.md §3`.
+All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0016; D8 and D9 share 0009). ADR 0014 (2026-11-04) revises the provider and model parts of D1–D3 (ADRs 0002–0004); the 1536 dimension is kept. Do not re-decide these without a new ADR. Index and states: `status.md §3`.
 
 Remaining open items (not done):
 - **a)** Production daily budget cap per client: not set; fails closed (ADR 0007).
@@ -73,7 +75,7 @@ Remaining open items (not done):
 - **d)** ~~Supabase CLI install~~ done 2026-11-04: CLI 3.0.0 pinned as devDependency.
 - **e)** Non-Anthropic provider details (OpenAI, Voyage, Cloudflare) not verified (ADRs 0002, 0003, 0004, 0010).
 - **f)** ~~Spec edits~~ done 2026-11-03: UI_SCHEMA §3/§7, ARCHITECTURE §3 (item 7), TECH_SPECS §2 (item 10).
-- **g)** ~~Nothing committed~~ P0 committed as `5e416b6`. P1 files are uncommitted.
+- **g)** ~~Nothing committed~~ P0 committed as `5e416b6`. P1 committed as `f848fb3`.
 - **h)** ~~Docker not installed~~ Resolved 2026-11-04: Docker installed by owner; local stack verified (§2).
 - **i)** No secret scanner in CI yet (proposed for P10).
 - **j)** GitHub Actions pinned by major tag, not commit SHA.
@@ -101,7 +103,18 @@ Remaining open items (not done):
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
 - **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P9), management API, audit redaction, signed URLs. Documented for P5/P9.
-- **ai)** P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.
+- **ai)** ~~P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.~~ Resolved by P3-R3 (2026-11-05, static review; findings aj–am).
+- **aj)** ~~R3-1 (Medium, confirmed, reproduced locally): `expire_stuck_request_runs` sets reservations to `released`, so a slow request's settle fails RB003 and real spend is not counted toward the cap. Fix proposed (new migration: reaper sets `expired`; pgTAP case for reap then settle), not implemented. Needs an owner-approved debug cycle.~~ Fixed locally in P3-D3 (migration 006, uncommitted); not applied to the remote.
+- **ak)** ~~R3-2 (Low, confirmed by code read; race not exercised): `messages_check_reply_to` takes no lock and skips its check if the target is not visible. Needs a writer that does not exist today. Fix proposed, not implemented.~~ Fixed locally in P3-D3 (migration 006, uncommitted); not applied to the remote. Row lock used instead of the reviewer's composite foreign key; race tested with two connections.
+- **al)** ~~R3-3 (doc): `DATABASE_SCHEMA.md` Budget line contradicts the later settle line, and Request start still shows the old 4-argument `begin_request_run`. Not edited yet.~~ Done in P3-D3.
+- **am)** API obligations from P3-R3 for P5: a late settle can exceed the cap, by design; it counts toward the UTC day the reservation was created; settle is not idempotent; the API must update `request_runs` only conditionally (`WHERE state IN ('reserved','running')`), because no state-transition guard exists (reviewer note, not verified); the worker reaper threshold must exceed the maximum request duration.
+- **an)** Remote advisors after apply (2026-11-05): 5 WARN and 13 INFO security, 34 INFO unused indexes, 1 INFO unindexed FK. `request_runs_session_fk` is a false positive (tested; see evidence). Proposed extra index not added (Opus recommendation; owner has not decided). Admin panel read needs for `admin_memberships`, `bot_profiles`, `client_settings` to be confirmed by P9.
+- **ao)** Remote Auth TOTP setting not checked. Related to item ad.
+- **ap)** Reviewer notes not verified: R3-4, R3-6 to R3-9, and the listed test gaps. See `docs/evidence/P3-R3/SUMMARY.md`.
+- **aq)** Migration 006 is not applied to the remote dev project, so the remote still has the R3-1 and R3-2 behaviour. Applying it needs owner approval: `make db-create PROJECT_REF=<ref>` or `supabase db push --remote=<ref>`.
+- **ar)** P3-D3 has not been security-reviewed. Verified by tests, a two-connection race script and an Opus code read.
+- **as)** The race script `docs/evidence/P3-D3/race_reply_to.sh` is manual and not in `make db-test` or CI. A writer now needs UPDATE on `messages` for the reply lock.
+- **at)** Makefile not fully exercised: `install`, `db-create`, `db-start`, `db-stop`, `db-advisors` not run, and a project this machine is not linked to has not been tried. Try `db-create` once on a throwaway project before an FDE relies on it.
 
 ## 6. Inconsistencies / gaps found in the docs
 Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** items 1, 2 (embed attribute is now `data-bot-slug`), 3, 5, 6, 8, 9. **Decided 2026-11-03:** item 4 (ADR 0011; UI_SCHEMA §3 updated). **Resolved 2026-11-03 (P0 close):** 7, 10. **Still open:** none.
@@ -121,7 +134,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. P1 is committed (`f848fb3`) with CI green, awaiting owner acceptance. P2 and P3 are on `phase/p2-p3` at `6b24002`, with debug cycles P3-D1 and P3-D2 done, awaiting owner acceptance. Owner confirms ADR 0016 (§5 ag). P4 only on owner go-ahead; it must address the API obligations in §5 ae.
+4. P1 is committed (`f848fb3`) with CI green, awaiting owner acceptance. P2 and P3 are on `main` (origin/main `19438c5`, code `6b24002`), with debug cycles P3-D1 and P3-D2 done and review P3-R3 open (§5 aj–ap), awaiting owner acceptance. P3-D3 done locally, uncommitted (migration 006, not on remote). Owner decides whether to apply 006 to the remote (§5 aq), whether to commit, and whether to security-review P3-D3 (§5 ar). Owner confirms ADR 0016 (§5 ag). P4 only on owner go-ahead; it must address the API obligations in §5 ae and am.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
@@ -149,3 +162,5 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-04 | Owner / Opus (correction) | P2 (on owner go-ahead) | Correction P1-DOC4: §5 s withdrawn (CLI accepts `001_…` names, verified by a probe migration since removed; only `.gitkeep` skipped). Plan/README unchanged. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Owner / Opus | P4 (on owner go-ahead) | P1 committed and pushed (`f848fb3`); CI run 41698369772 green; awaiting owner acceptance. P2 and P3 implemented and verified locally, uncommitted. Security review P3-R1: M1–M5 and L1 open (§5 u–y). Owner decisions D-a, D-b, D-c pending (§5 ab). Nothing accepted. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Owner / Opus | P4 (on owner go-ahead) | Debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`) done. ADR 0015 (MFA aal2) accepted; ADR 0016 (`data_entries` cascade) accepted, owner confirmation open. Final gates on `phase/p2-p3` @ `6b24002`: unit 157; pgTAP 1465; `db lint` clean. P1, P2 and P3 acceptance criteria met, owner acceptance pending. CI for the merged commit pending. Docs updated by `haiku-docs`. |
+| 2026-11-05 | Owner / Opus | P3 owner acceptance; debug-cycle decision (§5 aj, ak) and `006` index decision (§5 an) | Remote apply (owner-approved): migrations 001–005 applied to dev project `rbejeqwxyxtklehuzibv` via `supabase db push --remote`; `seed.sql` not applied; 22 tables, RLS on all, 0 rows. Security review P3-R3 (static): aj–am open, ai resolved. Branch `phase/p2-p3` no longer exists; P2/P3 on `main` at `19438c5` (code `6b24002`). CI for P2/P3 commits not checked. P1, P2 and P3 not accepted. Evidence: `docs/evidence/P3-R3/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC3). |
+| 2026-11-05 | Opus (P3-D3) | Owner (P3 acceptance; 006 remote apply, §5 aq; commit; §5 ar) | P3-D3 (owner-approved; Opus implemented): migration 006 fixes R3-1 and R3-2; R3-3 doc fixes; pgTAP 18 files, 1485 passed; unit 157; `db lint` clean; npm gates exit 0. Local and uncommitted; 006 not applied to remote; not security-reviewed (§5 ar). Makefile and `database/` added (uncommitted). P1, P2 and P3 not accepted. Evidence: `docs/evidence/P3-D3/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC4). |

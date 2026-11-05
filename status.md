@@ -1,8 +1,8 @@
 # Status — ragbot_widget
 
-> Last updated: **2026-11-04**
-> Overall: **🟡 P1, P2 and P3 acceptance criteria met; owner acceptance pending. P0 ✅. Debug cycles P3-D1 and P3-D2 done. CI for the merged commit pending**
-> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0014; ADR 0014 revises the provider parts of D1–D3).
+> Last updated: **2026-11-05**
+> Overall: **🟡 P1, P2 and P3 acceptance criteria met; owner acceptance pending. P0 ✅. Debug cycles P3-D1 and P3-D2 done. Security review P3-R3 done. P3-D3 done locally, uncommitted (R3-1, R3-2, R3-3); 006 not on remote; owner acceptance still pending. Migrations 001–005 applied to remote dev project 2026-11-05. CI for P2/P3 commits not checked**
+> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0016; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
@@ -14,8 +14,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|
 | P0 | Decisions & prerequisites | ✅ | D1–D14 approved and phase accepted by owner 2026-11-03 (ADRs 0001–0013). Open items carried forward: §3a |
 | P1 | Monorepo scaffold & tooling | 🟡 | Acceptance criteria met; owner acceptance pending (not ✅). Committed and pushed as `f848fb3`. CI run 41698369772 completed/success. Local gates: `docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`. Integration and E2E: no tests yet. Open: §3a i–r |
-| P2 | Shared contracts | 🟡 | Acceptance criteria met (schema unit tests incl. negatives; browser-safe build); owner acceptance pending. Branch `phase/p2-p3` @ `6b24002`. Contract changes: `EmbeddingProvider.embed` returns `{vectors, inputTokens}`; `ModerationResult` has usage; `temperature` removed from `ChatStreamRequest`. Final gates: unit 157 passed, 0 failed, 0 skipped; all npm gates exit 0. Open: §3a t, af |
-| P3 | Database & storage migrations | 🟡 | Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9); owner acceptance pending. Branch `phase/p2-p3` @ `6b24002`. Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`). Final pgTAP: 17 files, 1465 passed, 0 failed; `db lint` clean. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Remote dev project untouched; migrations not applied remotely. D1 validation check pending (§3a c). Open: §3a ac–ai |
+| P2 | Shared contracts | 🟡 | Acceptance criteria met (schema unit tests incl. negatives; browser-safe build); owner acceptance pending. On `main` @ `19438c5` (code `6b24002`). Contract changes: `EmbeddingProvider.embed` returns `{vectors, inputTokens}`; `ModerationResult` has usage; `temperature` removed from `ChatStreamRequest`. Final gates: unit 157 passed, 0 failed, 0 skipped; all npm gates exit 0. Open: §3a t, af |
+| P3 | Database & storage migrations | 🟡 | Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9); owner acceptance pending. On `main` @ `19438c5` (code `6b24002`). Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`) → P3-R3 (2026-11-05, static; open items §3a aj–ap) → P3-D3 (2026-11-05, local, uncommitted; R3-1, R3-2, R3-3 fixed; migration 006; not on remote). Final pgTAP on `6b24002`: 17 files, 1465 passed, 0 failed; `db lint` clean. Current local gates (uncommitted, on `19438c5` plus changes): pgTAP 18 files, 1485 passed, 0 failed; unit 157 passed; `db lint` clean; lint, format:check, typecheck, build exit 0. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Migrations 001–005 applied to remote dev project 2026-11-05 (§2). D1 validation check pending (§3a c). Open: §3a ac–at (ai resolved by P3-R3) |
 | P4 | API foundation | ⬜ | |
 | P5 | Visitor sessions & abuse controls | ⬜ | Limits (ADR 0007) and Turnstile (ADR 0010) decided; production daily cap open, fails closed (§3a a) |
 | P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007) |
@@ -42,11 +42,15 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] Local Supabase stack verified 2026-11-04: Docker installed by owner (docker.io 28.5.2, service active, user in `docker` group). `npx supabase start` exit 0 (12 containers up: 10 report healthy; `edge_runtime` and `rest` have no healthcheck). `npx supabase db reset` exit 0 (no migrations, no `seed.sql`). Local PostgreSQL 17.11, pgvector 0.8.2 available. Remote dev project (read-only MCP `SELECT` and `list_migrations`) also shows PostgreSQL 17.11, vector 0.8.2 available, 0 public tables, 0 migrations. Logs, keys redacted: `docs/evidence/P1/supabase-2026-11-04/`
 - [x] Real Gemini calls, owner-directed, no client data (2026-11-04): model list (200) and two `embedContent` calls on the word "hello" with `outputDimensionality` 1536 (200, 1536 values each). Evidence: `docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`
 - [x] P1 CI green: run 41698369772 for `f848fb3` completed/success (read via `gh` 2.103.3, installed in `~/.local/bin`, checksum verified). Commits `5e416b6` (P0) and `f848fb3` (P1) pushed to `origin/main`
-- [x] P2 (shared contracts) and P3 (DB migrations, seed, pgTAP) implemented in parallel with sonnet workers (worktrees, base `f848fb3`), verified and integrated by Opus into the main checkout. Later committed on branch `phase/p2-p3` (see below). Logs (gitignored): `docs/evidence/P2-P3/`. Remote dev project untouched. `supabase test db` pulled the `pg_prove` Docker image over the network (CLI behaviour)
+- [x] P2 (shared contracts) and P3 (DB migrations, seed, pgTAP) implemented in parallel with sonnet workers (worktrees, base `f848fb3`), verified and integrated by Opus into the main checkout. Later committed to `main` (see below). Logs (gitignored): `docs/evidence/P2-P3/`. Remote dev project untouched. `supabase test db` pulled the `pg_prove` Docker image over the network (CLI behaviour)
 - [x] P3 debug cycles: P3-D1 (commit `65cc738`) fixed M1–M5, L1–L7, L9, L10, L13 and added census tests. Re-review P3-R2 found 14 of 15 P3-R1 items fixed, M4 partial, and new items N1–N9. P3-D2 (commit `6b24002`) fixed N1–N5 and N7, and completed M4 via N3 (durable reply pairing). Evidence: `docs/evidence/P2-P3/SUMMARY.md`
-- [x] Final gates on `phase/p2-p3` @ `6b24002`: unit 157 passed, 0 failed, 0 skipped; pgTAP 17 files, 1465 passed, 0 failed; `db lint` clean; all npm gates exit 0. CI now runs pgTAP (`npm run test:db` after `supabase db reset`). CI for the merged commit: pending (to be confirmed after push)
+- [x] Final gates on code `6b24002` (branch `phase/p2-p3`, since removed): unit 157 passed, 0 failed, 0 skipped; pgTAP 17 files, 1465 passed, 0 failed; `db lint` clean; all npm gates exit 0. CI now runs pgTAP (`npm run test:db` after `supabase db reset`). CI for the P2/P3 commits: not checked
 - [x] Decisions encoded: ADR 0015 (MFA aal2 enforced in the DB, accepted); ADR 0016 (`data_entries` deleted with their conversation, accepted; owner confirmation open, §3a ag)
 - [x] Cleanup: agent worktrees and their branches removed (`git worktree list` shows only the main checkout); temp logs removed; `.claude/worktrees/` is gitignored
+- [x] Remote apply 2026-11-05 (owner-approved): migrations 001–005 applied to remote dev project `rbejeqwxyxtklehuzibv` via `supabase db push --remote --yes`. `seed.sql` not applied. Remote: 22 tables, RLS on all, 0 rows, migration history 001–005. Policies, public function definitions and table grants match local by md5. Not compared: column-level grants and function execute grants in full. pgTAP not run against remote. Remote Auth TOTP not checked (§3a ao). This CLI version targets the local stack unless `--remote` is passed, so `db push` without it does not touch the remote. From now on 001–005 must not be edited; schema changes go in new migrations. Evidence: `docs/evidence/P3-R3/SUMMARY.md`
+- [x] Security review P3-R3 2026-11-05 (`security-reviewer`, static, `65cc738..6b24002`; Opus verified R3-1, R3-2, R3-3 and closed R3-5). Open findings §3a aj–ap. Not accepted by owner
+- [x] P3-D3 2026-11-05 (local, uncommitted, on `19438c5`; Opus implemented, no worker): migration `006_reaper_settle_reply_lock.sql` (R3-1 reaper sets `expired`; R3-2 row lock on the reply target, `SECURITY INVOKER`), pgTAP `180_p3d3_fixes.test.sql` (20 tests), two assertions changed in `170`, R3-3 `DATABASE_SCHEMA.md` fixes. Gates: `make db-local`, `db-test` (18 files, 1485 passed), `db-lint`, npm gates exit 0. Two-connection race script `docs/evidence/P3-D3/race_reply_to.sh` (manual): three orderings consistent after the fix. Not applied to the remote; not security-reviewed. Evidence: `docs/evidence/P3-D3/SUMMARY.md`
+- [x] Makefile, `database/` and FDE section in `README.md` (2026-11-05, uncommitted). `make` wraps local and remote DB commands with explicit `PROJECT_REF`. `database/` holds symlinks into `supabase/`; the single migration history stays in `supabase/migrations`. Tested: `db-local`, `db-test`, `db-lint`, `db-plan`, `db-status`, input guards. Not run: `install`, `db-create`, `db-start`, `db-stop`, `db-advisors`. Evidence: `docs/evidence/P3-D3/SUMMARY.md`
 
 ## 3. Open decisions (P0)
 
@@ -76,7 +80,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **d)** ~~Supabase CLI install~~ done 2026-11-04: CLI 3.0.0 pinned as devDependency (owner approved).
 - **e)** Non-Anthropic provider details (OpenAI, Voyage, Cloudflare) not verified in the P0 session (ADRs 0002, 0003, 0004, 0010).
 - **f)** ~~Spec edits~~ done 2026-11-03: UI_SCHEMA §3/§7, ARCHITECTURE §3 (item 7), TECH_SPECS §2 (item 10).
-- **g)** ~~Nothing committed~~ P0 committed as `5e416b6`. P1 files are uncommitted.
+- **g)** ~~Nothing committed~~ P0 committed as `5e416b6`. P1 committed as `f848fb3`.
 - **h)** ~~Docker not installed~~ Resolved 2026-11-04: Docker installed by owner; local stack verified (§2).
 - **i)** No secret scanner in CI yet (proposed for P10).
 - **j)** GitHub Actions pinned by major tag, not commit SHA.
@@ -104,7 +108,18 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
 - **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P9), management API, audit redaction, signed URLs. Documented for P5/P9.
-- **ai)** P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.
+- **ai)** ~~P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.~~ Resolved by P3-R3 (2026-11-05, static review; findings aj–am).
+- **aj)** ~~R3-1 (Medium, confirmed, reproduced locally): `expire_stuck_request_runs` sets reservations to `released`, so a slow request's settle fails RB003 and real spend is not counted toward the cap. Fix proposed (new migration: reaper sets `expired`; pgTAP case for reap then settle), not implemented. Needs an owner-approved debug cycle.~~ Fixed locally in P3-D3 (migration 006, uncommitted); not applied to the remote.
+- **ak)** ~~R3-2 (Low, confirmed by code read; race not exercised): `messages_check_reply_to` takes no lock and skips its check if the target is not visible. Needs a writer that does not exist today. Fix proposed, not implemented.~~ Fixed locally in P3-D3 (migration 006, uncommitted); not applied to the remote. Row lock used instead of the reviewer's composite foreign key; race tested with two connections.
+- **al)** ~~R3-3 (doc): `DATABASE_SCHEMA.md` Budget line contradicts the later settle line, and Request start still shows the old 4-argument `begin_request_run`. Not edited yet.~~ Done in P3-D3.
+- **am)** API obligations from P3-R3 for P5: a late settle can exceed the cap, by design; it counts toward the UTC day the reservation was created; settle is not idempotent; the API must update `request_runs` only conditionally (`WHERE state IN ('reserved','running')`), because no state-transition guard exists (reviewer note, not verified); the worker reaper threshold must exceed the maximum request duration.
+- **an)** Remote advisors after apply (2026-11-05): 5 WARN and 13 INFO security, 34 INFO unused indexes, 1 INFO unindexed FK. `request_runs_session_fk` is a false positive (tested; see evidence). Proposed extra index not added (Opus recommendation; owner has not decided). Admin panel read needs for `admin_memberships`, `bot_profiles`, `client_settings` to be confirmed by P9.
+- **ao)** Remote Auth TOTP setting not checked. Related to item ad.
+- **ap)** Reviewer notes not verified: R3-4, R3-6 to R3-9, and the listed test gaps. See `docs/evidence/P3-R3/SUMMARY.md`.
+- **aq)** Migration 006 is not applied to the remote dev project, so the remote still has the R3-1 and R3-2 behaviour. Applying it needs owner approval: `make db-create PROJECT_REF=<ref>` or `supabase db push --remote=<ref>`.
+- **ar)** P3-D3 has not been security-reviewed. Verified by tests, a two-connection race script and an Opus code read.
+- **as)** The race script `docs/evidence/P3-D3/race_reply_to.sh` is manual and not in `make db-test` or CI. A writer now needs UPDATE on `messages` for the reply lock.
+- **at)** Makefile not fully exercised: `install`, `db-create`, `db-start`, `db-stop`, `db-advisors` not run, and a project this machine is not linked to has not been tried. Try `db-create` once on a throwaway project before an FDE relies on it.
 
 ## 4. Doc fixes pending (from `handover.md §6`)
 - [x] Add `escalation_label` to `public_bot_config`
@@ -156,9 +171,9 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 ## 7. Next actions
 1. Owner accepts P1, P2 and P3 (acceptance criteria met, §1).
 2. Owner confirms ADR 0016 (`data_entries` retention) (§3a ag).
-3. CI for the merged commit: pending, to be confirmed after push.
+3. CI for the P2/P3 commits: not checked.
 4. Owner confirms paid-tier Gemini billing before any client data (§3a n), and decides whether to add a second provider key for independent fallback (§3a o). Owner provides the production daily cap and confirms jurisdiction per client (§3a a, b). Owner decides on the retrieval-quality check for embeddings (§3a c).
-5. Applying migrations to the remote dev project needs separate owner approval. Not done.
+5. Owner decides whether to apply 006 to the remote (aq), whether to commit, and whether to security-review P3-D3 (ar).
 6. P4 only on owner go-ahead. P4 must address the API obligations in §3a ae, and the race tests in §3a ac.
 
 ## 8. Change log
@@ -174,6 +189,8 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | 2026-11-04 | Correction (P1-DOC4): earlier finding §3a s (migration naming) withdrawn. The CLI accepts `001_…` names, verified with a probe migration (since removed); only `.gitkeep` is skipped. Container count corrected to 12 up, 10 healthy, `edge_runtime` and `rest` without healthcheck. Plan/README unchanged. |
 | 2026-11-04 | P1 committed and pushed (`f848fb3`); CI run 41698369772 green. P2 and P3 implemented and verified locally by sonnet workers and Opus (uncommitted). Security review P3-R1: M1–M5 and L1 open. Owner decisions D-a, D-b, D-c pending (§3a ab). P1 not accepted; P2 and P3 not accepted. Docs updated by `haiku-docs`. |
 | 2026-11-04 | Debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`) done. ADR 0015 (MFA aal2 in DB) accepted; ADR 0016 (`data_entries` cascade) accepted, owner confirmation open. Final gates on `phase/p2-p3` @ `6b24002`: unit 157; pgTAP 1465; `db lint` clean. Worktrees and temp logs cleaned up. P1, P2 and P3 acceptance criteria met, owner acceptance pending. CI for the merged commit pending. Evidence: `docs/evidence/P2-P3/SUMMARY.md`. Docs updated by `haiku-docs`. |
+| 2026-11-05 | Remote apply (owner-approved): migrations 001–005 applied to dev project `rbejeqwxyxtklehuzibv` via `supabase db push --remote`; `seed.sql` not applied; 22 tables, RLS on all, 0 rows. Security review P3-R3 (static): aj–am open, ai resolved; debug-cycle and `006` index decisions pending (§7). Branch `phase/p2-p3` no longer exists; P2/P3 on `main` at `19438c5` (code `6b24002`). CI for P2/P3 commits not checked. P1, P2 and P3 not accepted. Evidence: `docs/evidence/P3-R3/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC3). |
+| 2026-11-05 | P3-D3 (owner-approved; Opus implemented): migration 006 fixes R3-1 and R3-2; R3-3 doc fixes; pgTAP 18 files, 1485 passed; unit 157; `db lint` clean; npm gates exit 0. Local, uncommitted; 006 not applied to remote; not security-reviewed. Makefile and `database/` added (uncommitted). P1, P2 and P3 not accepted. Evidence: `docs/evidence/P3-D3/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC4). |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
@@ -183,3 +200,5 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - 2026-11-04 (Supabase local stack): no new agents spawned. The stack and MCP read-only checks were run by Opus.
 - 2026-11-04 (P2 ∥ P3, first spawns): `sonnet-implementer` ×2 (P2-T1 and P3-T1; configured `claude-sonnet-5-5`; worktree isolation; base `f848fb3`). `security-reviewer` ×1 (P3-R1; configured `claude-sonnet-5-5`; read-only). Actual model resolution is not observable. Self-reports are **unverified**.
 - 2026-11-04 (debug cycles P3-D1, P3-D2): `sonnet-implementer` ×2 more (P3-D1, P3-D2; configured `claude-sonnet-5-5`). P3-D1 first started from the wrong base, stopped correctly, and re-based. `security-reviewer` ×1 more (P3-R2). Self-reports are **unverified**. All results were verified by Opus reruns.
+- 2026-11-05 (P3-R3, P3-DOC3): `security-reviewer` ×1 more (P3-R3; configured `claude-sonnet-5-5`; read-only). `haiku-docs` ×1 more (P3-DOC3; configured `claude-haiku-5-5`). Actual model resolution is not observable. Self-reports are **unverified**. Opus verified R3-1, R3-2 and R3-3, and closed R3-5.
+- 2026-11-05 (P3-D3): no `sonnet-implementer` spawned; implemented by Opus. `haiku-docs` ×1 more (P3-DOC4; configured `claude-haiku-5-5`). Actual model resolution is not observable; self-reports are **unverified**.

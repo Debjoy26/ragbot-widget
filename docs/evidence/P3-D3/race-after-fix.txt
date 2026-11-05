@@ -1,0 +1,9 @@
+  first:  exit 0
+  second: exit 1 ERROR:  messages: a message that is the target of reply_to_message_id cannot change role o
+reply in flight, question moved => CONSISTENT
+  first:  exit 0
+  second: exit 1 ERROR:  messages: a message that is the target of reply_to_message_id cannot change role o
+reply in flight, role changed => CONSISTENT
+  first:  exit 0
+  second: exit 1 ERROR:  messages: reply_to_message_id must reference a user message of the same conversati
+question move in flight, reply => no reply row
