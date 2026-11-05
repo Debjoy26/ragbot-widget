@@ -1,0 +1,27 @@
+reply in flight, question moved                => no overlap, retrying once (86 ms)
+reply in flight, question moved                => CONSISTENT: 1 reply row(s) | first=ok second=err:23514 (96 ms) WARN no overlap
+reply in flight, question role changed         => no overlap, retrying once (92 ms)
+reply in flight, question role changed         => CONSISTENT: 1 reply row(s) | first=ok second=err:23514 (99 ms) WARN no overlap
+question move in flight, reply                 => no overlap, retrying once (93 ms)
+question move in flight, reply                 => CONSISTENT: 0 reply row(s) | first=ok second=err:23514 (93 ms) WARN no overlap
+pointer update in flight, target moved         => no overlap, retrying once (82 ms)
+pointer update in flight, target moved         => CONSISTENT: 1 reply row(s) | first=ok second=err:23514 (86 ms) WARN no overlap
+target move in flight, pointer update          => no overlap, retrying once (85 ms)
+target move in flight, pointer update          => CONSISTENT: 1 reply row(s) | first=ok second=err:23514 (88 ms) WARN no overlap
+reply in flight, target deleted                => no overlap, retrying once (93 ms)
+reply in flight, target deleted                => CONSISTENT: reply kept, detached | first=ok second=ok (93 ms) WARN no overlap
+target delete in flight, reply                 => no overlap, retrying once (108 ms)
+target delete in flight, reply                 => CONSISTENT: 0 reply row(s) | first=ok second=err:23514 (98 ms) WARN no overlap
+two concurrent replies to one target           => CONSISTENT: 2 reply rows | first=ok second=ok (102 ms)
+settle in flight, reaper                       => no overlap, retrying once (97 ms)
+settle in flight, reaper                       => CONSISTENT: run failed, reservation settled 0.75 | first=ok second=ok (101 ms) WARN no overlap
+reaper in flight, settle                       => no overlap, retrying once (105 ms)
+reaper in flight, settle                       => CONSISTENT: run failed, reservation settled 0.75 | first=ok second=ok (92 ms) WARN no overlap
+release in flight, reaper                      => no overlap, retrying once (110 ms)
+release in flight, reaper                      => CONSISTENT: run failed, reservation released | first=ok second=ok (94 ms) WARN no overlap
+reaper in flight, release                      => no overlap, retrying once (99 ms)
+reaper in flight, release                      => CONSISTENT: run failed, reservation expired | first=ok second=err:RB003 (95 ms) WARN no overlap
+reserve in flight, reaper                      => VIOLATION: reaper did not skip the run: run=failed reservation=expired | first=ok second=ok (111 ms)
+reaper in flight, reserve                      => no overlap, retrying once (91 ms)
+reaper in flight, reserve                      => CONSISTENT: run failed, reservation none | first=ok second=err:RB004 (93 ms) WARN no overlap
+race-db: 14 orderings, 1 problem(s), 12 warning(s)

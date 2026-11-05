@@ -72,7 +72,10 @@ insert into public.conversations (id, bot_id) values ('c1000000-0000-4000-8000-0
 insert into public.messages (id, conversation_id, role, content) values
   ('e1000000-0000-4000-8000-0000000000d3', 'c1000000-0000-4000-8000-0000000000d3', 'user', 'question');
 
-select ok((select prosrc ~* 'for\s+share' from pg_proc where oid = 'public.messages_check_reply_to()'::regprocedure), 'R3-2: the trigger locks the target row');
+-- Comments are stripped first, so the statement must be in the code, not only in a comment (matcher itself is tested in 190).
+select ok((select regexp_replace(regexp_replace(prosrc, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g')
+                  ~* 'from\s+public\.messages\s+m\s+where\s+m\.id\s*=\s*new\.reply_to_message_id\s+for\s+share'
+             from pg_proc where oid = 'public.messages_check_reply_to()'::regprocedure), 'R3-2: the trigger locks the target row');
 select ok((select not prosecdef from pg_proc where oid = 'public.messages_check_reply_to()'::regprocedure), 'R3-2: the trigger stays SECURITY INVOKER');
 
 set local role service_role;

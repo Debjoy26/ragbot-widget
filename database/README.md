@@ -44,13 +44,13 @@ make db-test     # optional: run the database tests
    make db-plan PROJECT_REF=<ref>
    ```
 
-3. Check that the target name in the output is the right client, then apply:
+3. Check the `Target project:` line that make prints before it does anything. It must show the right client's ref. Then apply, typing the ref twice:
 
    ```bash
-   make db-create PROJECT_REF=<ref>
+   make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>
    ```
 
-   The CLI asks you to confirm. Changes take effect immediately. The seed is not applied.
+   `CONFIRM_REF` must equal `PROJECT_REF`, or make stops before calling the CLI. The CLI then asks you to confirm. Changes take effect immediately. The seed is not applied.
 
 4. Check the result:
 
@@ -59,7 +59,17 @@ make db-test     # optional: run the database tests
    make db-advisors PROJECT_REF=<ref>
    ```
 
-If the CLI asks for the database password, set `SUPABASE_DB_PASSWORD` in your shell for that command. Never commit it or paste it into chat or tickets.
+`PROJECT_REF` and `CONFIRM_REF` must be written on the `make` command line. Values set with `export`, or picked up by `make -e`, are refused, so a stale value in your shell cannot select a project.
+
+If the CLI asks for the database password, set it for this shell without typing it into a command, then unset it afterwards:
+
+```bash
+read -s SUPABASE_DB_PASSWORD && export SUPABASE_DB_PASSWORD
+# ... run the make commands ...
+unset SUPABASE_DB_PASSWORD
+```
+
+Never put the password inline in a command, commit it, or paste it into chat or tickets.
 
 ## After creating a client database
 

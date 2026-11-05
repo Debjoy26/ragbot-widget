@@ -108,6 +108,14 @@ Ambiguous cells above are resolved fail-closed:
 - `expire_stuck_request_runs` sets reservations to `expired`, not `released`. A reaped request that is still running can settle, so its real spend counts toward the cap. Until it settles, it holds no budget. The worker's threshold must exceed the longest possible request.
 - `messages_check_reply_to` locks the target row (`FOR SHARE`), so a concurrent move or role change of the question cannot break the pairing. A missing target, or one the writer cannot see, is rejected with 23514. A writer needs `UPDATE` on `messages` for the lock.
 
+### Fixes from review P3-R4 (debug cycle P3-D4, migration 007, 2026-11-05)
+- `reserve_request_budget` reads the run `FOR SHARE`. The lock query includes the bot, so a foreign run is never locked. A new reservation needs a run in `reserved` or `running`, otherwise RB004. An idempotent retry still returns the existing reservation whatever the run state.
+- `request_runs.state` moves forward only (trigger, 23514): `reserved` to `running`, and `reserved` or `running` to `succeeded`, `failed` or `partial`. A terminal run never changes state through UPDATE. A no-op state update is allowed. The API still updates conditionally, because a blocked transition is an error, not 0 rows. This backstops API bugs. It is not a boundary against `service_role`, which can still DELETE or TRUNCATE.
+- The `audit_logs` TRUNCATE trigger stops TRUNCATE by any role, but a table owner can still drop or disable the trigger.
+- Lock order: `visitor_sessions` (`begin_request_run`), then `client_settings`, then `request_runs`, then `budget_reservations`. The reaper takes runs then reservations with `SKIP LOCKED` on runs and does not take the settings lock. The API must reserve in its own transaction and update the run only after that commits; updating the run first inverts the order and can deadlock (40P01).
+- Only `service_role`, `postgres` and the table owner may hold INSERT or UPDATE on `messages` (catalog test). The reply trigger depends on this: its first branch runs under the writer's RLS.
+- `knowledge_gaps` after a question is deleted: the reply pointer becomes null, so an answer with no `request_id` falls to rule 3 and pairs with the latest earlier question. No migration deletes single messages today. Pinned by test.
+
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.
 - Upload staging paths are authorised by a short-lived signed upload URL issued after backend validation, or equivalent tightly scoped policies.

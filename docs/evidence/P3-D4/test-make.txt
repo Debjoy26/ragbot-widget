@@ -1,0 +1,83 @@
+bash scripts/test-make-guards.sh
+ok   - check-ref injection payload 1 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 1 refused, no marker
+ok   - check-ref injection payload 2 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 2 refused, no marker
+ok   - check-ref injection payload 3 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 3 refused, no marker
+ok   - check-ref injection payload 4 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 4 refused, no marker
+ok   - check-ref injection payload 5 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 5 refused, no marker
+ok   - check-ref injection payload 6 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 6 refused, no marker
+ok   - check-ref injection payload 7 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 7 refused, no marker
+ok   - check-ref injection payload 8 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 8 refused, no marker
+ok   - check-ref injection payload 9 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 9 refused, no marker
+ok   - check-ref injection payload 10 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 10 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 1 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 2 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 3 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 4 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 5 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 6 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 7 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 8 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 9 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 10 refused, no marker
+ok   - exported hostile PROJECT_REF with make -e: refused, no marker
+ok   - check-ref refuses make function: $(shell touch /tmp/tmp.74fiavK3yX/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(shell touch /tmp/tmp.74fiavK3yX/marker)
+ok   - help refuses make function: $(shell touch /tmp/tmp.74fiavK3yX/marker)
+ok   - exported make function refused: $(shell touch /tmp/tmp.74fiavK3yX/marker)
+ok   - check-ref refuses make function: $(file >/tmp/tmp.74fiavK3yX/marker,x)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(file >/tmp/tmp.74fiavK3yX/marker,x)
+ok   - help refuses make function: $(file >/tmp/tmp.74fiavK3yX/marker,x)
+ok   - exported make function refused: $(file >/tmp/tmp.74fiavK3yX/marker,x)
+ok   - check-ref refuses make function: $(eval $(shell touch /tmp/tmp.74fiavK3yX/marker))
+ok   - check-confirm refuses make function in CONFIRM_REF: $(eval $(shell touch /tmp/tmp.74fiavK3yX/marker))
+ok   - help refuses make function: $(eval $(shell touch /tmp/tmp.74fiavK3yX/marker))
+ok   - exported make function refused: $(eval $(shell touch /tmp/tmp.74fiavK3yX/marker))
+ok   - check-ref refuses make function: $(call shell,touch /tmp/tmp.74fiavK3yX/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(call shell,touch /tmp/tmp.74fiavK3yX/marker)
+ok   - help refuses make function: $(call shell,touch /tmp/tmp.74fiavK3yX/marker)
+ok   - exported make function refused: $(call shell,touch /tmp/tmp.74fiavK3yX/marker)
+ok   - db-plan -i with a bad ref stops before the CLI
+ok   - db-status -i with a bad ref stops before the CLI
+ok   - db-advisors -i with a bad ref stops before the CLI
+ok   - db-create -i with a bad ref stops before the CLI
+ok   - db-create -i with a mismatched CONFIRM_REF stops before the CLI
+ok   - db-create -i without CONFIRM_REF stops before the CLI
+ok   - db-plan with a good ref reaches the stub
+ok   - db-create with matching refs reaches the stub
+ok   - exported PROJECT_REF refused
+ok   - make -e with exported PROJECT_REF refused
+ok   - check-confirm with exported PROJECT_REF refused
+ok   - exported CONFIRM_REF refused
+ok   - make -e with exported CONFIRM_REF refused
+ok   - check-ref: PROJECT_REF not set refused
+ok   - check-ref: empty PROJECT_REF refused
+ok   - check-ref: 19 letters refused
+ok   - check-ref: 21 letters refused
+ok   - check-ref: uppercase refused
+ok   - check-ref: one uppercase letter refused
+ok   - check-ref: digits refused
+ok   - check-ref: trailing newline refused
+ok   - check-ref: trailing space refused
+ok   - check-confirm: invalid CONFIRM_REF format refused
+ok   - check-confirm: CONFIRM_REF trailing newline refused
+ok   - check-confirm: invalid PROJECT_REF refused even when CONFIRM_REF equals it
+ok   - check-ref: valid 20-letter ref accepted, prints Target line
+ok   - check-confirm: missing CONFIRM_REF refused
+ok   - check-confirm: empty CONFIRM_REF refused
+ok   - check-confirm: mismatched CONFIRM_REF refused
+ok   - check-confirm: missing PROJECT_REF refused
+ok   - check-confirm: matching refs accepted when run alone
+ok   - Makefile has no bare $(PROJECT_REF) / $(CONFIRM_REF)
+ok   - Makefile uses no --yes / --include-seed outside comments
+
+passed: 80  failed: 0

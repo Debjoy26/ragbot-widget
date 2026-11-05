@@ -77,7 +77,7 @@ update public.request_runs set state = 'running' where id = (select run_id from 
 select is((select outcome from public.begin_request_run('b1000000-0000-4000-8000-0000000000a1', 'a1000000-0000-4000-8000-0000000000a1', 1, '00000000-0000-4000-8000-000000000003', repeat('d', 64))), 'concurrency_limited', 'begin_request_run: a running run still counts toward the cap');
 update public.request_runs set state = 'failed', finished_at = now() where id = (select run_id from n2);
 select is((select outcome from public.begin_request_run('b1000000-0000-4000-8000-0000000000a1', 'a1000000-0000-4000-8000-0000000000a1', 1, '00000000-0000-4000-8000-000000000003', repeat('d', 64))), 'new', 'begin_request_run: a failed run frees a slot');
-update public.request_runs set state = 'succeeded', finished_at = now() where visitor_session_id = 'a1000000-0000-4000-8000-0000000000a1';
+update public.request_runs set state = 'succeeded', finished_at = now() where visitor_session_id = 'a1000000-0000-4000-8000-0000000000a1' and state in ('reserved', 'running');
 select is((select outcome from public.begin_request_run('b1000000-0000-4000-8000-0000000000a1', 'a1000000-0000-4000-8000-0000000000a1', 1, '00000000-0000-4000-8000-000000000004', repeat('e', 64))), 'new', 'begin_request_run: succeeded runs do not count');
 
 -- ---- session validity (RB004) ----

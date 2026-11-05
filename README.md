@@ -100,17 +100,19 @@ npx supabase login                     # once per machine
 ```
 
 1. Create an empty Supabase project for the client and copy its 20-letter project ref.
-2. Preview the change. Check that the target name in the output is the right client:
+2. Preview the change. `PROJECT_REF` must be on the command line; an exported value is refused. Check the `Target project:` line that make prints: it must be the right client's ref.
 
    ```bash
    make db-plan PROJECT_REF=<ref>
    ```
 
-3. Apply the schema. The CLI asks you to confirm, and the change is immediate:
+3. Apply the schema. Type the ref twice (`CONFIRM_REF` must equal `PROJECT_REF`). The CLI then asks you to confirm, and the change is immediate:
 
    ```bash
-   make db-create PROJECT_REF=<ref>
+   make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>
    ```
+
+   If the CLI needs the database password, use `read -s SUPABASE_DB_PASSWORD && export SUPABASE_DB_PASSWORD`, then `unset SUPABASE_DB_PASSWORD` afterwards. Never type it inline. See `database/README.md`.
 
 4. Check the result:
 
@@ -126,7 +128,7 @@ To recreate a local database instead, run `make db-start`, then `make db-local`.
 **Publishable key:** copy it from the client's Supabase project into the widget `<script>` tag on the client's website (`data-supabase-publishable-key`, see `UI_SCHEMA.md`). It is public and is not stored in this repository. Never put the secret key there.
 
 ## Deployment order per client
-1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref>`, see `database/README.md`).
+1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).
 2. Provision the first admin and active membership through trusted operator tooling; configure Auth site/redirect URLs for the admin domain and require MFA for privileged operations.
 3. Test grants/RLS as anon, nonmember, analyst, admin, and privileged backend.
 4. Deploy Render API and worker from the repository root using their workspace build/start commands. Provision secrets separately for each client and configure the queue and retention settings.
