@@ -21,19 +21,23 @@
 
 Session creation is not proof of human identity. Rate limits/bot challenges and spending controls remain mandatory. Optional history may be disabled entirely in the MVP.
 
-## 3. Administrative API
-All administrative routes require a valid Supabase access token, active membership, required role, and applicable MFA assurance.
-| Method/path | Purpose |
+## 3. Administrative operations
+The admin panel never calls the Render API (ADR 0017). It reads under RLS and writes through database functions and Storage policies, planned in `plan.md` P3.5 and not built yet. Function names are decided then. Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules.
+| Operation | Purpose |
 |---|---|
-| POST /v1/admin/documents | Validate metadata, create version, issue scoped upload URL |
-| POST /v1/admin/documents/:id/complete | Verify upload and enqueue indexing |
-| POST /v1/admin/documents/:id/reindex | Retry/reindex permitted version |
-| POST /v1/admin/documents/:id/download | Issue short-lived original-file URL |
-| DELETE /v1/admin/documents/:id | Exclude retrieval immediately and enqueue cleanup |
-| PATCH /v1/admin/bot-settings | Whitelisted settings only, audited |
-| POST /v1/admin/conversations/:id/delete | Retention-aware deletion workflow |
+| Register document | Validate metadata, create document and version, return the generated storage path |
+| Add version | Same, for an existing document (replacement) |
+| Upload original | Browser to Storage; a policy allows only the path of a `pending_upload` version |
+| Complete upload | Confirm the object exists and queue `index_document`; a duplicate call queues one job |
+| Reindex | Retry or reindex a permitted version |
+| Document status | Per-document state, batches and safe failure code |
+| Download original | Storage policy for permitted roles; short-lived link |
+| Delete document | Exclude retrieval immediately and queue cleanup |
+| Read settings | Safe read that works before publishing, including `bot_id` and upload limits |
+| Update settings | Whitelisted fields only, audited; takes `expected_settings_version` and rejects a stale edit |
+| Delete conversation | Retention-aware deletion workflow |
 
-The dashboard may read RLS-protected records directly. Settings updates and destructive lifecycle operations use the API to preserve invariants.
+Failures use stable SQLSTATEs rather than the API error envelope. The worker makes the final check on every file.
 
 ## 4. Chat request and event contract
 ```json
@@ -91,7 +95,7 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 
 ## 8. Security controls
 - Public Supabase grants expose only public configuration; no anon read of knowledge or chat tables.
-- JWT signature/issuer/audience/expiry validation; require active admin role and configured MFA assurance.
+- Admin access is enforced in Postgres and Storage policies: active membership, role and `aal2` on every private read and admin RPC (ADR 0015, ADR 0017).
 - Visitor bearer token binds bot, session, expiry; conversation lookup checks ownership.
 - CORS is not authentication. Do not rely on IP or user-agent as identity.
 - TLS, trusted proxy configuration, canonical IP handling, payload/concurrency/time limits.
@@ -102,7 +106,7 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 ## 9. Test and release matrix
 - Unit: validation, prompt assembly, citation mapping, token expiry, fallback eligibility, handoff triggers, contact-field validation.
 - Cache: cross-bot isolation, invalidation on activation/deletion/settings change, kill switch, no caching of partial/failed answers.
-- Integration: actual grants/RLS; vector dimension mismatch; membership revocation; source deletion; ownership rejection.
+- Integration: actual grants/RLS; every admin RPC and Storage policy as each role; SQL and `shared/src/schemas.ts` accept the same settings; vector dimension mismatch; membership revocation; source deletion; ownership rejection.
 - Queue: duplicate delivery, lease expiry, kill/restart, retries, incomplete embeddings, atomic replacement.
 - Security: forged visitor ID, cross-session history, prompt injection, XSS, file spoofing, budget races.
 - E2E: embed on representative host pages, mobile, accessibility, streaming cancellation, partial response, contact card for each handoff reason and when the API is unreachable.

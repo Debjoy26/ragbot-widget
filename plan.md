@@ -2,7 +2,7 @@
 
 > Source of truth: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`.
 > This plan turns that planning baseline (v1.0) into an ordered, testable build. Requirement IDs (W-01…W-16) refer to `PRD.md §5`.
-> Created: 2026-11-03. Progress is tracked in `status.md`; context for whoever picks this up is in `handover.md`.
+> Created: 2026-11-03. Updated 2026-11-06 with the admin panel's backend requests (§1a) and ADR 0017. Progress is tracked in `status.md`; context for whoever picks this up is in `handover.md`.
 
 ---
 
@@ -24,19 +24,46 @@
 | P0 | Decisions & prerequisites | Resolved open decisions, accounts, credentials | — | Decision log signed off |
 | P1 | Monorepo scaffold & tooling | npm workspaces, TS, lint, test runners, CI | P0 (Node version) | `npm ci && npm run build && npm test` green on empty skeleton |
 | P2 | Shared contracts package | Zod schemas, API/event contracts, error codes, provider interfaces | P1 | Unit tests for every schema |
-| P3 | Database & storage | Migrations 001–005, RPCs, grants/RLS, bucket, seed | P0 (embedding dims), P1 | RLS/grant integration matrix green |
-| P4 | API foundation | Fastify server, config validation, logging, health, auth services | P2, P3 | Health + auth integration tests |
+| P3 | Database & storage | Migrations 001–007, RPCs, grants/RLS, bucket, seed | P0 (embedding dims), P1 | RLS/grant integration matrix green |
+| P3.5 | Admin data layer | RPCs and Storage policies for all admin writes (ADR 0017) | P3 | Role tests for every function; security review |
+| P4 | API foundation | Fastify server, config validation, logging, health, visitor auth | P2, P3 | Health + auth integration tests |
 | P5 | Visitor sessions & abuse controls | `/v1/sessions`, rate limits, budget reservation, idempotency | P4 | Forged-token, race, and idempotency tests |
-| P6 | Ingestion pipeline (worker) | Job queue, extract/chunk/embed, atomic activation, admin document API | P3, P4 | Queue test suite (TECH_SPECS §9 "Queue") |
+| P6 | Ingestion pipeline (worker) | Job queue, extract/chunk/embed, atomic activation | P3, P3.5, P4 | Queue test suite (TECH_SPECS §9 "Queue") |
 | P7 | Retrieval & chat | `/v1/chat` SSE: moderation, retrieval, prompt, provider + fallback, citations | P5, P6 | Unit + evaluation set baseline |
 | P7.5 | Caching & latency | Layered caches (config, embeddings, retrieval, provider prompt cache, opt-in answer cache), cache warming | P7 | Invalidation + isolation tests; measured latency gain |
 | P8 | Widget | Shadow-DOM custom element, states, streaming, a11y, build to `/v1.0.0/widget.js` | P2, P7 (contract) | E2E on host pages, a11y, XSS tests |
-| P9 | Async analysis, entries, settings, retention | Summaries/sentiment/intent jobs, `/v1/entries`, settings PATCH, cleanup/retention jobs | P6, P7 | Integration tests + retention audit |
+| P9 | Async analysis, entries, retention | Summaries/sentiment/intent jobs, `/v1/entries`, cleanup/retention jobs | P6, P7 | Integration tests + retention audit |
 | P10 | Observability & ops hardening | Metrics, redaction, alerts, render.yaml, vercel.json, deploy/smoke scripts | P4–P9 | Smoke test against staging |
 | P11 | Evaluation, security review, load test | Eval sets, pen-test checklist, latency measurement | P7–P10 | PRD §8 release gates met & recorded |
-| P12 | First client deployment | Client-A rollout per README "Deployment order" | P11 | Signed handover to client |
+| P12 | First client deployment | Client-A rollout per README "Deployment order" | P11, admin AP6 | Signed handover to client |
 
 P6 and P8 can run in parallel with P7 once P5 is merged and the chat event contract (P2) is frozen.
+
+### 1a. Admin panel integration
+
+The admin panel (`../ragbot-admin_pannel`, phases `AP0`–`AP7`) talks only to Supabase and never calls the Render API (ADR 0017). It raised these requests in its `plan.md §3`, where each gap is described in full. This table is the schedule for them. Scheduling an item doesn't approve it: migrations, shared-contract changes and any remote change still need owner approval when they are built.
+
+| Lands in | Items | What this repo delivers |
+|---|---|---|
+| Before P3.5, test stack only | B-13, B-14, B-15 | Local TOTP on; a test-only fixture with owner, admin, analyst, nonmember and revoked users plus sample rows, never applied to a client project; admin dev origin in the local Auth redirects |
+| P3.5 | B-1 to B-7, B-11, B-12 | See the P3.5 section |
+| P6 | B-2 (worker side) | The worker writes per-document progress and safe failure codes |
+| P7 | B-9 | See the P7 section |
+| P9 | B-10 | See the P9 section |
+| Only if admin Q5 keeps the language filter | B-8 | Store the language on conversations or messages |
+| Withdrawn | B-16 | The panel makes no API calls, so it needs no API CORS |
+
+B-13 to B-15 unblock the admin panel's first real `aal2` test, so they come first. Per-client redirect URLs and turning off open sign-up (B-15) belong in the P12 runbook.
+
+**Rulings on conflicts between the two repos:**
+- **MFA:** every admin RPC and Storage policy requires `aal2`, not only "privileged" ones (ADR 0015).
+- **System messages:** staff must not see them either, so the fix is in RLS (B-5). Keeping them out by convention alone isn't enough.
+- **Repeated-miss threshold:** operator-managed in `client_settings.handoff_policy`. `shared/src/schemas.ts` deliberately keeps policies out of the settings whitelist (ADR 0013 default: 2).
+- **Contact details:** the admin Settings form must be able to set every contact and escalation field, because go-live needs them (PRD §5.1, ADR 0013).
+- **Knowledge gaps:** the admin panel shows the `knowledge_gaps` RPC (PRD §5.1, ADR 0011).
+- **First deployment:** P12 and admin AP7 are one joint rollout (see P12).
+
+Each change to `shared/src` reaches the admin panel through its `npm run contracts:sync`, so tell that repo when one lands.
 
 ---
 
@@ -92,6 +119,8 @@ Also: create dev Supabase project (or local stack via Supabase CLI), dev Render/
 | `003_grants_rls_storage.sql` | Revoke defaults on all tables/functions; enable RLS everywhere; policies per the grants matrix; `is_active_member(role[])` helper (SECURITY DEFINER, fixed `search_path`); anon may read **only** `public_bot_config`; private bucket `knowledge` and storage policies; column grants / security-invoker views for safe status reads. |
 | `004_jobs_limits_budgets.sql` | `claim_jobs` (FOR UPDATE SKIP LOCKED + lease), `activate_document_version`, `reserve_request_budget`, `record_rate_limit_attempt`, `mark_document_deleted`; EXECUTE granted only to service role. |
 | `005_retention.sql` | Retention helpers, expiry functions for sessions/rate buckets/stale reservations; scheduling via worker cleanup jobs (or pg_cron if approved). |
+| `006_reaper_settle_reply_lock.sql` | Debug cycle P3-D3: reaper sets reservations to `expired`; row lock on the reply target. |
+| `007_run_state_guard.sql` | Debug cycle P3-D4: a new reservation needs a live run; `request_runs` state guard. |
 | `seed.sql` | Dev-only bot profile, public config, client_settings with conservative limits. **No** real admin users. |
 
 Also: operator script for first admin membership (trusted tooling, not seed).
@@ -99,6 +128,40 @@ Also: operator script for first admin membership (trusted tooling, not seed).
 **Tests (integration, against local stack):** run the full grants/RLS matrix as anon, authenticated nonmember, analyst, admin, owner, service role. Vector dimension mismatch rejected. Membership revocation takes effect immediately. RPCs not callable by anon/authenticated where not granted.
 
 **Acceptance:** every cell of the DATABASE_SCHEMA matrix has a passing test.
+
+### P3.5 — Admin data layer (ADR 0017)
+Everything the admin panel writes, as database functions and Storage policies. It needs only P3, so it can start before P4. New migrations are numbered after the latest one. Function names are decided at build time. It follows debug cycle P3-D5 if the owner approves that (`status.md §3b`). B-5, the B-2 columns and B-13 to B-15 are also in that backlog as G-5, G-6 and G-24, so whichever lands first closes them.
+
+Every browser-callable function follows the rules in ADR 0017: `is_active_member_mfa` first, fixed `search_path`, `authenticated` only, own input validation, audit in the same transaction.
+
+- **Documents (replaces the planned `/v1/admin/documents` routes):** register a document and first version, returning the generated storage path; add a version to an existing document (B-1); complete an upload, which confirms the object exists and queues `index_document`; retry a failed version, or reindex an active one by creating a new version so the live chunks stay untouched; delete a document, which uses `mark_document_deleted` and queues `cleanup`.
+- **Storage:** policies on the `knowledge` bucket, always `to authenticated`, never `to public` (`anon` holds table grants on `storage.objects`, so RLS is the only barrier). Upload is allowed only to the path of a `pending_upload` version; download only for the roles in the B-12 table. No overwrite of an active original.
+- **Status (B-2):** per-document state, processed/total batches and safe failure code. P6 fills in the values.
+- **Identity and settings (B-3, B-4):** a safe read that works before publishing and returns `bot_id`, upload limits, whitelisted settings and `settings_version`. An update function takes `expected_settings_version`, rejects a stale edit, and bumps `settings_version` so the P7.5 caches refresh.
+- **Conversation delete:** retention-aware deletion of messages, sources, analysis and entries.
+- **B-5:** restrict the `messages` member policy to exclude `role = 'system'`, before P7 writes messages.
+- **B-6:** schema version from a public-safe RPC.
+- **B-7:** a display label on audit rows, or a safe member lookup RPC.
+- **B-11:** stable SQLSTATEs for conflict, file too large and MFA required.
+- **B-12:** a published table of RPCs and allowed roles.
+- **Contracts:** remove the `/v1/admin/*` types and schemas from `shared/src`. Keep the settings whitelist schema: the panel and the parity test use it.
+
+**Fixes from the 2026-11-06 review:**
+- **Version order:** `activate_document_version` refuses a version older than the active one, and the worker marks it `failed`. Reproduced on the local stack: v2 finishing after v3 replaced it as the live version.
+- **Reindex paths:** `document_versions.storage_path` is unique, so a new version can't reuse the original's path. Copy the object or change the constraint, and decide which at build time.
+- **Ingestion budget:** `reserve_request_budget` needs a request run, and a run needs a visitor session, so the worker can't reserve today. Add a job-based reservation that counts toward the same daily cap (`TECH_SPECS §8`). The worker reserves before embedding and settles afterwards. If the cap is reached, the job fails with `BUDGET_EXCEEDED` and the old version stays live.
+- **Quotas:** per-bot limits on registrations, uploads and reindexing in each window. No API rate-limits these calls any more.
+- **Job attempts:** add attempt limits for `index_document` and `cleanup` to `client_settings`. Each RPC reads them there, and a missing value fails closed. `mark_document_deleted` used to expect this from API config, and the browser must never supply it.
+- **Download audit:** the panel calls an RPC that writes the audit row, then gets the Storage link. A stolen session could skip that RPC, because Storage can't write to `audit_logs`. Storage logs are the backstop, and this stays a documented limit.
+- **Merged settings:** validate the merged result, not just the patch. While a bot is enabled, reject any change that leaves no contact channel, or a supported language with no escalation message.
+- **Enable gate:** a bot can't be enabled until those same rules pass (P3S-7).
+- **Audit hygiene:** an allowlist for `audit_logs.safe_metadata` (P3X-8), and an allowlist census test covering every browser-callable function.
+- **First admin (G-23):** the operator script uses a short-lived invite link and never sets a password. A password that leaks before TOTP enrolment gives full access, because the first factor can be enrolled at `aal1`.
+- **Client Auth settings:** add these to the manual steps in `database/README.md` and the P12 runbook: public signup off, TOTP on, phone MFA off, a minimum password length of at least 12, and `secure_password_change` on.
+
+**Tests (pgTAP plus a real session):** each function as anon, nonmember, analyst, admin, owner, revoked and `aal1`; unknown settings keys rejected; stale version conflict; audit row written, and rolled back with a failed change; upload to any other path refused; duplicate `complete` queues one job; system messages unreadable; an older version can't replace a newer one; reindex leaves the live version in place until the new one is ready; quotas refuse excess calls; a missing attempts setting fails closed; a merged patch that removes the last contact channel from an enabled bot is refused; enabling a bot without contact details is refused; job-based reservations count toward the cap and can't exceed it. A shared-fixture test proves SQL and `shared/src/schemas.ts` accept and reject the same settings.
+
+**Acceptance:** all tests pass; `security-reviewer` has reviewed every browser-callable function; advisors reviewed, and the expected list in `database/README.md` updated. Remote apply needs owner approval, with public signup off and TOTP on.
 
 ### P4 — API foundation (`api/`)
 - `lib/config.ts`: Zod-validated env; refuse to start on missing/invalid values (limits, model names, deadlines, max attempts, allowed origins).
@@ -108,27 +171,30 @@ Also: operator script for first admin membership (trusted tooling, not seed).
 - `routes/health.ts`: `/health/live`, `/health/ready` (bounded DB ping, no details).
 - `services/auth.ts`:
   - Visitor tokens: HMAC (`VISITOR_TOKEN_SECRET`) signed, claims `{bot_id, session_id, token_version, exp}`; verify against `visitor_sessions` (not revoked, not expired, token_version matches).
-  - Admin: verify Supabase JWT (signature via JWKS, issuer, audience, expiry), check active membership + role, check MFA assurance level (`aal2`) for privileged operations.
+- No admin routes or admin JWT handling: the panel doesn't call this API (ADR 0017).
 
-**Acceptance:** tests for expired/forged/wrong-bot visitor tokens; admin JWT with wrong aud/iss, revoked membership, missing MFA → 401/403.
+**Acceptance:** tests for expired/forged/wrong-bot visitor tokens.
 
 ### P5 — Visitor sessions & abuse controls
 - `POST /v1/sessions`: resolve bot by slug, check enabled, record rate-limit attempt (hashed key, no plain IP), optional challenge verification, insert `visitor_sessions`, return token + expiry.
 - `services/limits.ts`: wrappers around `record_rate_limit_attempt` (per-session and per-IP-hash windows) and `reserve_request_budget` / settle / release.
-- Idempotency: `request_runs` with unique `(bot_id, session_id, idempotency_key)`; request hash comparison → mismatch = `INVALID_REQUEST`; duplicate in progress → 409-style status; completed → return stored final status, never regenerate.
+- Idempotency: `request_runs` with unique `(bot_id, visitor_session_id, idempotency_key)`; request hash comparison → mismatch = `INVALID_REQUEST`; duplicate in progress → 409-style status; completed → return stored final status, never regenerate.
 - Concurrency: one active generation per conversation.
 
 **Tests:** parallel budget race (N concurrent reservations never exceed cap), duplicate idempotency key cannot spend twice, payload-mismatch rejection, rate-limit window rollover.
 
-### P6 — Ingestion pipeline (`worker/` + admin document routes)
-- Admin routes (`api/routes/documents.ts`): create document + version + scoped signed upload URL; `complete` (verify object exists, size, checksum, sniffed MIME) → enqueue `index-document`; `reindex`; `download` (short-lived signed URL, admin only); `DELETE` → `mark_document_deleted` + enqueue cleanup. Audit log every action.
+### P6 — Ingestion pipeline (`worker/`)
+- Jobs arrive from the P3.5 functions; there are no admin document routes (ADR 0017).
+- First step of every `index_document` job: verify the object's size and sniffed MIME against the upload policy, and compute and store the checksum. No API checks the upload first, so this is the authoritative check.
+- B-2: write per-document progress and safe failure codes for the P3.5 status read.
+- Reserve budget before embedding and settle after, using the P3.5 job-based reservation. Never call a provider without a reservation.
 - `worker.ts`: poll `claim_jobs` with lease, heartbeat to extend lease, bounded concurrency, graceful shutdown (stop claiming, finish/release current), recover expired leases, exponential backoff with jitter, dead-letter after `max_attempts`.
 - `lib/extract.ts`: PDF (text layer), MD, TXT; validate actual content; detect empty/scanned PDFs → `OCR_REQUIRED`; encrypted PDFs → `FILE_UNSUPPORTED`; run heavy parsing in a bounded subprocess with time/memory limits.
 - `lib/chunk.ts`: deterministic chunking with versioned config; capture page number/section metadata; token counts.
 - `lib/embeddings.ts`: batched calls, resumable progress, usage_events per batch.
 - `jobs/index-document.ts`: write inactive chunks (idempotent on `(version_id, chunk_index)`), then `activate_document_version`. On failure previous version stays active (W-15).
 
-**Tests (TECH_SPECS §9 Queue):** duplicate delivery, lease expiry, kill -9 mid-job then restart, retry exhaustion, incomplete embeddings never activate, atomic replacement, delete → immediately unretrievable, spoofed file types rejected.
+**Tests (TECH_SPECS §9 Queue):** duplicate delivery, lease expiry, kill -9 mid-job then restart, retry exhaustion, incomplete embeddings never activate, atomic replacement, delete → immediately unretrievable, spoofed file types rejected. Also: a failed replacement keeps the old version active; progress and failure codes are readable per document; a job over the daily cap fails safely without calling the provider; an older version finishing late is marked `failed`.
 
 ### P7 — Retrieval & chat (`POST /v1/chat`)
 Pipeline per ARCHITECTURE §3:
@@ -150,14 +216,14 @@ Pipeline per ARCHITECTURE §3:
 8. `services/llm.ts`: primary provider with bounded total deadline; retry/fallback only **before** first emitted token for eligible errors; after tokens emitted → terminate as partial (`STREAM_INTERRUPTED`) with retry hint (W-08).
 9. Output moderation per client policy (buffer-all or rolling batch).
 10. SSE events: `meta` → `delta`* → `sources` → (`handoff`) → `done`, or `error` (+ `handoff`). Citation tokens mapped to retrieved chunk IDs only; invented IDs/URLs dropped (W-07). Phone numbers, emails or URLs in model text that don't match configured contact details or validated sources are de-linked (W-16).
-11. `services/conversations.ts`: persist user + assistant messages (status complete/partial/failed), `message_sources`, `usage_events` (incl. failed/fallback attempts), settle reservation, enqueue debounced `analyze-conversation`.
+11. `services/conversations.ts`: persist user + assistant messages (status complete/partial/failed), `message_sources` with citation page and section readable by members (B-9: snapshot them or fix the `source_label` format), `usage_events` (incl. failed/fallback attempts), settle reservation, enqueue debounced `analyze-conversation`.
 12. Client disconnect → abort upstream provider call; still record usage.
 - Optional `GET /v1/conversations/:id` (same-session only, bounded, no system rows) — behind a feature flag.
 
 **Tests:** each `handoff_reason` trigger fires correctly and carries config contact details; unanswerable eval set always yields `handoff` and never an invented answer or invented phone/email; prompt assembly, citation mapping, fallback eligibility matrix, abort handling, browser-supplied context rejected, prompt-injection docs don't change behaviour, cross-session history denied.
 
 ### P7.5 — Caching & latency
-Goal: cut time-to-first-token and total response time without weakening any invariant in `handover.md §4`. Every cache is **bot-scoped, version-keyed, backend-only, and bypassable** by a kill-switch flag in `client_settings.feature_flags`.
+Goal: cut time-to-first-token and total response time without weakening any invariant in `handover.md §4`. Every cache is **bot-scoped, version-keyed, backend-only, and bypassable** by a kill switch in `client_settings.cache_policy`.
 
 **Where the time goes on a cache miss (expected order of cost):** chat-provider generation ≫ input/output moderation ≈ query embedding > vector search > config/profile reads > session/limit checks. Caches below target each step, biggest win first.
 
@@ -193,7 +259,7 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 - Index on `(bot_id, handoff_reason, created_at)` via conversations for the knowledge-gaps view.
 
 #### Cache schema additions (into P3 migrations)
-- `bot_profiles.settings_version int` and `bot_profiles.corpus_version bigint`. `activate_document_version` and `mark_document_deleted` increment `corpus_version` in the same transaction; settings PATCH increments `settings_version`.
+- `bot_profiles.settings_version int` and `bot_profiles.corpus_version bigint`. `activate_document_version` and `mark_document_deleted` increment `corpus_version` in the same transaction; the settings update increments `settings_version`.
 - `query_embedding_cache (key_hash pk, embedding_model, embedding vector(DIM), created_at, last_hit_at, expires_at)`
 - `moderation_cache (key_hash pk, policy_version, verdict, created_at, expires_at)`
 - `answer_cache (id, bot_id, cache_key_hash unique, language, answer_text, source_refs jsonb, corpus_version, settings_version, prompt_template_version, chat_model, hit_count, created_at, last_hit_at, expires_at)`
@@ -219,7 +285,7 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 ### P8 — Widget (`widget/`)
 - `widget.ts`: read `data-*` attributes from `document.currentScript`; singleton guard (`window.__ragbotWidget`/`customElements.get`) so duplicate script tags reuse one instance.
 - `public-config.ts`: fetch `public_bot_config` via Supabase REST with publishable key; validate with shared schema; fall back to bundled branding for first paint (`clients/<client>/theme.css`).
-- `session.ts`: create/refresh visitor session; token in memory (sessionStorage only if P0 approves); reset clears local state.
+- `session.ts`: create/refresh visitor session; token in `sessionStorage` (ADR 0009); reset clears local state.
 - `api.ts`: `fetch` + SSE parser over `ReadableStream`; `AbortController` for Stop; idempotency key per send; reconcile on reconnect, never auto-resend after partial output.
 - `ui.ts`: component tree from UI_SCHEMA §3 in Shadow DOM; state machine `booting → closed ↔ ready → connecting → streaming → ready` plus `limited`, `blocked`, `unavailable`.
 - `ContactCard` component (UI_SCHEMA addition): renders on `handoff` events and in `blocked` / `unavailable` states. It shows the escalation message, `mailto:` / `tel:` / `https:` links built only from validated config, and business hours with an "open now / closed" hint from the time zone. Keyboard and screen-reader accessible; pinned above the composer when `prominent`. It stays usable offline from cached or bundled config when the API is down.
@@ -232,17 +298,15 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 
 **Tests:** contact card for each handoff reason, `tel:`/`mailto:` links correct, malicious config values (`javascript:` URL, HTML in message) rejected, card shown when API unreachable; Playwright E2E on representative host pages (aggressive global CSS, CSP-strict page, SPA), mobile viewport, keyboard-only, axe a11y scan, XSS payloads in answers/config/sources, streaming cancel, partial response display.
 
-**Open gap:** `FeedbackButtons` appear in UI_SCHEMA but there is no feedback endpoint or table — either defer (hide component) or add `message_feedback` table + `POST /v1/feedback` (needs PRD update).
-
-### P9 — Analysis, entries, settings, retention
+### P9 — Analysis, entries, retention
 - `jobs/analyze-conversation.ts`: debounced by dedupe key per conversation; summary, sentiment, intent → `conversation_analysis` with `analysis_version`; never on the answer path (W-10).
 - `POST /v1/entries`: only approved `schema_key`s; schema validation; consent timestamp required; minimal personal data (W-13).
-- Knowledge-gaps RPC for admins: aggregated unanswered questions by `handoff_reason` and frequency, so clients can add missing documents.
-- `PATCH /v1/admin/bot-settings`: whitelisted fields only (now including contact block, escalation messages, business hours, repeated-miss threshold; bumps `settings_version`), audited, role-checked; embedding changes require explicit reindex workflow.
-- `POST /v1/admin/conversations/:id/delete`: retention-aware deletion (messages, sources, analysis, entries).
+- Knowledge-gaps RPC for admins: already in migration 003. Check it returns real data here, once messages exist: aggregated unanswered questions by `handoff_reason` and frequency, so clients can add missing documents.
+- Settings updates and conversation deletion moved to P3.5 (ADR 0017). The whitelist covers the contact block, escalation messages and business hours; the repeated-miss threshold stays operator-managed in `client_settings.handoff_policy` (§1a). Embedding changes require an explicit reindex workflow.
+- B-10: publish field labels and sensitivity per `schema_key`, readable by owner/admin.
 - `jobs/cleanup.ts`: delete storage originals + chunks for deleted documents, abandoned staging uploads, expired sessions/rate buckets, stale reservations, records past retention.
 
-**Tests:** analysis does not delay first `delta`; invalid entry payloads rejected; non-whitelisted settings rejected; deleted data audit shows nothing retained beyond policy.
+**Tests:** analysis does not delay first `delta`; invalid entry payloads rejected; deleted data audit shows nothing retained beyond policy.
 
 ### P10 — Observability & ops
 - Metrics: request latency (first-event and total, split by cache path), cache hit rate per layer (C1–C7), queue age, job failures, rate/budget denials, fallback frequency, indexing failures, provider usage/cost.
@@ -259,7 +323,13 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 - Backup/restore rehearsal incl. Storage objects.
 
 ### P12 — First client deployment
-Follow README "Deployment order per client" steps 1–10 exactly. Record schema/API/widget versions, deliver embed snippet and dashboard login, enable alerts.
+Follow README "Deployment order per client" steps 1–10 exactly. Apply the client Auth settings from P3.5, and create the first admin with an invite link. Record schema/API/widget versions, deliver embed snippet and dashboard login, enable alerts.
+
+This is one joint rollout with admin AP7, because step 9 uploads knowledge through the panel:
+1. README steps 1–7 here: backend, API, worker and widget.
+2. README step 8 is admin AP7-T3 to T5: deploy the panel, configure Auth, provision the first admin.
+3. README step 9 uses the deployed panel, and admin AP7-T6 runs its production smoke test.
+4. README step 10 and admin AP7-T7 close the rollout together.
 
 ---
 
@@ -281,8 +351,8 @@ Follow README "Deployment order per client" steps 1–10 exactly. Record schema/
 | W-12 Limits | P5 | Race/limit tests |
 | W-13 Data entries | P9 | Schema rejection tests |
 | W-14 Safe presentation | P8 | XSS suite |
-| W-16 Contact routing | P2, P3, P7, P8, P9 | Handoff trigger tests, unanswerable eval set, contact card E2E |
-| W-15 Indexing | P6 | Queue suite |
+| W-16 Contact routing | P2, P3, P3.5, P7, P8, P9 | Handoff trigger tests, unanswerable eval set, contact card E2E |
+| W-15 Indexing | P3.5, P6 | Queue suite; role tests for the admin RPCs |
 
 ---
 
@@ -307,6 +377,7 @@ Follow README "Deployment order per client" steps 1–10 exactly. Record schema/
 
 ## 5. Definition of done (v1.0.0)
 - At least one validated contact channel configured per client (go-live gate).
+- Every admin panel request in §1a is delivered or formally waived by the owner.
 - All W-01…W-16 acceptance conditions demonstrated with linked tests.
 - Full TECH_SPECS §9 matrix executed; results recorded in `docs/release/1.0.0.md`.
 - Latency measured and recorded (not just targeted), for cold, warm-miss and cache-hit paths.

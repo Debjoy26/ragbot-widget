@@ -1,6 +1,6 @@
 # ragbot_widget
 
-Client-branded website RAG widget plus the shared Render API/worker and Supabase schema used by both frontends. This is the proposed implementation layout, not a claim that the code already exists.
+Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). This is the proposed implementation layout, not a claim that the code already exists.
 
 ## Project structure
 ```text
@@ -22,7 +22,7 @@ ragbot_widget/
 ├── api/
 │   ├── src/
 │   │   ├── server.ts
-│   │   ├── routes/{chat,sessions,conversations,documents,settings,entries,health}.ts
+│   │   ├── routes/{chat,sessions,conversations,entries,health}.ts
 │   │   ├── services/{auth,retrieval,llm,moderation,limits,conversations,handoff,cache}.ts
 │   │   └── lib/{supabase,config,logger}.ts
 │   ├── package.json
@@ -129,13 +129,13 @@ To recreate a local database instead, run `make db-start`, then `make db-local`.
 
 ## Deployment order per client
 1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).
-2. Provision the first admin and active membership through trusted operator tooling; configure Auth site/redirect URLs for the admin domain and require MFA for privileged operations.
+2. Provision the first admin and active membership through trusted operator tooling; configure Auth site/redirect URLs for the admin domain and enable TOTP, because every private read and admin action needs `aal2` (ADR 0015).
 3. Test grants/RLS as anon, nonmember, analyst, admin, and privileged backend.
 4. Deploy Render API and worker from the repository root using their workspace build/start commands. Provision secrets separately for each client and configure the queue and retention settings.
-5. Set API health path `/health/ready`; configure CORS for actual website/admin origins. Verify signed admin sessions and visitor sessions.
+5. Set API health path `/health/ready`; configure CORS for actual website origins. Verify visitor sessions.
 6. Deploy the widget Vercel project with repository root as project root and a workspace-specific build; publish only `widget/dist`.
 7. Publish immutable `/v1.0.0/widget.js` output with JS content type and immutable caching. Keep demonstration assets separate from sensitive source/configuration.
-8. Deploy companion admin panel; configure public Supabase/API variables and DNS/HTTPS.
+8. Deploy companion admin panel; configure public Supabase variables and DNS/HTTPS.
 9. Upload and index approved knowledge; run evaluation and end-to-end tests; validate primary and fallback providers.
 10. Deliver embed and dashboard login, record schema/API/widget versions, and enable alerts.
 

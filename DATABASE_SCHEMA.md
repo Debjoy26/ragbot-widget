@@ -45,6 +45,7 @@ This is one schema in the client-specific Supabase project, not a database per f
 - `reserve_request_budget`: atomically check caps and reserve capacity before external calls.
 - `record_rate_limit_attempt`: atomically increment a bounded window.
 - `mark_document_deleted`: immediately exclude retrieval, increment `corpus_version`, then enqueue cleanup.
+- Admin RPCs (`plan.md` P3.5, ADR 0017, not built): document registration, versions, upload completion, reindex, delete, status, settings read and update, conversation delete. Each checks `is_active_member_mfa` first, validates its own input and writes `audit_logs` in the same transaction.
 - `knowledge_gaps`: aggregate unanswered questions by `handoff_reason` and frequency for active admins/analysts; bounded and date-filtered.
 - Never expose arbitrary SQL execution or unbounded search RPCs.
 - Functions using SECURITY DEFINER require a fixed safe search path, explicit authorization, and restricted EXECUTE grants. Prefer SECURITY INVOKER where feasible.
@@ -53,12 +54,12 @@ This is one schema in the client-specific Supabase project, not a database per f
 | Resource | anon | Authenticated nonmember | analyst | admin/owner | API/worker |
 |---|---|---|---|---|---|
 | public_bot_config | Read public fields | Read | Read | Read | Maintain |
-| documents/versions | None | None | Read metadata if permitted | Read | Write/manage lifecycle |
+| documents/versions | None | None | Read metadata if permitted | Read; write through admin RPCs | Write/manage lifecycle |
 | document_chunks | None | None | None by default | None directly | Read/write |
 | conversations/messages/sources | None | None | Read scoped records | Read scoped records | Write |
 | conversation_analysis | None | None | Read | Read | Write |
 | data_entries | None | None | Read if permitted | Read | Validate/write |
-| bot_profiles/client_settings | None | None | None or restricted RPC | Restricted field-level update RPC | Manage |
+| bot_profiles/client_settings | None | None | None or restricted RPC | Safe read and whitelisted update RPC | Manage |
 | jobs/usage | None | None | Safe status/aggregate RPC | Safe status/aggregate RPC | Write/claim |
 | memberships, sessions, budgets, request_runs | None | None | None | Restricted management API | Manage |
 | audit_logs | None | None | None | Read redacted records | Append |
@@ -70,10 +71,10 @@ RLS does not itself provide column-level security. Use column grants, minimal se
 ### Matrix rulings (2026-11-04, implemented in `003_grants_rls_storage.sql`)
 Ambiguous cells above are resolved fail-closed:
 - Analyst **may** read `documents`/`document_versions` metadata; analyst has **no** access to `data_entries` (admin/owner read).
-- No authenticated role reads or writes `bot_profiles`/`client_settings` directly; settings change only through the API (field-level admin RPC deferred to P9).
+- No authenticated role reads or writes `bot_profiles`/`client_settings` directly; settings change only through the whitelisted admin RPCs (revised by ADR 0017; planned in P3.5, not built).
 - Membership is project-wide (one database per client): `admin_memberships(user_id unique, role, active)`; `is_active_member(roles)` re-reads the live row on every call, so revocation is immediate.
 - Safe aggregate RPCs callable by authenticated users, each re-checking active membership: `job_status_summary()`, `usage_daily_summary(from, to)` (≤ 92 days; cache hit-rate derives from `operation = 'answer_cache_hit'`), `knowledge_gaps(from, to, limit)` (≤ 92 days, limit ≤ 200).
-- `audit_logs`: admin/owner read; only the service role writes.
+- `audit_logs`: admin/owner read; only the service role and the ADR 0017 admin RPCs write.
 
 ### Database conventions fixed in P3
 - Custom SQLSTATEs: `RB001` budget exceeded · `RB002` budget policy missing/invalid · `RB003` reservation not active · `RB004` request conflict · `RB010` document not found · `RB011` activation failed · `RB020` retention policy missing · `22023` invalid argument.
@@ -118,11 +119,11 @@ Ambiguous cells above are resolved fail-closed:
 
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.
-- Upload staging paths are authorised by a short-lived signed upload URL issued after backend validation, or equivalent tightly scoped policies.
+- Uploads go directly from the admin panel under `storage.objects` policies that allow only the path of a `pending_upload` version (ADR 0017; planned in P3.5, not built).
 - Browser cannot overwrite active originals or upload arbitrary paths.
-- API validates final object size and content before indexing.
-- Signed download URLs are issued only for authorised admins, with short expiry.
-- Delete original objects through the lifecycle endpoint; do not let the browser orphan active chunks.
+- The worker validates final object size and content before indexing.
+- Original-file downloads are allowed only to authorised admins by Storage policy, with short-lived links.
+- Delete original objects through the delete RPC and the worker cleanup job; do not let the browser orphan active chunks.
 
 ## Indexes and integrity
 - Unique bot slug; unique document/version sequence; unique chunk sequence; unique job dedupe key; unique `answer_cache.cache_key_hash`.

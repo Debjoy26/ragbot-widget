@@ -11,8 +11,8 @@ Client website -> Vercel widget -> Render API -> external embedding/chat APIs
                                                      |
                                       private Storage + Postgres + AI APIs
 
-Vercel admin panel -> Supabase Auth / authorised direct reads / signed upload
-                  -> Render API for privileged lifecycle operations
+Vercel admin panel -> Supabase Auth / authorised direct reads / admin RPCs / Storage
+                  -> no connection to Render: jobs queued in Postgres reach the worker
 ```
 The API initiates a search RPC; pgvector executes the vector computation inside Supabase. Routing this request through Render does not move database storage or index computation onto Render.
 
@@ -21,6 +21,7 @@ The API initiates a search RPC; pgvector executes the vector computation inside 
 - Per client: two Vercel projects, one Render web service, one Render background worker, one Supabase project.
 - Render holds backend credentials; Vercel frontend configuration contains only public values.
 - No Supabase Edge Functions are required in this version.
+- The admin panel talks only to Supabase. Its RPCs queue indexing and cleanup jobs, which the worker claims (ADR 0017).
 - Keep widget and dashboard versioned independently while maintaining a compatible API contract.
 
 ## 3. Chat sequence
@@ -37,7 +38,7 @@ The API initiates a search RPC; pgvector executes the vector computation inside 
 ## 4. Worker sequence
 - Durable queue in Postgres with leased claims; at-least-once delivery, not an exactly-once claim.
 - Idempotent steps and unique chunk/job constraints prevent duplicate effects.
-- Ingestion validates files, extracts text, rejects unsupported scans, batches embeddings, then activates versions atomically.
+- Ingestion validates actual file size, type and content first, because no API checks the upload, then extracts text, rejects unsupported scans, batches embeddings, then activates versions atomically.
 - Worker recovers expired leases after restart and dead-letters exhausted jobs.
 - Summaries/sentiment/intent run after turn completion using debounced dedupe keys.
 - Cleanup jobs enforce deletion/retention and remove abandoned uploads.

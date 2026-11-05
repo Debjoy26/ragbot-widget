@@ -5,7 +5,7 @@
 - This document specifies intended behaviour; it is not evidence of an implemented system.
 - Product: an embeddable, client-branded, retrieval-augmented website chatbot.
 - Deployment model: one Supabase project, Render API, and Render worker per client; a Vercel deployment serves the widget.
-- The companion `ragbot_adminpanel` manages the same backend. It is not a second backend.
+- The companion `ragbot_adminpanel` manages the same backend. It is not a second backend, and it talks only to Supabase (ADR 0017).
 - FDE means the deployment engineering team responsible for client configuration, migrations, branding, and operations.
 
 ## 2. Goals
@@ -79,10 +79,10 @@ Provision isolated services, install branding, configure secrets and limits, run
 - **Availability:** the contact card also shows when the API is unreachable, using the last known public config or bundled branding.
 
 ## 6. Knowledge lifecycle
-1. Dashboard requests a document registration after backend validation.
+1. Dashboard registers the document through a database function, which validates the request.
 2. Browser uploads directly to an authorised staging path in private Storage.
-3. Dashboard completes the upload; API verifies the object and enqueues extraction.
-4. Worker validates actual content, extracts text, chunks, embeds in batches, and persists inactive chunks.
+3. Dashboard completes the upload through a database function, which confirms the object exists and queues the indexing job.
+4. Worker validates actual size, type and content, extracts text, chunks, embeds in batches, and persists inactive chunks.
 5. A transaction activates a complete new version. The previous version remains active on failure.
 6. A delete request immediately removes retrieval eligibility, then queues idempotent cleanup.
 
@@ -90,7 +90,7 @@ Provision isolated services, install branding, configure secrets and limits, run
 - The publishable key and bot ID are public configuration, not visitor authentication.
 - Visitor sessions use short-lived server-issued signed tokens; IDs alone do not authorise history access.
 - A public chatbot receives only material approved for anonymous disclosure. RAG is not a confidentiality boundary.
-- Admin JWT verification includes issuer, audience, signature, expiry, and active membership.
+- Admin access is enforced in Postgres and Storage policies: a valid session, active membership and `aal2` on every private read and admin action (ADR 0015, ADR 0017).
 - Service credentials bypass RLS: privileged API routes enforce ownership and role checks themselves.
 - Rate counters and budget reservations are atomic and shared; process-local counters are insufficient.
 - Secrets are in Render environment configuration, never browser bundles, source control, prompts, or logs.

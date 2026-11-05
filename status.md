@@ -1,8 +1,8 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-06**
-> Overall: **🟡 P0, P1, P2 and P3 accepted by owner (P1, P2 and P3 on 2026-11-05). Debug cycles P3-D1 to P3-D4 done. Security reviews P3-R3, P3-R4 and P3-R5 done (static; not approvals; open findings §3a). P3-D3 committed as `815cfb9` on `main` (R3-1, R3-2, R3-3). P3-D4 on `main` (commit follows this checkpoint; no SHA recorded here). Migrations 001–006 applied to remote dev project 2026-11-05. Migration 007 local only, not applied to the remote dev project (owner approval needed). CI: runs 41708210161 (`19438c5`) and 41974998511 (`0059991`) completed with success (overall results only; `815cfb9` has no run of its own)**
-> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0016; ADR 0014 revises the provider parts of D1–D3).
+> Overall: **🟡 P0, P1, P2 and P3 accepted by owner (P1, P2 and P3 on 2026-11-05). Debug cycles P3-D1 to P3-D4 done. Security reviews P3-R3, P3-R4 and P3-R5 done (static; not approvals; open findings §3a). P3-D3 committed as `815cfb9` on `main` (R3-1, R3-2, R3-3). P3-D4 committed as `e2a044e`; CI run 42086386622 success, all steps. P0–P3 audit and live database check done; debug cycle P3-D5 required before the next phase (§3b). Migrations 001–006 applied to remote dev project 2026-11-05. Migration 007 local only, not applied to the remote dev project (owner approval needed). CI: runs 41708210161 (`19438c5`) and 41974998511 (`0059991`) completed with success (overall results only; `815cfb9` has no run of its own)**
+> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
@@ -15,14 +15,15 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P0 | Decisions & prerequisites | ✅ | D1–D14 approved and phase accepted by owner 2026-11-03 (ADRs 0001–0013). Open items carried forward: §3a |
 | P1 | Monorepo scaffold & tooling | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met. Committed and pushed as `f848fb3`. CI run 41698369772 completed/success. Local gates: `docs/evidence/P1/rerun-2026-11-04-providers/SUMMARY.md`. Integration and E2E: no tests yet. Open: §3a i–r |
 | P2 | Shared contracts | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (schema unit tests incl. negatives; browser-safe build). On `main` @ `19438c5` (code `6b24002`). Contract changes: `EmbeddingProvider.embed` returns `{vectors, inputTokens}`; `ModerationResult` has usage; `temperature` removed from `ChatStreamRequest`. Final gates: unit 157 passed, 0 failed, 0 skipped; all npm gates exit 0. Open: §3a t, af |
-| P3 | Database & storage migrations | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9). On `main` @ `19438c5` (code `6b24002`). Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`) → P3-R3 (2026-11-05, static) → P3-D3 (2026-11-05, committed `815cfb9`; R3-1, R3-2, R3-3 fixed; migration 006, applied to remote dev project 2026-11-05) → P3-R4 (2026-11-05, static; no fixes made; not an approval; findings au–ba) → P3-D4 (on `main`, commit follows this checkpoint; migration 007 local only; outcomes §3a au–bh) → P3-R5 (static; P3-D4 fixes not re-reviewed, §3a bg). Final P3-D4 gates (local, Opus reruns): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm lint, format:check, typecheck, build, test exit 0. Final pgTAP on `6b24002`: 17 files, 1465 passed, 0 failed; `db lint` clean. P3-D3 local gates (recorded before commit `815cfb9`): pgTAP 18 files, 1485 passed, 0 failed; unit 157 passed; `db lint` clean; lint, format:check, typecheck, build exit 0. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Migrations 001–006 applied to remote dev project 2026-11-05 (§2). D1 validation check pending (§3a c). Open: §3a ac (partly), ad, ae, af, ag, ah, am, an, ao, at (partly), av, aw (partly), az, bb–bh. Resolved: ai, aj–al, ap, aq, ar, as, au, ax, ay, ba. |
-| P4 | API foundation | ⬜ | |
+| P3 | Database & storage migrations | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9). On `main` @ `19438c5` (code `6b24002`). Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`) → P3-R3 (2026-11-05, static) → P3-D3 (2026-11-05, committed `815cfb9`; R3-1, R3-2, R3-3 fixed; migration 006, applied to remote dev project 2026-11-05) → P3-R4 (2026-11-05, static; no fixes made; not an approval; findings au–ba) → P3-D4 (committed as `e2a044e`); migration 007 local only; outcomes §3a au–bh) → P3-R5 (static; P3-D4 fixes not re-reviewed, §3a bg). Final P3-D4 gates (local, Opus reruns): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm lint, format:check, typecheck, build, test exit 0. Final pgTAP on `6b24002`: 17 files, 1465 passed, 0 failed; `db lint` clean. P3-D3 local gates (recorded before commit `815cfb9`): pgTAP 18 files, 1485 passed, 0 failed; unit 157 passed; `db lint` clean; lint, format:check, typecheck, build exit 0. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Migrations 001–006 applied to remote dev project 2026-11-05 (§2). D1 validation check pending (§3a c). Open: §3a ac (partly), ad, ae, af, ag, ah, am, an, ao, at (partly), av, aw (partly), az, bb–bh. Resolved: ai, aj–al, ap, aq, ar, as, au, ax, ay, ba. 2026-11-06 audit found gaps, including the missing operator script: see §3b. |
+| P3.5 | Admin data layer (ADR 0017) | ⬜ | Needs owner approval of scope (§3b O-5), P3-D5, and B-13 to B-15 |
+| P4 | API foundation | ⬜ | Only after P3-D5; order against P3.5 is an owner decision (§3b O-11) |
 | P5 | Visitor sessions & abuse controls | ⬜ | Limits (ADR 0007) and Turnstile (ADR 0010) decided; production daily cap open, fails closed (§3a a) |
-| P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007) |
-| P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); OpenAI fallback model ID pinned at P7; D1 validation pending (§3a c) |
+| P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017) |
+| P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c) |
 | P7.5 | Caching & latency | ⬜ | D13 decided (ADR 0012); C7 answer cache off by default; schema additions go into P3 |
 | P8 | Widget | ⬜ | Markdown off (ADR 0008), sessionStorage + history endpoint (ADR 0009), feedback deferred (ADR 0011); UI_SCHEMA §3/§7 edits pending |
-| P9 | Analysis, entries, settings, retention | ⬜ | Retention periods set (ADR 0006); jurisdiction per client and DPAs open (§3a b) |
+| P9 | Analysis, entries, retention | ⬜ | Settings moved to P3.5 (ADR 0017). Retention periods set (ADR 0006); jurisdiction per client and DPAs open (§3a b) |
 | P10 | Observability & ops | ⬜ | |
 | P11 | Evaluation, security, load | ⬜ | |
 | P12 | First client deployment | ⬜ | |
@@ -52,8 +53,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] P3-D3 2026-11-05 (committed `815cfb9` on `main`, on top of `19438c5`; Opus implemented, no worker): migration `006_reaper_settle_reply_lock.sql` (R3-1 reaper sets `expired`; R3-2 row lock on the reply target, `SECURITY INVOKER`), pgTAP `180_p3d3_fixes.test.sql` (20 tests), two assertions changed in `170`, R3-3 `DATABASE_SCHEMA.md` fixes. Gates: `make db-local`, `db-test` (18 files, 1485 passed), `db-lint`, npm gates exit 0. Two-connection race script `docs/evidence/P3-D3/race_reply_to.sh` (manual): three orderings consistent after the fix. Applied to the remote dev project 2026-11-05 (owner-approved; `supabase db push --remote=<ref> --yes`, exit 0; only 006 applied). Remote checks: public function definitions match local by md5; execute grants on the two changed functions match local; remote advisors unchanged after 006 (5 WARN and 13 INFO security; 34 INFO unused indexes; 1 INFO unindexed FK). pgTAP and the race script ran on the local stack only, not against the remote. Not security-reviewed. Evidence: `docs/evidence/P3-D3/SUMMARY.md`
 - [x] Makefile, `database/` and FDE section in `README.md` (2026-11-05, committed in `815cfb9`). `make` wraps local and remote DB commands with explicit `PROJECT_REF`. `database/` holds symlinks into `supabase/`; the single migration history stays in `supabase/migrations`. Tested: `db-local`, `db-test`, `db-lint`, `db-plan`, `db-status`, input guards. Not run: `install`, `db-create`, `db-start`, `db-stop`, `db-advisors`. Evidence: `docs/evidence/P3-D3/SUMMARY.md`
 - [x] Security review P3-R4 (2026-11-05; `security-reviewer`, static, read-only, configured `claude-sonnet-5-5`; Opus verified key claims) of P3-D3 (`815cfb9`, base `main` @ `0059991`). No fixes made; not an approval. Findings in §3a au–ba (ar resolved). Evidence: `docs/evidence/P3-R4/SUMMARY.md`.
-- [x] Debug cycle P3-D4 (2026-11-05 to 2026-11-06; owner-approved; Opus integrated `sonnet-implementer` T1 and T2, self-reported) and security review P3-R5 (static). Completes the P3-R4 findings and open R3 notes; outcomes in §3a au–bh. Migration 007 local only, not applied to the remote dev project (§3a bb). P3-D4 on `main` (commit follows this checkpoint). Evidence: `docs/evidence/P3-D4/SUMMARY.md`.
+- [x] Debug cycle P3-D4 (2026-11-05 to 2026-11-06; owner-approved; Opus integrated `sonnet-implementer` T1 and T2, self-reported) and security review P3-R5 (static). Completes the P3-R4 findings and open R3 notes; outcomes in §3a au–bh. Migration 007 local only, not applied to the remote dev project (§3a bb). P3-D4 on `main` (`e2a044e`). Evidence: `docs/evidence/P3-D4/SUMMARY.md`.
 - [x] Owner accepted P1, P2 and P3 on 2026-11-05. P0 accepted 2026-11-03.
+- [x] P0–P3 audit (5 read-only agents: AUD-P0, P1, P2, P3-S, AUD-P3-X; static, self-reported) and live database check (2026-11-06, read-only): the remote differs from the repo only by migration 007. Evidence: `docs/evidence/P3-AUD/SUMMARY.md`
 
 ## 3. Open decisions (P0)
 
@@ -93,10 +95,10 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **n)** Gemini free tier may use submitted content to improve Google products. Client or visitor data only through a paid-tier Gemini project. Owner to confirm billing is enabled before any client data (ADR 0014, ADR 0006).
 - **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
 - **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
-- **q)** Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).
+- **q)** ~~Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).~~ Superseded by `v`.
 - **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
-- **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P9).
+- **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings cross-field validation must re-run on the merged config (P3.5, ADR 0017).
 - **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
 - **v)** ~~M2~~ Resolved in P3-D1 (embedding guard: activation and match check the model; changing the model while chunks exist raises RB012).
 - **w)** ~~M3~~ Resolved in P3-D1 (ADR 0016: `data_entries` deleted with their conversation; orphans purged by `purge_expired_data_entries`). Owner confirmation open (§3a ag).
@@ -110,14 +112,14 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle; schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P5/P6/P9.
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
-- **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P9), management API, audit redaction, signed URLs. Documented for P5/P9.
+- **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P3.5, ADR 0017), management API, audit redaction, signed URLs. Documented for P5/P9.
 - **ai)** ~~P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.~~ Resolved by P3-R3 (2026-11-05, static review; findings aj–am).
 - **aj)** ~~R3-1 (Medium, confirmed, reproduced locally): `expire_stuck_request_runs` sets reservations to `released`, so a slow request's settle fails RB003 and real spend is not counted toward the cap. Fix proposed (new migration: reaper sets `expired`; pgTAP case for reap then settle), not implemented. Needs an owner-approved debug cycle.~~ Fixed in P3-D3 (migration 006, `815cfb9`); applied to the remote dev project 2026-11-05.
 - **ak)** ~~R3-2 (Low, confirmed by code read; race not exercised): `messages_check_reply_to` takes no lock and skips its check if the target is not visible. Needs a writer that does not exist today. Fix proposed, not implemented.~~ Fixed in P3-D3 (migration 006, `815cfb9`); applied to the remote dev project 2026-11-05. Row lock used instead of the reviewer's composite foreign key; race tested with two connections.
 - **al)** ~~R3-3 (doc): `DATABASE_SCHEMA.md` Budget line contradicts the later settle line, and Request start still shows the old 4-argument `begin_request_run`. Not edited yet.~~ Done in P3-D3.
 - **am)** API obligations from P3-R3 for P5: a late settle can exceed the cap, by design; it counts toward the UTC day the reservation was created; settle is not idempotent; the API must update `request_runs` only conditionally (`WHERE state IN ('reserved','running')`), a state-transition guard now exists (007), and conditional updates are still required (reviewer note, not verified); the worker reaper threshold must exceed the maximum request duration.
 - **an)** Remote advisors after apply (2026-11-05): 5 WARN and 13 INFO security, 34 INFO unused indexes, 1 INFO unindexed FK. `request_runs_session_fk` is a false positive (tested; see evidence). Proposed extra index not added (Opus recommendation; owner has not decided). Admin panel read needs for `admin_memberships`, `bot_profiles`, `client_settings` to be confirmed by P9.
-- **ao)** Remote Auth TOTP setting not checked. Related to item ad.
+- **ao)** Remote Auth TOTP setting not checked. Related to item ad. Public settings checked 2026-11-06; TOTP still unknown, see bi.
 - **ap)** ~~Reviewer notes not verified: R3-4, R3-6 to R3-9, and the listed test gaps. See `docs/evidence/P3-R3/SUMMARY.md`.~~ Resolved in P3-D4: R3-4 and R3-9 fixed; R3-6 tested with a defect left open (bc); R3-7 reviewed and documented; R3-8 closed as by design (owner may still want a policy).
 - **aq)** ~~Migration 006 is not applied to the remote dev project, so the remote still has the R3-1 and R3-2 behaviour. Applying it needs owner approval: `make db-create PROJECT_REF=<ref>` or `supabase db push --remote=<ref>`.~~ Done 2026-11-05.
 - **ar)** ~~P3-D3 has not been security-reviewed. Verified by tests, a two-connection race script and an Opus code read.~~ Resolved by P3-R4 (2026-11-05, static review). No fixes made; the review is not an approval.
@@ -136,7 +138,99 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **be)** Reserve retry past TTL (reviewer note, not verified): the early return hands back a `reserved` reservation past its TTL, which no longer counts toward the cap.
 - **bf)** P5 obligation (R5-6): reserve in its own transaction, update the run only after it commits. Set `lock_timeout`, retry on 40P01.
 - **bg)** P3-R5 fixes not re-reviewed. Verified by tests and Opus only; P3-R5 itself was static.
-- **bh)** `plan.md` has uncommitted admin panel edits (§1a) not made in this cycle and left out of the P3-D4 commit. They schedule items B-13 to B-15 before P4. Owner to review. Also uncommitted and left out: `docs/decisions/0017-admin-panel-direct-to-supabase.md`, not written in this cycle.
+- **bh)** ~~`plan.md` admin panel edits, other doc edits and ADR 0017 uncommitted.~~ Committed to `main` 2026-11-06 on the owner's instruction. Owner approval of P3.5 scope and the `plan.md` §1a rulings is still open (§3b O-5).
+- **bi)** Remote Auth: signup is on, email confirmation required, TOTP not visible from the public endpoint (see §3b O-3, O-4).
+
+### 3b. P3-D5 backlog
+
+These are the gaps to close before the next phase. The list covers what was found, not everything that exists. Source: `docs/evidence/P3-AUD/SUMMARY.md` (authoritative).
+
+Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** auditor report only.
+
+**Database (migration 008, plus 007 on local first)**
+
+| ID | Severity | Verified | Gap |
+|---|---|---|---|
+| G-1 | High | E | `mark_document_deleted` writes `{document_id, bot_id}`; `jobSchema` rejects it |
+| G-2 | Medium | R | Nothing increments `settings_version` |
+| G-3 | Medium | R | `jobs.dedupe_key` is unique forever, and `on conflict do nothing` hides it |
+| G-4 | Low-Medium | R | `message_sources` can reference another bot's chunk or version |
+| G-5 | Medium | R | Members can read `system` messages |
+| G-6 | Medium | A | No `failure_code`, `batches_done`, `batches_total`, `chunking_version`, `extraction_version` on `document_versions` |
+| G-7 | Low | A | Terminal `jobs` rows are never purged |
+| G-8 | Low | A | `document_versions.storage_path` has no pattern CHECK |
+
+**Tests**
+
+| ID | Severity | Verified | Gap |
+|---|---|---|---|
+| G-9 | Medium | A | `query_embedding_cache` purge not exercised; argument bounds missing on 4 purge RPCs and on `expire_visitor_sessions` above 10000; no source-deletion snapshot test; no `data_entries_conversation_fk` test |
+| G-10 | Medium | R | No race tests for `claim_jobs`, `begin_request_run`, `record_rate_limit_attempt` or parallel budget reservation |
+| G-11 | Medium | A | No tests for session schemas, admin schemas, `idParamSchema`; happy-path only for `sourceRefSchema`; chat strictness doesn't name `role`, `usage`, `sources`, `citations`, `provider`, `temperature`; no NUL case |
+| G-12 | Low | A | The enum test checks TypeScript copies, so SQL drift goes unnoticed. Compare against the migrations |
+| G-13 | Medium | A | Storage negative tests lack `aal2`, and the policy census matches text only |
+
+**Shared contracts**
+
+| ID | Severity | Verified | Gap |
+|---|---|---|---|
+| G-14 | High for P3.5 | A | No SQLSTATE-to-error mapping in `shared`; `RB0xx`, `begin_request_run` outcomes and B-11 codes absent |
+| G-15 | Medium | E | `excerpt` rejects newlines and `a > b`. Specify a normaliser or loosen it |
+| G-16 | Medium | A | Mark `/v1/admin/*` shapes `@deprecated`. Removal stays in P3.5 |
+| G-17 | Medium | A | Invented shapes unconfirmed. History `has_more` has no cursor; idempotent replay response undefined |
+| G-18 | Low | A | Policy JSON keys SQL depends on have no contract in `shared` |
+
+**Tooling and CI**
+
+| ID | Severity | Verified | Gap |
+|---|---|---|---|
+| G-19 | High | E | `test:integration` passes with zero tests; `test:e2e` exits 1 with zero tests and isn't in CI; no secret scan |
+| G-20 | Medium | R | API and worker dev scripts share root `.env`. The secret isn't there today. Load per workspace; worker refuses `VISITOR_TOKEN_SECRET` |
+| G-21 | Medium | R | 45 evidence `.log` files ignored by git, and none are tracked for P1, while summaries cite them |
+| G-22 | Low | R | ESLint doesn't ignore `.claude/**`; CI has no `db lint`; no `--max-warnings 0` |
+| G-23 | Medium | R | Operator script for the first admin is missing (`plan.md:126`). Add it, with a test that a new owner at `aal1` sees nothing |
+| G-24 | Medium | R | Local TOTP off, no admin dev redirect, no test-user fixture. No real `aal2` test possible until done |
+
+**Docs**
+
+| ID | Gap |
+|---|---|
+| G-25 | `DATABASE_SCHEMA`: "Restricted management API" and "only the service role writes" audit rows predate ADR 0017; RB012 and RB013 missing; `is_published` and `reply_to_message_id` missing from Tables |
+| G-26 | `README` layout: mark the tree as cumulative by phase; add missing files; migrations stop at 005; "no runnable application code" is stale |
+| G-27 | `PRD` open decisions; `plan.md` P3 table stops at 005, D12–D14 missing; ADR 0012 and 0006 need Gemini notes; ADR 0001 stale |
+| G-28 | `TECH_SPECS:80` "All caches are bot-scoped" conflicts with tables that have no `bot_id`; `plan.md:244` index differs; P5 "one generation per conversation" has no schema support; `usage_events` lacks a failed or fallback flag |
+| G-29 | Name the feature-flag keys for moderation mode, Turnstile, Markdown and history in `DATABASE_SCHEMA` |
+
+**Owner decisions**
+
+| ID | Decision | Blocks |
+|---|---|---|
+| O-1 | Approve P3-D5 scope | P3-D5 |
+| O-2 | Apply 007 and 008 to the remote, and when | Remote compliance |
+| O-3 | Turn off public signup on the remote (L-6) | P3.5 acceptance |
+| O-4 | Check remote TOTP in the dashboard; disable phone MFA | P3.5 acceptance |
+| O-5 | Approve P3.5 scope and the `plan.md` §1a rulings; no ADR covers them | P3.5 |
+| O-6 | ~~Commit the doc edits and ADR 0017~~ Done 2026-11-06 | Doc baseline |
+| O-7 | Confirm ADR 0016 | Retention |
+| O-8 | Blocked text for analysts: policy, or accept (R3-8) | P7 |
+| O-9 | `audit_logs` retention policy | P9 |
+| O-10 | Run the embedding retrieval check before corpus grows; 1536 is live | P6 |
+| O-11 | P3.5 before P4, or in parallel | Sequencing |
+
+**Live non-compliance (2026-11-06 check)**
+- L-1: Migration 007 not applied (awaiting owner approval).
+- L-2: No admin write RPC exists (ADR 0017 writes need P3.5).
+- L-3: `storage.objects` has 0 policies (deny-all today; P3.5 policies must be `to authenticated`).
+- L-4: `messages_select_members` has no `role <> 'system'` filter.
+- L-5: `public_bot_config` is readable only when published (admins can't read their unpublished bot, B-3).
+- L-6: Public signup on (`disable_signup: false`).
+- L-7: `audit_logs` has no writer other than `service_role`.
+
+**Stays in P3.5, by design:** L-2, L-3, L-5, L-7 (admin RPCs, Storage policies, safe settings read, audit writes), plus the settings parity fixture (P2-5, P3X-9), quotas on admin RPCs (P3X-4), reindex by new version (P3X-3), audit metadata allowlist (P3X-8), census allowlist, removal of admin shapes, and the enable-time contact gate (P3S-7).
+
+**Before client data or go-live only:** production daily cap; jurisdiction and DPAs; paid Gemini billing; second provider key; Cloudflare details; per-client contacts; Render and Vercel accounts and spend caps; `jwt_expiry` and session limits.
+
+**Status: none started; no fixes made.**
 
 ## 4. Doc fixes pending (from `handover.md §6`)
 - [x] Add `escalation_label` to `public_bot_config`
@@ -186,11 +280,11 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner confirms ADR 0016 (§3a ag).
-2. Owner decides whether to apply 007 to the remote dev project (§3a bb).
-3. Owner reviews the uncommitted `plan.md` admin panel edits (§3a bh).
-4. Owner confirms paid-tier Gemini billing before any client data (§3a n), and decides whether to add a second provider key for independent fallback (§3a o). Owner provides the production daily cap and confirms jurisdiction per client (§3a a, b). Owner decides on the retrieval-quality check for embeddings (§3a c).
-5. P4 only on owner go-ahead. P4 must address the API obligations in §3a ae, and the race tests in §3a ac. P5 obligations: §3a av, az and bf.
+1. Owner approves P3-D5 scope (§3b O-1).
+2. Owner decides O-2, O-3, O-4, O-5 (§3b): remote 007 and 008, public signup, remote TOTP, P3.5 scope and rulings.
+3. Run P3-D5 (G-1 to G-29), then security review, then apply 007 and 008 to the remote dev project if the owner approves.
+4. Owner confirms ADR 0016 (§3a ag). Owner confirms paid-tier Gemini billing before any client data (§3a n), and decides whether to add a second provider key for independent fallback (§3a o). Owner provides the production daily cap and confirms jurisdiction per client (§3a a, b). Owner decides on the retrieval-quality check for embeddings (§3a c).
+5. Next phase only on owner go-ahead, after P3-D5; order per O-11 (P3.5 before P4, or in parallel). P4 obligations §3a ae and ac still apply if P4 comes first. P5 obligations: §3a av, az and bf.
 
 ## 8. Change log
 | Date | Change |
@@ -209,11 +303,12 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | 2026-11-05 | P3-D3 (owner-approved; Opus implemented): migration 006 fixes R3-1 and R3-2; R3-3 doc fixes; pgTAP 18 files, 1485 passed; unit 157; `db lint` clean; npm gates exit 0. Local, uncommitted; 006 not applied to remote; not security-reviewed. Makefile and `database/` added (uncommitted). P1, P2 and P3 not accepted. Evidence: `docs/evidence/P3-D3/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC4). |
 | 2026-11-05 | P3-D3 committed as `815cfb9` on `main`. Migration 006 applied to remote dev project `rbejeqwxyxtklehuzibv` (owner-approved; `supabase db push --remote=<ref> --yes`; exit 0; only 006 applied). Remote history 001–006; public function definitions match local by md5; execute grants on the two changed functions match local; remote advisors unchanged. pgTAP and the race script ran on the local stack only. aj and ak fixed in P3-D3; aq done. P1, P2 and P3 not accepted; P3-D3 not security-reviewed (ar). Docs updated by `haiku-docs` (P3-DOC5). |
 | 2026-11-05 | Owner accepted P1, P2 and P3. Security review P3-R4 (`security-reviewer`, static, read-only; Opus verified key claims) of P3-D3 (`815cfb9`): findings recorded as §3a au–ba (ar resolved); no fixes made; not an approval. CI: runs 41708210161 (`19438c5`) and 41974998511 (`0059991`) completed with success (overall results only; `815cfb9` has no run of its own). Uncommitted: `docs/evidence/P3-R4/SUMMARY.md` and these doc updates. Evidence: `docs/evidence/P3-R4/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC6). |
-| 2026-11-06 | Debug cycle P3-D4 (owner-approved; Opus integrated `sonnet-implementer` T1 and T2) and static review P3-R5 done. Migration 007 local only, not applied to remote. Gates (local): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm gates exit 0. Remote read-only `db-status` and `db-advisors` run. P3-D4 on `main` (commit follows this checkpoint). P3-R5 fixes not re-reviewed. P1, P2 and P3 accepted. Evidence: `docs/evidence/P3-D4/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC7). |
+| 2026-11-06 | Debug cycle P3-D4 (owner-approved; Opus integrated `sonnet-implementer` T1 and T2) and static review P3-R5 done. Migration 007 local only, not applied to remote. Gates (local): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm gates exit 0. Remote read-only `db-status` and `db-advisors` run. P3-D4 on `main` (`e2a044e`). P3-R5 fixes not re-reviewed. P1, P2 and P3 accepted. Evidence: `docs/evidence/P3-D4/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC7). |
+| 2026-11-06 | P0–P3 audit (AUD-P0, P1, P2, P3-S, AUD-P3-X; static, read-only, self-reported) and live database check (read-only, Opus): the remote differs from the repo only by migration 007. Findings in `status.md §3b`; P3.5 added (not started); P3-D5 required before the next phase; no fixes made. ADR 0017 (admin panel direct to Supabase) written, uncommitted. P3-D4 committed as `e2a044e`; CI run 42086386622 success, all steps. Evidence: `docs/evidence/P3-AUD/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC8). |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
-- `reviewer`: no spawn recorded.
+- `reviewer`: no spawn recorded before 2026-11-06; first spawns 2026-11-06 (see the last entry below).
 - 2026-11-04 (P1): no new agents spawned. P1 was implemented directly by Opus.
 - 2026-11-04 (ADR 0014): no new agents spawned. The real Gemini calls were made by Opus, not by a worker.
 - 2026-11-04 (Supabase local stack): no new agents spawned. The stack and MCP read-only checks were run by Opus.
@@ -224,3 +319,4 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - 2026-11-05 (P3-DOC5): `haiku-docs` ×1 more (configured `claude-haiku-5-5`). Actual model resolution is not observable; self-reports are **unverified**.
 - 2026-11-05 (P3-R4, P3-DOC6): `security-reviewer` ×1 more (P3-R4; configured `claude-sonnet-5-5`; read-only, static). `haiku-docs` ×1 more (P3-DOC6; configured `claude-haiku-5-5`). Actual model resolution is not observable; self-reports are **unverified**.
 - 2026-11-05/06 (P3-D4, P3-R5, P3-DOC7): `sonnet-implementer` ×2 more (P3-D4-T1, T2; configured `claude-sonnet-5-5`; worktrees, removed). `security-reviewer` ×1 more (P3-R5; configured `claude-sonnet-5-5`; read-only, static). `haiku-docs` ×1 more (P3-DOC7; configured `claude-haiku-5-5`). Actual model resolution is not observable; self-reports are **unverified**. Results verified by Opus reruns.
+- 2026-11-06 (P3-AUD, P3-DOC8): `reviewer` ×4 (first spawns; AUD-P0, P1, P2, P3-S; configured `claude-sonnet-5-5`; read-only). `security-reviewer` ×1 more (AUD-P3-X; configured `claude-sonnet-5-5`; read-only, static). `haiku-docs` ×1 more (P3-DOC8; configured `claude-haiku-5-5`). Actual model resolution not observable; self-reports **unverified**.

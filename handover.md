@@ -16,7 +16,8 @@ This repo also owns the **shared backend** — Render API, Render worker, and th
 - **Remote dev project (2026-11-05, owner-approved):** migrations 001–005 applied to `rbejeqwxyxtklehuzibv` via `supabase db push --remote`; `seed.sql` not applied. Remote: 22 tables, RLS on all, 0 rows. Migrations 001–005 must not be edited; schema changes go in new migrations. Details: `status.md §2`, `docs/evidence/P3-R3/SUMMARY.md`.
 - **Committed locally (2026-11-05, P3-D3, `815cfb9` on `main`):** migration `supabase/migrations/006_reaper_settle_reply_lock.sql` (fixes R3-1, R3-2) and pgTAP 180. Applied to the remote dev project 2026-11-05 (owner-approved; only 006 applied; remote history 001–006). Remote: public function definitions match local by md5; execute grants on the two changed functions match local; advisors unchanged after 006 (5 WARN and 13 INFO security; 34 INFO unused indexes; 1 INFO unindexed FK). pgTAP and the race script ran on the local stack only, not against the remote. Also a `Makefile` and `database/` (symlinks into `supabase/`; the single migration history stays in `supabase/migrations`), committed in `815cfb9`. Evidence: `docs/evidence/P3-D3/SUMMARY.md`.
 - **Security review P3-R4 (2026-11-05, static, read-only; `security-reviewer` configured `claude-sonnet-5-5`; Opus verified key claims):** reviewed P3-D3 (`815cfb9`, base `main` @ `0059991`). No fixes made; not an approval. Findings au–ba in `status.md §3a`. Evidence: `docs/evidence/P3-R4/SUMMARY.md`.
-- **Debug cycle P3-D4 and security review P3-R5 (2026-11-05 to 2026-11-06; static review; Opus integrated and verified):** completes the P3-R4 findings and open R3 notes; outcomes in `status.md §3a` au–bh. **Migration 007 is local only, not applied to the remote dev project** (owner approval needed; §5 bb). P3-D4 is on `main` (commit follows this checkpoint). Evidence: `docs/evidence/P3-D4/SUMMARY.md`.
+- **Debug cycle P3-D4 and security review P3-R5 (2026-11-05 to 2026-11-06; static review; Opus integrated and verified):** completes the P3-R4 findings and open R3 notes; outcomes in `status.md §3a` au–bh. **Migration 007 is local only, not applied to the remote dev project** (owner approval needed; §5 bb). P3-D4 committed as `e2a044e` on `main`; CI run 42086386622 success, all steps. Evidence: `docs/evidence/P3-D4/SUMMARY.md`.
+- **P0–P3 audit and live database check (2026-11-06; audits static, read-only and self-reported; live check read-only by Opus):** the remote differs from the repo only by migration 007 (not applied). **P3-D5 is required before the next phase**; backlog in `status.md §3b`. Docs baseline: ADRs 0001–0017; ADR 0017 (admin panel direct to Supabase) and the `plan. No fixes made. Evidence: `docs/evidence/P3-AUD/SUMMARY.md`.
 - **No API routes, widget behaviour or provider adapters yet.** P2 contracts and P3 migrations are on `main`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
 - **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
@@ -42,8 +43,8 @@ Client website ──<script>──> Vercel (widget.js, immutable versioned)
                                    ├─> Supabase Postgres + pgvector (search RPC runs in DB)
                                    └─> jobs table ──> Render worker ──> private Storage + AI APIs
 
-Vercel admin panel ──> Supabase Auth + RLS reads + signed uploads
-                   └─> Render API for privileged lifecycle ops
+Vercel admin panel ──> Supabase Auth + RLS reads + admin RPCs + Storage
+                   └─> no connection to Render: jobs queued in Postgres reach the worker
 ```
 Per client: **1 Supabase project, 1 Render web service, 1 Render worker, 2 Vercel projects** (widget + admin). One shared codebase, deployed separately per client. No Supabase Edge Functions.
 
@@ -53,7 +54,7 @@ Break any of these and you've introduced a security or correctness bug:
 1. **Browser is untrusted.** Never accept browser-supplied retrieved context, history, system prompt, roles, usage numbers, provider keys, or assistant messages.
 2. **Publishable key + bot ID are public config, not auth.** Visitors authenticate with short-lived, server-signed tokens bound to `{bot, session, expiry}`.
 3. **Service-role credentials bypass RLS.** Every privileged API route must do its own ownership + role checks.
-4. **Admin auth = JWT signature + issuer + audience + expiry + active membership + MFA (for privileged ops).** "Authenticated" ≠ admin.
+4. **Admin access = Supabase session + active membership + `aal2`, enforced in Postgres and Storage policies (ADR 0015, ADR 0017).** "Authenticated" ≠ admin.
 5. **anon can read only `public_bot_config`.** Nothing else.
 6. **Rate limits and budgets are atomic in Postgres**, never process-local.
 7. **Idempotency key cannot spend twice.** Completed duplicates return stored status; never regenerate.
@@ -68,7 +69,7 @@ Break any of these and you've introduced a security or correctness bug:
 16. **Single migration history** in `supabase/migrations` here; admin repo must not add competing migrations.
 
 ## 5. Decisions (P0) — approved 2026-11-03
-All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0016; D8 and D9 share 0009). ADR 0014 (2026-11-04) revises the provider and model parts of D1–D3 (ADRs 0002–0004); the 1536 dimension is kept. Do not re-decide these without a new ADR. Index and states: `status.md §3`.
+All 14 P0 decisions (D1–D14) were approved by the owner as recommended. The ADRs in `docs/decisions/` are authoritative (0001–0017; D8 and D9 share 0009). ADR 0014 (2026-11-04) revises the provider and model parts of D1–D3 (ADRs 0002–0004); the 1536 dimension is kept. Do not re-decide these without a new ADR. Index and states: `status.md §3`.
 
 Remaining open items (not done):
 - **a)** Production daily budget cap per client: not set; fails closed (ADR 0007).
@@ -87,10 +88,10 @@ Remaining open items (not done):
 - **n)** Gemini free tier may use submitted content to improve Google products. Client or visitor data only through a paid-tier Gemini project. Owner to confirm billing is enabled before any client data (ADR 0014, ADR 0006).
 - **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
 - **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
-- **q)** Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).
+- **q)** ~~Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).~~ Superseded by `v`.
 - **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
-- **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P9).
+- **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P3.5, ADR 0017).
 - **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
 - **v)** ~~M2~~ Resolved in P3-D1 (embedding guard: activation and match check the model; changing the model while chunks exist raises RB012).
 - **w)** ~~M3~~ Resolved in P3-D1 (ADR 0016: `data_entries` deleted with their conversation; orphans purged by `purge_expired_data_entries`). Owner confirmation open (ag).
@@ -104,20 +105,21 @@ Remaining open items (not done):
 - **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle; schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P5/P6/P9.
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
-- **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P9), management API, audit redaction, signed URLs. Documented for P5/P9.
+- **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P3.5, ADR 0017), management API, audit redaction, signed URLs. Documented for P5/P9.
 - **ai)** ~~P3-D2 was verified by tests and an Opus code read only. It has not been separately security-reviewed.~~ Resolved by P3-R3 (2026-11-05, static review; findings aj–am).
 - **aj)** ~~R3-1 (Medium, confirmed, reproduced locally): `expire_stuck_request_runs` sets reservations to `released`, so a slow request's settle fails RB003 and real spend is not counted toward the cap. Fix proposed (new migration: reaper sets `expired`; pgTAP case for reap then settle), not implemented. Needs an owner-approved debug cycle.~~ Fixed in P3-D3 (migration 006, `815cfb9`); applied to the remote dev project 2026-11-05.
 - **ak)** ~~R3-2 (Low, confirmed by code read; race not exercised): `messages_check_reply_to` takes no lock and skips its check if the target is not visible. Needs a writer that does not exist today. Fix proposed, not implemented.~~ Fixed in P3-D3 (migration 006, `815cfb9`); applied to the remote dev project 2026-11-05. Row lock used instead of the reviewer's composite foreign key; race tested with two connections.
 - **al)** ~~R3-3 (doc): `DATABASE_SCHEMA.md` Budget line contradicts the later settle line, and Request start still shows the old 4-argument `begin_request_run`. Not edited yet.~~ Done in P3-D3.
 - **am)** API obligations from P3-R3 for P5: a late settle can exceed the cap, by design; it counts toward the UTC day the reservation was created; settle is not idempotent; the API must update `request_runs` only conditionally (`WHERE state IN ('reserved','running')`), a state-transition guard now exists (007), and conditional updates are still required (reviewer note, not verified); the worker reaper threshold must exceed the maximum request duration.
 - **an)** Remote advisors after apply (2026-11-05): 5 WARN and 13 INFO security, 34 INFO unused indexes, 1 INFO unindexed FK. `request_runs_session_fk` is a false positive (tested; see evidence). Proposed extra index not added (Opus recommendation; owner has not decided). Admin panel read needs for `admin_memberships`, `bot_profiles`, `client_settings` to be confirmed by P9.
-- **ao)** Remote Auth TOTP setting not checked. Related to item ad.
+- **ao)** Remote Auth TOTP setting not checked. Related to item ad. Public settings checked 2026-11-06; TOTP still unknown, see bi.
 - **ap)** ~~Reviewer notes not verified: R3-4, R3-6 to R3-9, and the listed test gaps. See `docs/evidence/P3-R3/SUMMARY.md`.~~ Resolved in P3-D4: R3-4 and R3-9 fixed; R3-6 tested with a defect left open (bc); R3-7 reviewed and documented; R3-8 closed as by design (owner may still want a policy).
 - **aq)** ~~Migration 006 is not applied to the remote dev project, so the remote still has the R3-1 and R3-2 behaviour. Applying it needs owner approval: `make db-create PROJECT_REF=<ref>` or `supabase db push --remote=<ref>`.~~ Done 2026-11-05.
 - **ar)** ~~P3-D3 has not been security-reviewed. Verified by tests, a two-connection race script and an Opus code read.~~ Resolved by P3-R4 (2026-11-05, static review). No fixes made; the review is not an approval.
 - **as)** ~~The race script `docs/evidence/P3-D3/race_reply_to.sh` is manual and not in `make db-test` or CI.~~ Resolved in P3-D4: race checks are in `scripts/race-db.sh` and CI. A writer now needs UPDATE on `messages` for the reply lock.
 - **at)** Partly resolved in P3-D4: `db-status` and `db-advisors` have been run (remote, read-only). Not run: `install`, `db-create`, `db-start`, `db-stop`. Makefile otherwise not fully exercised, and no `make` target has been run against a project this machine is not linked to (`db-status` and `db-advisors` ran on the linked dev project) (P3-R4 ran `supabase migration list` directly with a placeholder ref: the ref was honoured, then the connection failed). Try `db-create` once on a throwaway project before an FDE relies on it.
-- **au–bh)** P3-R4 findings and P3-D4 / P3-R5 items: see `status.md §3a`.
+- **au–bi)** P3-R4 findings and P3-D4 / P3-R5 items, and remote Auth (bi): see `status.md §3a`.
+- **P3-D5 backlog (G-1 to G-29), owner decisions (O-1 to O-11) and live non-compliance (L-1 to L-7):** see `status.md §3b`.
 
 ## 6. Inconsistencies / gaps found in the docs
 Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** items 1, 2 (embed attribute is now `data-bot-slug`), 3, 5, 6, 8, 9. **Decided 2026-11-03:** item 4 (ADR 0011; UI_SCHEMA §3 updated). **Resolved 2026-11-03 (P0 close):** 7, 10. **Still open:** none.
@@ -137,7 +139,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. Next actions (mirrors `status.md §7`): owner confirms ADR 0016 (§5 ag); owner decides whether to apply migration 007 to the remote dev project (§5 bb); owner reviews the uncommitted `plan.md` admin panel edits (§5 bh); owner confirms paid-tier Gemini billing, fallback, daily cap, jurisdiction and embedding retrieval check (`status.md §3a` n, o, a, b, c). P4 only on owner go-ahead; it must address §5 ae and ac. P5 obligations: §5 av, az and bf.
+4. Next actions (summary of `status.md §7`): owner approves P3-D5 scope (`status.md §3b` O-1) and decides O-2 to O-6 (remote 007 and 008, public signup, remote TOTP, P3.5 scope, doc commit); run P3-D5 (G-1 to G-29), then security review, then apply 007 and 008 to the remote if approved; owner confirms ADR 0016 (§5 ag) and the Gemini, fallback, daily cap, jurisdiction and retrieval items (`status.md §3a` n, o, a, b, c); next phase only on owner go-ahead after P3-D5, order per O-11. P4 obligations §5 ae and ac still apply if P4 comes first. P5 obligations: §5 av, az and bf.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
@@ -151,7 +153,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 - AI role variables follow ADR 0014 (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, optional `<ROLE>_API_KEY`, `<ROLE>_BASE_URL`). See `README.md` and `api/.env.example` / `worker/.env.example`.
 
 ## 9. Related repos
-- `ragbot_adminpanel` — dashboard; consumes this repo's schema and admin API. Coordinate any schema/API change with it and bump the schema version.
+- `ragbot_adminpanel` — dashboard; consumes this repo's schema and admin RPCs (ADR 0017). Coordinate any schema/API change with it and bump the schema version.
 
 ## 10. Handover log
 | Date | From | To | Notes |
@@ -170,3 +172,4 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-05 | Owner / Opus | P4 (on owner go-ahead) | P3-D3 committed as `815cfb9` on `main`. Migration 006 applied to remote dev project `rbejeqwxyxtklehuzibv` (owner-approved; `supabase db push --remote=<ref> --yes`; exit 0; only 006 applied). Remote history 001–006; function definitions and execute grants match local; advisors unchanged. pgTAP and race script ran on local stack only. aj and ak fixed in P3-D3; aq done. P1, P2 and P3 not accepted; P3-D3 not security-reviewed (§5 ar). Docs updated by `haiku-docs` (P3-DOC5). |
 | 2026-11-05 | Owner / Opus | P4 (on owner go-ahead; debug-cycle decision on §3a au–ba) | P1, P2 and P3 accepted by owner. CI runs 41708210161 (`19438c5`) and 41974998511 (`0059991`) completed with success (overall only). Security review P3-R4 (static; no fixes; not an approval): findings §3a au–ba; owner decides on a debug cycle. Uncommitted: `docs/evidence/P3-R4/SUMMARY.md` and these doc updates. Docs updated by `haiku-docs` (P3-DOC6). |
 | 2026-11-06 | Opus (P3-D4, P3-R5) | Owner (007 remote decision §5 bb; `plan.md` review §5 bh; ADR 0016 §5 ag) | Debug cycle P3-D4 (owner-approved) and static review P3-R5 done. Migration 007 local only, not applied to remote. Gates (local): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm gates exit 0. Remote read-only `db-status` and `db-advisors` run. P3-D4 on `main` (commit follows this checkpoint). P3-R5 fixes not re-reviewed (§5 bg). Evidence: `docs/evidence/P3-D4/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC7). |
+| 2026-11-06 | Opus (P3-AUD audit and live check) | Owner (P3-D5 scope, O-1; decisions O-2 to O-11, `status.md §3b`) | P0–P3 audit (AUD-P0, P1, P2, P3-S, AUD-P3-X; static, self-reported) and read-only live check: remote differs from the repo only by 007. P3-D4 committed as `e2a044e`; CI run 42086386622 success, all steps. ADR 0017 and `plan.md` edits uncommitted (O-6). P3.5 added (not started). P3-D5 required before the next phase; no fixes made. Evidence: `docs/evidence/P3-AUD/SUMMARY.md`. Docs updated by `haiku-docs` (P3-DOC8). |

@@ -9,8 +9,8 @@ You are a read-only security reviewer for ragbot_widget. You cannot and must not
 
 Focus areas:
 - Trust boundaries: the browser, host page, documents, retrieved text and model output are untrusted. The server must never accept browser-supplied context, history, roles, system prompts, usage numbers or citations.
-- Auth: HMAC visitor tokens bound to {bot, session, token_version, exp}; admin JWT signature/issuer/audience/expiry plus active membership plus MFA; ownership checks on every route that uses service-role access.
-- Database: RLS enabled everywhere; anon may read only `public_bot_config`; default grants revoked; SECURITY DEFINER functions have a fixed `search_path`; RPC EXECUTE granted only where the matrix allows; private storage bucket.
+- Auth: HMAC visitor tokens bound to {bot, session, token_version, exp}; admin access through Postgres and Storage policies with active membership plus `aal2` (ADR 0015, ADR 0017); ownership checks on every route that uses service-role access.
+- Database: RLS enabled everywhere; anon may read only `public_bot_config`; default grants revoked; SECURITY DEFINER functions have a fixed `search_path`; RPC EXECUTE granted only where the matrix allows; browser-callable functions follow the ADR 0017 rules; private storage bucket.
 - Abuse controls: rate limits, budget reservations and idempotency are atomic in Postgres; a duplicate key never spends twice.
 - Output safety: widget rendering via `textContent` / sanitised Markdown only; citations only from retrieved chunk IDs; contact details only from server config.
 - Caches: `bot_id` and version in every key; no cross-bot or cross-visitor leakage; answer cache is opt-in and first-turn only.
