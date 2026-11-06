@@ -20,7 +20,7 @@ This repo also owns the **shared backend** — Render API, Render worker, and th
 - **P0–P3 audit and live database check (2026-11-06; audits static, read-only and self-reported; live check read-only by Opus):** the remote differs from the repo only by migration 007 (not applied at that check). Docs baseline: ADRs 0001–0017, including ADR 0017 (admin panel direct to Supabase). Evidence: `docs/evidence/P3-AUD/SUMMARY.md`.
 - **P3-D5 and P3.5 built, tested and debugged (2026-11-06; P3.5 accepted by owner):** migrations 008–010 added (007 from P3-D4); migrations 007–010 were later applied to the remote dev project (see below). Admin RPC table in `DATABASE_SCHEMA.md` ("Admin RPCs"). P3.5 not accepted by owner. Final gates and evidence: `docs/evidence/P3-D5/SUMMARY.md`. Backlog outcome and status: `status.md §3b`.
 - **No chat routes, widget behaviour or provider adapters yet.** The P4 API foundation exists on `main` with health routes only (not on `main`; see the P4 bullet below). P2 contracts and P3 migrations are on `main`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
-- **P4 API foundation (2026-11-06):** built, tested and debugged on branch `phase/p4`. Not on `main` until the owner approves. Evidence: `docs/evidence/P4/SUMMARY.md`.
+- **P4 API foundation (2026-11-06):** built, tested and debugged; merged to `main` with owner approval. Evidence: `docs/evidence/P4/SUMMARY.md`.
 - **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
 
@@ -143,7 +143,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. Next actions (summary of `status.md §7`): owner reviews P4 (`docs/evidence/P4/SUMMARY.md`) and approves merging `phase/p4` to `main`; owner turns off public signup and checks TOTP in the dashboard; admin panel runs `contracts:sync`; P5 only on owner go-ahead; ADR 0016 and the Gemini, fallback, cap, jurisdiction and retrieval items stay open.
+4. Next actions (summary of `status.md §7`): owner turns off public signup and checks TOTP in the dashboard; admin panel runs `contracts:sync`; ADR 0016 and the Gemini, fallback, cap, jurisdiction and retrieval items stay open; P5 only on owner go-ahead, with the obligations in the `plan.md` P4 section.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
