@@ -29,15 +29,15 @@ The admin panel never calls the Render API (ADR 0017). It reads under RLS and wr
 | Add version | Same, for an existing document (replacement) |
 | Upload original | Browser to Storage; a policy allows only the path of a `pending_upload` version |
 | Complete upload | Confirm the object exists and queue `index_document`; a duplicate call queues one job |
-| Reindex | Retry or reindex a permitted version |
+| Retry or reindex | Retry a failed version; reindex an active one by creating a new version, so live chunks stay untouched |
 | Document status | Per-document state, batches and safe failure code |
-| Download original | Storage policy for permitted roles; short-lived link |
+| Download original | An RPC writes the audit row, then a Storage policy for permitted roles allows a short-lived link. A stolen session could skip the RPC, so Storage logs are the backstop |
 | Delete document | Exclude retrieval immediately and queue cleanup |
 | Read settings | Safe read that works before publishing, including `bot_id` and upload limits |
-| Update settings | Whitelisted fields only, audited; takes `expected_settings_version` and rejects a stale edit |
+| Update settings | Whitelisted fields only, audited; takes `expected_settings_version` and rejects a stale edit; validates the merged result, so an enabled bot keeps a contact channel and an escalation message per supported language |
 | Delete conversation | Retention-aware deletion workflow |
 
-Failures use stable SQLSTATEs rather than the API error envelope. The worker makes the final check on every file.
+Failures use stable SQLSTATEs rather than the API error envelope. The worker makes the final check on every file. Per-bot quotas limit registrations, uploads and reindexing, and an older version can never replace a newer one.
 
 ## 4. Chat request and event contract
 ```json
@@ -99,7 +99,7 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 - Visitor bearer token binds bot, session, expiry; conversation lookup checks ownership.
 - CORS is not authentication. Do not rely on IP or user-agent as identity.
 - TLS, trusted proxy configuration, canonical IP handling, payload/concurrency/time limits.
-- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority.
+- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority. Ingestion uses a job-based reservation (planned in P3.5), and the worker never calls a provider without one.
 - Disable raw model HTML/remote images. Use safe source links and no inline scripts.
 - Generic untrusted prompts/documents never grant access or change server configuration.
 

@@ -75,9 +75,14 @@ Never put the password inline in a command, commit it, or paste it into chat or 
 
 The migrations create the schema, grants, RLS and the private `knowledge` storage bucket. These steps are not automated:
 
-- Enable TOTP MFA in Supabase Auth. Admins cannot read private data until they have enrolled.
-- Create the first admin and their active membership (`README.md`, "Deployment order per client").
-- Add the client's rows to `bot_profiles`, `public_bot_config` and `client_settings`. Missing limits fail closed, so the bot will not serve until they are set.
+- Set these in Supabase Auth, because `db push` doesn't change Auth settings:
+  - Turn off public signup. Otherwise anyone can create a signed-in account.
+  - Enable TOTP MFA, and leave phone MFA off. Admins cannot read private data until they have enrolled.
+  - Set a minimum password length of at least 12.
+  - Turn on secure password change.
+  - Add the admin panel's domain to the site URL and redirect list.
+- Create the first admin with a short-lived invite link, and their active membership (`README.md`, "Deployment order per client"). Never set a password for them: a password that leaks before TOTP enrolment gives full access.
+- Add the client's rows to `bot_profiles`, `public_bot_config` and `client_settings`. Missing limits fail closed, so the bot will not serve until they are set. Once P3.5 is built, `client_settings` also needs the job attempt limits, and a bot can't be enabled without a contact channel and an escalation message for every supported language.
 
 ## Expected advisor results
 

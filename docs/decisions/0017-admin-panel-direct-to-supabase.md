@@ -20,7 +20,8 @@ The publishable key grants nothing by itself. Access comes from the user's sessi
 - `SECURITY DEFINER` only where the function needs it, and each one is reviewed by `security-reviewer` before any remote apply.
 - Validates its own input. Browser checks are convenience only.
 - Writes `audit_logs` in the same transaction, with `auth.uid()` as the actor.
-- Takes no role, actor or storage path from the browser.
+- Takes no role, actor, storage path or job attempt limit from the browser.
+- Limited by per-bot quotas, because no API rate-limits these calls.
 
 ## What stays on Render
 The API still serves the widget: sessions, chat, retrieval and all AI keys. The worker still runs ingestion, analysis and cleanup. No AI key or secret key ever enters a frontend. Render stays for the widget backend and ingestion: the owner ruled out moving them to Edge Functions on 2026-11-06.
@@ -28,9 +29,11 @@ The API still serves the widget: sessions, chat, retrieval and all AI keys. The 
 ## Consequences
 - **Gains:** the panel keeps working while Render is down or cold-starting, needs no API CORS, and settings no longer wait for P9.
 - **Costs:** validation moves into SQL, so the settings whitelist exists in both SQL and `shared/src/schemas.ts`. A value SQL accepts but Zod rejects could break the widget's config load, so a shared-fixture parity test is required. More privileged functions are reachable from browsers, and advisor warnings will rise accordingly.
-- **Worker takes on more:** the actual content, size and type checks happen when it claims a job, because no API checks the upload first.
+- **Worker takes on more:** the actual content, size and type checks happen when it claims a job, because no API checks the upload first. It also reserves budget before embedding, through a job-based reservation, because `reserve_request_budget` needs a request run.
+- **Downloads are only partly auditable:** an RPC writes the audit row first, but Storage can't write to `audit_logs`, so a stolen session could skip it. Storage logs are the backstop.
+- **Settings need merged validation in SQL:** the API would have done this, so the update RPC must check the merged result.
 - **Errors:** the panel handles SQLSTATEs from RPCs, including stable `RB0xx` codes, instead of the API envelope.
 - **Retired:** the `/v1/admin/*` routes, admin JWT verification in the API, admin CORS and `VITE_API_URL`. Admin route shapes in `shared/src` are removed when P3.5 replaces them.
 
 ## To confirm when built
-Exact Storage permissions for signed URLs and upload progress; reading `storage.objects` from an RPC to confirm an upload exists.
+Exact Storage permissions for signed URLs and upload progress; reading `storage.objects` from an RPC to confirm an upload exists; how a new version gets its file, because `document_versions.storage_path` is unique.

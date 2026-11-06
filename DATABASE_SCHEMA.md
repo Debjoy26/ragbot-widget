@@ -31,9 +31,9 @@ This is one schema in the client-specific Supabase project, not a database per f
 | request_runs | id, bot_id, visitor_session_id, idempotency_key, request_hash, state, reserved_tokens, started_at, finished_at | Unique scoped idempotency key; payload mismatch is rejected. |
 | usage_events | id, bot_id, request_id, job_id, provider, model, operation, input_tokens, output_tokens, estimated_cost, latency_ms, created_at | Include failed/fallback attempts and indexing; estimates reconciled with provider usage. |
 | rate_limit_buckets | key_hash, window_start, window_seconds, request_count, expires_at | Composite uniqueness; atomic increments. No plain IP storage by default. |
-| budget_reservations | id, bot_id, request_id, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. |
+| budget_reservations | id, bot_id, request_id, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. Planned in P3.5: job-based reservations for ingestion, counted toward the same daily cap. |
 | audit_logs | id, actor_user_id, action, resource_type, resource_id, request_id, safe_metadata, created_at | Backend writes; no raw secrets or full document payloads. |
-| client_settings | bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy, feature_flags, updated_at | Internal settings; only explicitly whitelisted fields editable by admin. `handoff_policy`: enabled triggers and repeated-miss threshold (default 2). `cache_policy`: answer-cache opt-in (default off), TTLs, kill switch. |
+| client_settings | bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy, feature_flags, updated_at | Internal settings; only explicitly whitelisted fields editable by admin. `handoff_policy`: enabled triggers and repeated-miss threshold (default 2). `cache_policy`: answer-cache opt-in (default off), TTLs, kill switch. Planned in P3.5: attempt limits for `index_document` and `cleanup`, read by the admin RPCs; a missing value fails closed. |
 | query_embedding_cache | key_hash, embedding_model, embedding, created_at, last_hit_at, expires_at | Key is a hash of model, dimensions and normalised query. Raw query text is not stored. |
 | moderation_cache | key_hash, policy_version, verdict, created_at, expires_at | Key is a hash of moderation model, policy version and normalised text. |
 | answer_cache | id, bot_id, cache_key_hash, language, answer_text, source_refs, handoff_reason, corpus_version, settings_version, prompt_template_version, chat_model, hit_count, created_at, last_hit_at, expires_at | Opt-in per client. First-turn, completed, moderated answers only. Contact details are never cached. Cited versions are re-checked as active on read. No session or visitor identifiers. |
@@ -41,11 +41,11 @@ This is one schema in the client-specific Supabase project, not a database per f
 ## Database operations
 - `match_document_chunks`: bounded similarity query; filters by bot, active document version, deleted state, and disclosure policy. Execute by the backend role only, not `anon`.
 - `claim_jobs`: atomically claim due work using transaction/row locks and a lease. Expired leases become recoverable.
-- `activate_document_version`: atomically switch the active pointer and increment `corpus_version` after all expected chunks exist and validation succeeds.
-- `reserve_request_budget`: atomically check caps and reserve capacity before external calls.
+- `activate_document_version`: atomically switch the active pointer and increment `corpus_version` after all expected chunks exist and validation succeeds. Planned in P3.5: refuse a version older than the active one, which it allows today.
+- `reserve_request_budget`: atomically check caps and reserve capacity before external calls. It needs a request run, so the worker can't use it for ingestion; P3.5 adds a job-based reservation.
 - `record_rate_limit_attempt`: atomically increment a bounded window.
 - `mark_document_deleted`: immediately exclude retrieval, increment `corpus_version`, then enqueue cleanup.
-- Admin RPCs (`plan.md` P3.5, ADR 0017, not built): document registration, versions, upload completion, reindex, delete, status, settings read and update, conversation delete. Each checks `is_active_member_mfa` first, validates its own input and writes `audit_logs` in the same transaction.
+- Admin RPCs (`plan.md` P3.5, ADR 0017, not built): document registration, versions, upload completion, reindex, delete, status, settings read and update, conversation delete. Each checks `is_active_member_mfa` first, validates its own input and writes `audit_logs` in the same transaction. Settings are validated as a merged result, and calls are limited by per-bot quotas.
 - `knowledge_gaps`: aggregate unanswered questions by `handoff_reason` and frequency for active admins/analysts; bounded and date-filtered.
 - Never expose arbitrary SQL execution or unbounded search RPCs.
 - Functions using SECURITY DEFINER require a fixed safe search path, explicit authorization, and restricted EXECUTE grants. Prefer SECURITY INVOKER where feasible.
@@ -122,7 +122,7 @@ Ambiguous cells above are resolved fail-closed:
 - Uploads go directly from the admin panel under `storage.objects` policies that allow only the path of a `pending_upload` version (ADR 0017; planned in P3.5, not built).
 - Browser cannot overwrite active originals or upload arbitrary paths.
 - The worker validates final object size and content before indexing.
-- Original-file downloads are allowed only to authorised admins by Storage policy, with short-lived links.
+- Original-file downloads are allowed only to authorised admins by Storage policy, with short-lived links, after an RPC writes the audit row. Storage can't write to `audit_logs`, so a stolen session could skip that RPC; Storage logs are the backstop.
 - Delete original objects through the delete RPC and the worker cleanup job; do not let the browser orphan active chunks.
 
 ## Indexes and integrity
