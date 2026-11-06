@@ -1,7 +1,7 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-06**
-> Overall: **🟡 P0, P1, P2, P3 and P3.5 accepted by owner. P3-D5 and P3.5 built, tested and debugged locally; awaiting owner review. Migrations 001–010 applied to the remote dev project 2026-11-06 (§2). Public signup still on, TOTP unknown (§3a bj). P3.5 accepted by owner 2026-11-06. P4 built, tested and debugged on branch `phase/p4`, awaiting owner approval before `main`.**
+> Overall: **🟡 P0 to P4 approved by owner and on `main`. Migrations 001–010 applied to the remote dev project 2026-11-06 (§2). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
 > Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
@@ -17,7 +17,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P2 | Shared contracts | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (schema unit tests incl. negatives; browser-safe build). On `main` @ `19438c5` (code `6b24002`). Contract changes: `EmbeddingProvider.embed` returns `{vectors, inputTokens}`; `ModerationResult` has usage; `temperature` removed from `ChatStreamRequest`. Final gates: unit 157 passed, 0 failed, 0 skipped; all npm gates exit 0. Open: §3a t, af |
 | P3 | Database & storage migrations | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9). On `main` @ `19438c5` (code `6b24002`). Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`) → P3-R3 (2026-11-05, static) → P3-D3 (2026-11-05, committed `815cfb9`; R3-1, R3-2, R3-3 fixed; migration 006, applied to remote dev project 2026-11-05) → P3-R4 (2026-11-05, static; no fixes made; not an approval; findings au–ba) → P3-D4 (committed as `e2a044e`); migration 007 later applied to the remote; outcomes §3a au–bh) → P3-R5 (static; P3-D4 fixes not re-reviewed, §3a bg). Final P3-D4 gates (local, Opus reruns): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm lint, format:check, typecheck, build, test exit 0. Final pgTAP on `6b24002`: 17 files, 1465 passed, 0 failed; `db lint` clean. P3-D3 local gates (recorded before commit `815cfb9`): pgTAP 18 files, 1485 passed, 0 failed; unit 157 passed; `db lint` clean; lint, format:check, typecheck, build exit 0. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Migrations 001–006 applied to remote dev project 2026-11-05 (§2). D1 validation check pending (§3a c). Open: §3a ac (partly), ad, ae, af, ag, ah, am, an, ao, at (partly), av, aw (partly), az, bb–bh. Resolved: ai, aj–al, ap, aq, ar, as, au, ax, ay, ba. Audit gaps (§3b) closed in P3-D5, except G-17 and G-28 (partly) and L-1, L-6 (open on the remote); migrations 007–010 applied to the remote 2026-11-06. |
 | P3.5 | Admin data layer (ADR 0017) | ✅ | Accepted by owner 2026-11-06. On `main` and on the remote dev project (migrations 009, 010). Evidence: `docs/evidence/P3-D5/SUMMARY.md`, `docs/evidence/P3-D5-remote/SUMMARY.md`. Open: §3a bj to bm |
-| P4 | API foundation | 🟡 | Built, tested and debugged on branch `phase/p4`; awaiting owner approval before `main`. Evidence `docs/evidence/P4/SUMMARY.md` |
+| P4 | API foundation | ✅ | Merge approved by owner 2026-11-06; on `main`. Evidence `docs/evidence/P4/SUMMARY.md`. Open: §3a bn, bo |
 | P5 | Visitor sessions & abuse controls | ⬜ | Limits (ADR 0007) and Turnstile (ADR 0010) decided; production daily cap open, fails closed (§3a a) |
 | P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
 | P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c) |
@@ -291,11 +291,10 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner reviews P4 (`docs/evidence/P4/SUMMARY.md`) and approves merging `phase/p4` to `main`.
-2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
-3. Admin panel runs `contracts:sync` (§3a bm).
-4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
-5. P5 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae, ac, av, az, bf.
+1. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
+2. Admin panel runs `contracts:sync` (§3a bm).
+3. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
+4. P5 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae, ac, av, az, bf.
 
 ## 8. Change log
 | Date | Change |
@@ -320,6 +319,7 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | 2026-11-06 | Remote apply (owner-approved): migrations 007–010 on dev project; schema matches local; advisors as expected. Signup still on, TOTP unknown. Evidence: `docs/evidence/P3-D5-remote/SUMMARY.md`. Recorded by Opus. |
 | 2026-11-06 | Owner accepted P3.5 and started P4 (branch `phase/p4`, not on `main` until owner approval). Recorded by Opus. |
 | 2026-11-06 | P4 API foundation built, tested and debugged on `phase/p4`; not on `main`, not pushed; awaiting owner approval. Final gates in §2; open items §3a bn, bo. Evidence: `docs/evidence/P4/SUMMARY.md`. Docs updated by `haiku-docs` (P4-DOC1). |
+| 2026-11-06 | Owner approved merging P4; `phase/p4` merged to `main`. Recorded by Opus. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
