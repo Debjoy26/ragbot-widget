@@ -199,21 +199,117 @@ describe('AI key placeholders (B-10)', () => {
   });
 });
 
-describe('timeouts must fit inside REQUEST_TIMEOUT_MS (B-10)', () => {
+describe('timeout relations (B-10, P4-D3 R-6)', () => {
   it.each([
-    ['READY_TIMEOUT_MS', '5000'],
-    ['READY_TIMEOUT_MS', '6000'],
-    ['DB_TIMEOUT_MS', '5000'],
-    ['DB_TIMEOUT_MS', '9999'],
-  ])('rejects %s = %s against REQUEST_TIMEOUT_MS = 5000', (name, value) => {
-    const err = failure({ [name]: value });
-    expect(err.variables).toContain(name);
-    expect(err.variables).toContain('REQUEST_TIMEOUT_MS');
+    ['5000', '5000'],
+    ['6000', '5000'],
+    ['5001', '5000'],
+  ])('rejects READY_TIMEOUT_MS = %s against CONNECTION_TIMEOUT_MS = %s', (ready, conn) => {
+    const err = failure({ READY_TIMEOUT_MS: ready, CONNECTION_TIMEOUT_MS: conn });
+    expect(err.variables).toEqual(['READY_TIMEOUT_MS', 'CONNECTION_TIMEOUT_MS']);
   });
 
-  it('accepts a value one below', () => {
+  it('accepts READY_TIMEOUT_MS one below CONNECTION_TIMEOUT_MS', () => {
     expect(() =>
-      loadConfig(validEnv({ READY_TIMEOUT_MS: '4999', DB_TIMEOUT_MS: '4999' })),
+      loadConfig(validEnv({ READY_TIMEOUT_MS: '4999', CONNECTION_TIMEOUT_MS: '5000' })),
     ).not.toThrow();
+  });
+
+  it('no longer compares READY_TIMEOUT_MS or DB_TIMEOUT_MS with REQUEST_TIMEOUT_MS', () => {
+    // REQUEST_TIMEOUT_MS only bounds receiving a request, so a longer probe or database
+    // deadline is not an error on that account.
+    expect(() =>
+      loadConfig(
+        validEnv({
+          REQUEST_TIMEOUT_MS: '1000',
+          READY_TIMEOUT_MS: '3000',
+          DB_TIMEOUT_MS: '9000',
+          CONNECTION_TIMEOUT_MS: '60000',
+        }),
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('provider keys are non-enumerable inside config.ai (P4-D3 R-9, R-10)', () => {
+  const config = loadConfig(validEnv());
+  const roles = () => [
+    config.ai.chatPrimary,
+    config.ai.embedding,
+    config.ai.moderation,
+    ...(config.ai.chatFallback === null ? [] : [config.ai.chatFallback]),
+  ];
+
+  it('JSON.stringify(config.ai) shows no key', () => {
+    const text = JSON.stringify(config.ai);
+    expect(text).not.toContain(FAKE_AI_KEY);
+    expect(text).not.toContain('apiKey');
+    expect(JSON.parse(text)).toMatchObject({ chatPrimary: { provider: 'gemini' } });
+  });
+
+  it('util.inspect(config.ai) and of each role shows no key', () => {
+    for (const value of [config.ai, ...roles()]) {
+      for (const text of [inspect(value), inspect(value, { depth: 10, showHidden: false })]) {
+        expect(text).not.toContain(FAKE_AI_KEY);
+      }
+    }
+  });
+
+  it('logging config.ai logs no key', () => {
+    const capture = new LogCapture();
+    const log = Fastify({ logger: { ...buildLoggerOptions('info'), stream: capture.stream } }).log;
+    log.info({ ai: config.ai }, 'ai');
+    log.info(config.ai, 'ai at top level');
+    log.info({ role: config.ai.chatPrimary }, 'role');
+    expect(capture.text).not.toContain(FAKE_AI_KEY);
+  });
+
+  it('every role still hands its key to a provider by direct access', () => {
+    for (const role of roles()) expect(role.apiKey).toBe(FAKE_AI_KEY);
+    expect(Object.keys(config.ai.chatPrimary)).not.toContain('apiKey');
+    expect(Object.getOwnPropertyDescriptor(config.ai.chatPrimary, 'apiKey')).toMatchObject({
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  });
+
+  it('the rest of each role stays visible and frozen', () => {
+    expect(config.ai.embedding).toMatchObject({ provider: 'gemini', dimensions: 1536 });
+    for (const role of roles()) expect(Object.isFrozen(role)).toBe(true);
+    expect(Object.isFrozen(config.ai)).toBe(true);
+    expect(() => {
+      (config.ai.chatPrimary as { apiKey: string }).apiKey = 'x';
+    }).toThrow();
+  });
+
+  it('a configured fallback hides its key too', () => {
+    const withFallback = loadConfig(
+      validEnv({
+        CHAT_FALLBACK_PROVIDER: 'gemini',
+        CHAT_FALLBACK_MODEL: 'fake-fallback-model',
+      }),
+    );
+    const fb = withFallback.ai.chatFallback;
+    expect(fb).not.toBeNull();
+    expect(JSON.stringify(fb)).not.toContain(FAKE_AI_KEY);
+    expect(fb?.apiKey).toBe(FAKE_AI_KEY);
+  });
+
+  it('{ ...config } carries no secret and no ai (R-10)', () => {
+    const spread = { ...loadConfig(validEnv({ VISITOR_TOKEN_SECRET_PREVIOUS: PREVIOUS })) };
+    const text = JSON.stringify(spread) + inspect(spread, { depth: 10 });
+    for (const s of SECRET_VALUES) expect(text).not.toContain(s);
+    for (const hidden of [
+      'supabaseSecretKey',
+      'visitorTokenSecret',
+      'visitorTokenSecretPrevious',
+      'turnstileSecretKey',
+      'ai',
+    ]) {
+      expect(Object.keys(spread)).not.toContain(hidden);
+      expect(hidden in spread).toBe(false);
+    }
+    expect(spread).toMatchObject({ port: 8080 });
   });
 });

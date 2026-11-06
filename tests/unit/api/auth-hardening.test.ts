@@ -78,12 +78,21 @@ describe('token lifetime (A-6)', () => {
     expect(auth.verifyToken(signed({ exp: T0 + TTL })).iat).toBe(T0);
   });
 
-  it('refuses exp - iat one second above the configured TTL', () => {
-    expect(codeOf(() => auth.verifyToken(signed({ exp: T0 + TTL + 1 })))).toBe('UNAUTHORIZED');
+  it('refuses exp - iat one second above the configured TTL as SESSION_EXPIRED', () => {
+    expect(codeOf(() => auth.verifyToken(signed({ exp: T0 + TTL + 1 })))).toBe('SESSION_EXPIRED');
   });
 
-  it('refuses a ten year token signed with the right secret', () => {
+  it('refuses a ten year token signed with the right secret as SESSION_EXPIRED', () => {
     expect(codeOf(() => auth.verifyToken(signed({ exp: T0 + 10 * 365 * 86_400 })))).toBe(
+      'SESSION_EXPIRED',
+    );
+  });
+
+  it('an over-TTL token with an invalid signature stays UNAUTHORIZED', () => {
+    const [v, payload, sig] = signed({ exp: T0 + TTL + 1 }).split('.') as [string, string, string];
+    const flipped = `${sig.slice(0, -2)}${sig.endsWith('AA') ? 'BB' : 'AA'}`;
+    expect(codeOf(() => auth.verifyToken(`${v}.${payload}.${flipped}`))).toBe('UNAUTHORIZED');
+    expect(codeOf(() => auth.verifyToken(signed({ exp: T0 + TTL + 1 }, THIRD)))).toBe(
       'UNAUTHORIZED',
     );
   });
@@ -130,7 +139,7 @@ describe('secret rotation (A-6)', () => {
   it('a previous-secret token is still subject to the lifetime limits', () => {
     const auth = makeAuth({ previousSecret: PREVIOUS });
     expect(codeOf(() => auth.verifyToken(signed({ exp: T0 + TTL + 1 }, PREVIOUS)))).toBe(
-      'UNAUTHORIZED',
+      'SESSION_EXPIRED',
     );
     expect(
       codeOf(() => auth.verifyToken(signed({ iat: T0 + 61, exp: T0 + 61 + TTL }, PREVIOUS))),

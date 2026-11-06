@@ -1,6 +1,6 @@
 import { createApp } from './app.js';
 import { ConfigError, type AppConfig } from './lib/config.js';
-import { errorClassName, forceExitDelayMs } from './lib/lifecycle.js';
+import { armForceExit, errorClassName } from './lib/lifecycle.js';
 
 let app: ReturnType<typeof createApp>['app'];
 let config: AppConfig;
@@ -24,13 +24,12 @@ function shutdown(signal: string): void {
   // First: report not-ready at once, so the load balancer stops routing here while we drain.
   app.beginDrain();
   app.log.info({ signal }, 'shutting down');
-  // A request already in flight can run up to REQUEST_TIMEOUT_MS and a chat answer up to
-  // CHAT_DEADLINE_MS, so the longer of the two (plus a margin) bounds the drain.
-  const force = setTimeout(() => {
+  // A chat answer can run up to CHAT_DEADLINE_MS (REQUEST_TIMEOUT_MS only bounds receiving a
+  // request), so the longer of the two (plus a margin, capped at the timer limit) bounds the drain.
+  armForceExit(config, () => {
     app.log.error('graceful shutdown timed out');
     process.exit(1);
-  }, forceExitDelayMs(config));
-  force.unref();
+  });
   app.close().then(
     () => process.exit(0),
     () => process.exit(1),

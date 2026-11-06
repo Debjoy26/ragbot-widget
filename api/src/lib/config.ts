@@ -9,9 +9,11 @@ import { loadApiAiConfig, ProviderConfigError, type ApiAiConfig, type Env } from
 export interface AppConfig {
   readonly supabaseUrl: string;
   /**
-   * Secrets (this key, the two token secrets, the Turnstile key) and `ai` (which holds provider
-   * keys) are NON-ENUMERABLE: `JSON.stringify(config)`, `util.inspect(config)`, spreading the
-   * config and logging it show none of them. Direct property access still works.
+   * Secrets (this key, the two token secrets, the Turnstile key) and `ai` are NON-ENUMERABLE:
+   * `JSON.stringify(config)`, `util.inspect(config)`, spreading the config and logging it show
+   * none of them. Inside `ai`, every role's `apiKey` is non-enumerable too, so logging
+   * `config.ai` or a role prints no key. Direct property access still works, but spreading a role
+   * (`{ ...config.ai.embedding }`) drops its `apiKey`: pass the role object itself to a provider.
    */
   readonly supabaseSecretKey: string;
   readonly visitorTokenSecret: string;
@@ -179,6 +181,28 @@ function placeholderKeyVariables(ai: ApiAiConfig, env: Env): string[] {
   return names.length > 0 ? names : ['AI provider API key'];
 }
 
+/** A frozen copy of a provider role whose `apiKey` is readable but not enumerable. */
+function hideApiKey<T extends { readonly apiKey: string }>(role: T): T {
+  const { apiKey, ...rest } = role;
+  const copy = { ...rest };
+  Object.defineProperty(copy, 'apiKey', {
+    value: apiKey,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return Object.freeze(copy) as unknown as T;
+}
+
+function hideAiKeys(ai: ApiAiConfig): ApiAiConfig {
+  return Object.freeze({
+    chatPrimary: hideApiKey(ai.chatPrimary),
+    chatFallback: ai.chatFallback === null ? null : hideApiKey(ai.chatFallback),
+    embedding: hideApiKey(ai.embedding),
+    moderation: hideApiKey(ai.moderation),
+  });
+}
+
 /** Validates the environment and returns a deeply frozen config. Throws ConfigError. */
 export function loadConfig(env: Env): AppConfig {
   const parsed = envSchema.safeParse(env);
@@ -204,12 +228,13 @@ export function loadConfig(env: Env): AppConfig {
     throw new ConfigError(placeholders, `Invalid AI configuration: ${placeholders.join(', ')}`);
   }
 
-  // Each deadline must fit inside the request timeout, or it could never fire first.
-  const tooLong = (['READY_TIMEOUT_MS', 'DB_TIMEOUT_MS'] as const).filter(
-    (name) => v[name] >= v.REQUEST_TIMEOUT_MS,
-  );
-  if (tooLong.length > 0) {
-    const names = [...tooLong, 'REQUEST_TIMEOUT_MS'];
+  // CONNECTION_TIMEOUT_MS is the idle-socket timeout: while a handler runs and writes nothing, the
+  // socket is idle, and Node destroys it when the timeout passes. A readiness probe that may run
+  // as long as READY_TIMEOUT_MS therefore needs a shorter deadline than the socket's, or its 503
+  // would never reach the client. (REQUEST_TIMEOUT_MS only bounds receiving the request, so it
+  // says nothing about handler time and is not compared.)
+  if (v.READY_TIMEOUT_MS >= v.CONNECTION_TIMEOUT_MS) {
+    const names = ['READY_TIMEOUT_MS', 'CONNECTION_TIMEOUT_MS'];
     throw new ConfigError(names, `Invalid configuration: ${names.join(', ')} (must be shorter)`);
   }
 
@@ -246,7 +271,7 @@ export function loadConfig(env: Env): AppConfig {
     visitorTokenSecret: v.VISITOR_TOKEN_SECRET,
     visitorTokenSecretPrevious: v.VISITOR_TOKEN_SECRET_PREVIOUS,
     turnstileSecretKey: v.TURNSTILE_SECRET_KEY,
-    ai: deepFreeze(ai),
+    ai: hideAiKeys(ai),
   };
   for (const [name, value] of Object.entries(hidden)) {
     Object.defineProperty(config, name, {

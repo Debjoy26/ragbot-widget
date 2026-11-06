@@ -176,11 +176,15 @@ export function createVisitorAuth(options: CreateVisitorAuthOptions): VisitorAut
     const parsed = visitorTokenClaimsSchema.safeParse(json);
     if (!parsed.success) throw unauthorized();
 
-    // 4. Lifetime, only for a token we signed. A token dated in the future, or one that lives
-    // longer than the configured TTL, was not produced by this service as configured.
+    // 4. Lifetime, only for a token we signed. A token dated in the future was not produced by
+    // this service. One that lives longer than the configured TTL was, but under an older, longer
+    // TTL: it is refused as SESSION_EXPIRED (not UNAUTHORIZED) so the widget starts a new session
+    // instead of treating the visitor as unauthorised after the TTL was cut.
     const current = nowSeconds();
     if (parsed.data.iat > current + MAX_IAT_SKEW_SECONDS) throw unauthorized();
-    if (parsed.data.exp - parsed.data.iat > ttlSeconds) throw unauthorized();
+    if (parsed.data.exp - parsed.data.iat > ttlSeconds) {
+      throw new VisitorAuthError('SESSION_EXPIRED');
+    }
     if (isTokenExpired(parsed.data, current)) throw new VisitorAuthError('SESSION_EXPIRED');
     return parsed.data;
   }

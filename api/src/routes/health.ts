@@ -6,7 +6,7 @@ export interface HealthDeps {
   readonly readyTimeoutMs: number;
   /** True once shutdown has begun: the server answers not-ready without touching the database. */
   readonly isDraining: () => boolean;
-  /** Clock in epoch milliseconds. Injected for tests only. */
+  /** Monotonic clock in milliseconds (default `performance.now`). Injected for tests only. */
   readonly now?: () => number;
 }
 
@@ -42,7 +42,9 @@ async function probe(db: DbPing, timeoutMs: number): Promise<ProbeResult> {
 
 /** Responses carry no detail: no versions, hosts, error text or dependency names. */
 export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): void {
-  const now = deps.now ?? Date.now;
+  // Monotonic, not wall-clock: a backward step of the system clock (NTP, manual change) must not
+  // keep a cached result alive longer than READY_CACHE_MS.
+  const now = deps.now ?? (() => performance.now());
   let inflight: Promise<ProbeResult> | undefined;
   let cached: { readonly at: number; readonly result: ProbeResult } | undefined;
 

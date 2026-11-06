@@ -22,7 +22,7 @@ export interface ServerDeps {
   readonly config: AppConfig;
   readonly db: DbPing;
   readonly logger?: FastifyServerOptions['logger'];
-  /** Clock in epoch milliseconds for the readiness cache. Injected for tests only. */
+  /** Monotonic clock in milliseconds for the readiness cache. Injected for tests only. */
   readonly now?: () => number;
 }
 

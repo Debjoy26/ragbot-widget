@@ -231,30 +231,57 @@ const CLIENT_ERROR_STATUS: Readonly<Record<string, number>> = {
   HPE_HEADER_OVERFLOW: 431,
 };
 
+/** What the handler needs from the Fastify instance it is bound to (Fastify binds `this`). */
+interface ClientErrorLogger {
+  readonly log?: { readonly warn: (fields: object, msg: string) => void };
+}
+
 /**
  * Handler for `clientError` (a request that never became a request: bad request line, oversized
  * headers, header timeout). Answers with a static envelope and closes. Nothing from the
- * client or from the parser's error is echoed, and no route runs.
+ * client or from the parser's error is echoed, and no route runs. Like Node's default handler it
+ * writes nothing if bytes have already been sent on the socket (a response is under way) or the
+ * connection was reset, and only destroys the socket.
+ *
+ * Logging: the error code only (a parser code such as `HPE_INVALID_METHOD`, kept only when it
+ * looks like one), never the message, request line, headers or any other client input. It is an
+ * abuse signal, not a diagnostic.
  */
-export function clientErrorHandler(err: Error & { code?: string }, socket: Duplex): void {
-  // A reset connection has nobody to answer.
-  if (err.code === 'ECONNRESET' || socket.destroyed) return;
-  const status = (err.code !== undefined ? CLIENT_ERROR_STATUS[err.code] : undefined) ?? 400;
-  if (socket.writable) {
-    const id = randomUUID();
-    const body = JSON.stringify({ code: 'INVALID_REQUEST', request_id: id });
-    socket.write(
-      `HTTP/1.1 ${String(status)} ${STATUS_CODES[status] ?? 'Bad Request'}\r\n` +
-        'Content-Type: application/json; charset=utf-8\r\n' +
-        `Content-Length: ${String(Buffer.byteLength(body))}\r\n` +
-        `X-Request-Id: ${id}\r\n` +
-        'X-Content-Type-Options: nosniff\r\n' +
-        'Cache-Control: no-store\r\n' +
-        'Connection: close\r\n\r\n' +
-        body,
-    );
+export function clientErrorHandler(
+  this: ClientErrorLogger | undefined,
+  err: Error & { code?: string },
+  socket: Duplex,
+): void {
+  if (socket.destroyed) return;
+  const code =
+    typeof err.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(err.code) ? err.code : 'unknown';
+  try {
+    this?.log?.warn({ client_error_code: code }, 'client error');
+  } catch {
+    // logging must never keep the socket open
   }
-  socket.destroy();
+  const bytesWritten = (socket as { bytesWritten?: unknown }).bytesWritten;
+  const started = typeof bytesWritten === 'number' && bytesWritten > 0;
+  // A reset connection has nobody to answer; a response already under way must not be corrupted.
+  if (err.code === 'ECONNRESET' || started || !socket.writable) {
+    socket.destroy();
+    return;
+  }
+  const status = (err.code !== undefined ? CLIENT_ERROR_STATUS[err.code] : undefined) ?? 400;
+  const id = randomUUID();
+  const body = JSON.stringify({ code: 'INVALID_REQUEST', request_id: id });
+  // end(), not write() then destroy(): queued bytes are flushed before the socket closes.
+  socket.end(
+    `HTTP/1.1 ${String(status)} ${STATUS_CODES[status] ?? 'Bad Request'}\r\n` +
+      'Content-Type: application/json; charset=utf-8\r\n' +
+      `Content-Length: ${String(Buffer.byteLength(body))}\r\n` +
+      `X-Request-Id: ${id}\r\n` +
+      'X-Content-Type-Options: nosniff\r\n' +
+      'Cache-Control: no-store\r\n' +
+      'Connection: close\r\n\r\n' +
+      body,
+    () => socket.destroy(),
+  );
 }
 
 /** Installs the global error and not-found handlers. */

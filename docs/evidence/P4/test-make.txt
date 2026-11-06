@@ -30,22 +30,22 @@ ok   - check-confirm CONFIRM_REF injection payload 8 refused, no marker
 ok   - check-confirm CONFIRM_REF injection payload 9 refused, no marker
 ok   - check-confirm CONFIRM_REF injection payload 10 refused, no marker
 ok   - exported hostile PROJECT_REF with make -e: refused, no marker
-ok   - check-ref refuses make function: $(shell touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - check-confirm refuses make function in CONFIRM_REF: $(shell touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - help refuses make function: $(shell touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - exported make function refused: $(shell touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - check-ref refuses make function: $(file >/tmp/tmp.dZGTWhhjYD/marker,x)
-ok   - check-confirm refuses make function in CONFIRM_REF: $(file >/tmp/tmp.dZGTWhhjYD/marker,x)
-ok   - help refuses make function: $(file >/tmp/tmp.dZGTWhhjYD/marker,x)
-ok   - exported make function refused: $(file >/tmp/tmp.dZGTWhhjYD/marker,x)
-ok   - check-ref refuses make function: $(eval $(shell touch /tmp/tmp.dZGTWhhjYD/marker))
-ok   - check-confirm refuses make function in CONFIRM_REF: $(eval $(shell touch /tmp/tmp.dZGTWhhjYD/marker))
-ok   - help refuses make function: $(eval $(shell touch /tmp/tmp.dZGTWhhjYD/marker))
-ok   - exported make function refused: $(eval $(shell touch /tmp/tmp.dZGTWhhjYD/marker))
-ok   - check-ref refuses make function: $(call shell,touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - check-confirm refuses make function in CONFIRM_REF: $(call shell,touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - help refuses make function: $(call shell,touch /tmp/tmp.dZGTWhhjYD/marker)
-ok   - exported make function refused: $(call shell,touch /tmp/tmp.dZGTWhhjYD/marker)
+ok   - check-ref refuses make function: $(shell touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(shell touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - help refuses make function: $(shell touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - exported make function refused: $(shell touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - check-ref refuses make function: $(file >/tmp/tmp.weT1dRDNV7/marker,x)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(file >/tmp/tmp.weT1dRDNV7/marker,x)
+ok   - help refuses make function: $(file >/tmp/tmp.weT1dRDNV7/marker,x)
+ok   - exported make function refused: $(file >/tmp/tmp.weT1dRDNV7/marker,x)
+ok   - check-ref refuses make function: $(eval $(shell touch /tmp/tmp.weT1dRDNV7/marker))
+ok   - check-confirm refuses make function in CONFIRM_REF: $(eval $(shell touch /tmp/tmp.weT1dRDNV7/marker))
+ok   - help refuses make function: $(eval $(shell touch /tmp/tmp.weT1dRDNV7/marker))
+ok   - exported make function refused: $(eval $(shell touch /tmp/tmp.weT1dRDNV7/marker))
+ok   - check-ref refuses make function: $(call shell,touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(call shell,touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - help refuses make function: $(call shell,touch /tmp/tmp.weT1dRDNV7/marker)
+ok   - exported make function refused: $(call shell,touch /tmp/tmp.weT1dRDNV7/marker)
 ok   - db-plan -i with a bad ref stops before the CLI
 ok   - db-status -i with a bad ref stops before the CLI
 ok   - db-advisors -i with a bad ref stops before the CLI

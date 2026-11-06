@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { Duplex } from 'node:stream';
 import {
@@ -75,10 +75,24 @@ describe('clientErrorHandler (A-3)', () => {
   const errorOf = (code: string) =>
     Object.assign(new Error('parser said: GET /secret-path garbage'), { code });
 
-  function run(code: string): { text: string; socket: FakeSocket } {
+  type Handler = (this: unknown, err: Error & { code?: string }, socket: Duplex) => void;
+
+  /** Runs the handler and waits for the socket to close (it closes after the response flushes). */
+  async function run(
+    code: string,
+    setup: (socket: FakeSocket) => void = () => undefined,
+    log?: { warn: (fields: object, msg: string) => void },
+  ): Promise<{ text: string; socket: FakeSocket }> {
     const socket = new FakeSocket();
     socket.on('error', () => undefined);
-    clientErrorHandler(errorOf(code), socket);
+    setup(socket);
+    const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+    (clientErrorHandler as Handler).call(
+      log === undefined ? undefined : { log },
+      errorOf(code),
+      socket,
+    );
+    await closed;
     return { text: socket.written, socket };
   }
 
@@ -87,8 +101,8 @@ describe('clientErrorHandler (A-3)', () => {
     ['HPE_HEADER_OVERFLOW', 431],
     ['ERR_HTTP_REQUEST_TIMEOUT', 408],
     ['SOMETHING_ELSE', 400],
-  ])('answers %s with %i, a static envelope and closes', (code, status) => {
-    const { text, socket } = run(code);
+  ])('answers %s with %i, a static envelope and closes', async (code, status) => {
+    const { text, socket } = await run(code);
     expect(text.startsWith(`HTTP/1.1 ${String(status)} `)).toBe(true);
     const body = JSON.parse(text.slice(text.indexOf('\r\n\r\n') + 4)) as Record<string, string>;
     expect(Object.keys(body).sort()).toEqual(['code', 'request_id']);
@@ -102,9 +116,76 @@ describe('clientErrorHandler (A-3)', () => {
     expect(socket.destroyed).toBe(true);
   });
 
-  it('writes nothing for a reset connection', () => {
-    const { text } = run('ECONNRESET');
+  it('writes nothing for a reset connection and destroys the socket', async () => {
+    const { text, socket } = await run('ECONNRESET');
     expect(text).toBe('');
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it('writes nothing, and only destroys, when bytes were already sent on the socket', async () => {
+    const { text, socket } = await run('HPE_INVALID_METHOD', (s) => {
+      Object.defineProperty(s, 'bytesWritten', { value: 17 });
+    });
+    expect(text).toBe('');
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it('writes nothing to a socket that is no longer writable, and destroys it', async () => {
+    const { text, socket } = await run('HPE_INVALID_METHOD', (s) => {
+      Object.defineProperty(s, 'writable', { value: false });
+    });
+    expect(text).toBe('');
+    expect(socket.destroyed).toBe(true);
+  });
+
+  it('does nothing at all to a socket that is already destroyed', () => {
+    const socket = new FakeSocket();
+    socket.on('error', () => undefined);
+    socket.destroy();
+    const end = vi.spyOn(socket, 'end');
+    const warn = vi.fn();
+    (clientErrorHandler as Handler).call({ log: { warn } }, errorOf('HPE_INVALID_METHOD'), socket);
+    expect(end).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('sends the response with end() and does not destroy before it has flushed', () => {
+    const socket = new FakeSocket();
+    socket.on('error', () => undefined);
+    const end = vi.spyOn(socket, 'end');
+    const destroy = vi.spyOn(socket, 'destroy');
+    (clientErrorHandler as Handler).call(undefined, errorOf('HPE_INVALID_METHOD'), socket);
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(String(end.mock.calls[0]?.[0])).toMatch(/^HTTP\/1\.1 400 /);
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('logs the error code only: no message, no client input', async () => {
+    const warn = vi.fn();
+    await run('HPE_INVALID_METHOD', undefined, { warn });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, msg] = warn.mock.calls[0] as [Record<string, unknown>, string];
+    expect(fields).toEqual({ client_error_code: 'HPE_INVALID_METHOD' });
+    expect(JSON.stringify([fields, msg])).not.toMatch(/secret-path|parser said/);
+  });
+
+  it('does not log a code that does not look like an error code', async () => {
+    const warn = vi.fn();
+    const socket = new FakeSocket();
+    const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+    const err = Object.assign(new Error('x'), { code: 'GET /secret-path HTTP/1.1' });
+    (clientErrorHandler as Handler).call({ log: { warn } }, err, socket);
+    await closed;
+    expect(warn).toHaveBeenCalledWith({ client_error_code: 'unknown' }, 'client error');
+  });
+
+  it('still closes the socket when logging throws', async () => {
+    const { socket } = await run('HPE_INVALID_METHOD', undefined, {
+      warn: () => {
+        throw new Error('log sink down');
+      },
+    });
+    expect(socket.destroyed).toBe(true);
   });
 });
 
@@ -370,6 +451,28 @@ describe('readiness: single flight, short cache, draining (A-8, B-7)', () => {
       expect(res.statusCode).toBe(503);
     }
     expect(state.calls).toBe(1);
+  });
+
+  it('uses a monotonic clock: a backward wall-clock step does not extend the cache', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] });
+    try {
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
+      const { state, db } = counted(1);
+      // No injected clock: the default is the one under test.
+      app = buildServer({
+        config: testConfig({ LOG_LEVEL: 'silent', READY_TIMEOUT_MS: '500' }),
+        db,
+      });
+      await app.inject({ method: 'GET', url: '/health/ready' });
+      expect(state.calls).toBe(1);
+      // The wall clock jumps back an hour; the monotonic clock then advances past the window.
+      vi.setSystemTime(new Date('2030-01-01T00:00:00Z').getTime() - 3_600_000);
+      await vi.advanceTimersByTimeAsync(READY_CACHE_MS + 1);
+      await app.inject({ method: 'GET', url: '/health/ready' });
+      expect(state.calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uses a 2 second window', () => {
