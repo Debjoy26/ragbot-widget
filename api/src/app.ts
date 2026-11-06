@@ -24,6 +24,7 @@ export function createApp(
   });
   const auth = createVisitorAuth({
     secret: config.visitorTokenSecret,
+    previousSecret: config.visitorTokenSecretPrevious,
     ttlSeconds: config.visitorTokenTtlSeconds,
     db,
   });

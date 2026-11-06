@@ -3,7 +3,7 @@ import { Writable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp, type App } from '../../api/src/app.ts';
-import { DbError } from '../../api/src/lib/supabase.ts';
+import { createDb, DbError } from '../../api/src/lib/supabase.ts';
 import { buildLoggerOptions } from '../../api/src/lib/logger.ts';
 import { requireVisitor, VisitorAuthError } from '../../api/src/services/auth.ts';
 import { validEnv } from '../unit/api/helpers.ts';
@@ -19,6 +19,9 @@ let key: string;
 let real: App;
 let dead: App;
 let botId: string;
+let anonKey: string;
+/** Real tokens sent through logged paths; the last test proves none reached the log. */
+const sentTokens: string[] = [];
 
 function capture(): Writable {
   return new Writable({
@@ -67,6 +70,19 @@ function guarded(app: App): FastifyInstance {
   app.app.get('/t/db-policy', async () => {
     throw new DbError('http', 400, 'RB036');
   });
+  // A handler that logs the whole request, the way a careless later route might.
+  app.app.get('/t/log-request', async (req) => {
+    req.log.info({ headers: req.headers, authorization: req.headers.authorization }, 'saw request');
+    return { ok: true };
+  });
+  // Real database calls whose real PostgREST errors propagate untouched to the error handler.
+  app.app.get('/t/rpc-invalid', async () => {
+    return app.db.rpc('claim_jobs', { p_worker: 'p4-d1-test', p_limit: 0, p_lease_seconds: 60 });
+  });
+  const anonDb = createDb({ url: apiUrl, secretKey: anonKey, timeoutMs: 3000 });
+  app.app.get('/t/rpc-denied', async () => {
+    return anonDb.rpc('claim_jobs', { p_worker: 'p4-d1-test', p_limit: 1, p_lease_seconds: 60 });
+  });
   app.app.get('/t/db-down', async () => {
     throw new DbError('timeout');
   });
@@ -74,7 +90,7 @@ function guarded(app: App): FastifyInstance {
 }
 
 beforeAll(async () => {
-  ({ apiUrl } = getLocalStack());
+  ({ apiUrl, anonKey } = getLocalStack());
   key = getLocalPrivilegedKey();
   const env = validEnv({
     SUPABASE_URL: apiUrl,
@@ -169,7 +185,8 @@ describe('the real app against the local stack', () => {
     const get = (url: string) => real.app.inject({ method: 'GET', url });
     expect((await get('/t/auth-error')).statusCode).toBe(403);
     expect((await get('/t/auth-error')).json().code).toBe('FORBIDDEN');
-    expect((await get('/t/db-mapped')).json().code).toBe('FORBIDDEN');
+    // RB033 is a server fault on a public route (P4-D1); only budget and request conflict map.
+    expect((await get('/t/db-mapped')).json().code).toBe('INTERNAL_ERROR');
     const policy = await get('/t/db-policy');
     expect(policy.statusCode).toBe(500);
     expect(policy.json().code).toBe('INTERNAL_ERROR');
@@ -178,10 +195,82 @@ describe('the real app against the local stack', () => {
     expect(down.json().code).toBe('PROVIDER_UNAVAILABLE');
   });
 
+  it('turns a real PostgREST argument error into DbError.sqlstate and an INTERNAL_ERROR envelope', async () => {
+    // claim_jobs raises 22023 for p_limit = 0 before touching any row.
+    let caught: unknown;
+    try {
+      await real.db.rpc('claim_jobs', { p_worker: 'p4-d1-test', p_limit: 0, p_lease_seconds: 60 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DbError);
+    expect((caught as DbError).sqlstate).toBe('22023');
+    expect((caught as DbError).status).toBe(400);
+
+    const before = lines.length;
+    const res = await real.app.inject({ method: 'GET', url: '/t/rpc-invalid' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({
+      code: 'INTERNAL_ERROR',
+      request_id: res.headers['x-request-id'],
+    });
+    const logged = lines.slice(before).join('');
+    expect(logged).toContain('db:invalid_argument');
+    expect(logged).toContain('"db_status":400');
+    expect(logged).not.toContain('claim_jobs');
+    expect(res.body).not.toContain('claim_jobs');
+  });
+
+  it('turns a real permission error (anon calling a service-only function) into 42501 and INTERNAL_ERROR', async () => {
+    const anonDb = createDb({ url: apiUrl, secretKey: anonKey, timeoutMs: 3000 });
+    let caught: unknown;
+    try {
+      await anonDb.rpc('claim_jobs', { p_worker: 'p4-d1-test', p_limit: 1, p_lease_seconds: 60 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DbError);
+    expect((caught as DbError).sqlstate).toBe('42501');
+
+    const before = lines.length;
+    const res = await real.app.inject({ method: 'GET', url: '/t/rpc-denied' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().code).toBe('INTERNAL_ERROR');
+    const logged = lines.slice(before).join('');
+    expect(logged).toContain('db:permission_denied');
+    expect(logged).not.toContain(anonKey);
+  });
+
+  it('keeps a real bearer token out of the logs on success, failure and a careless handler', async () => {
+    const id = await session(new Date(Date.now() + 3600_000).toISOString());
+    const { token } = real.auth.issueToken({ bot_id: botId, session_id: id, token_version: 1 });
+    const stale = real.auth.issueToken({ bot_id: botId, session_id: id, token_version: 99 }).token;
+    sentTokens.push(token, stale);
+    const before = lines.length;
+    const headers = { authorization: `Bearer ${token}`, 'x-visitor-token': token };
+    await real.app.inject({ method: 'GET', url: '/t/guarded', headers });
+    await real.app.inject({ method: 'GET', url: '/t/log-request', headers });
+    await real.app.inject({
+      method: 'GET',
+      url: `/t/guarded?token=${token}`,
+      headers: { authorization: `Bearer ${stale}` },
+    });
+    const logged = lines.slice(before).join('');
+    expect(logged).toContain('saw request');
+    expect(logged).toContain('[Redacted]');
+    expect(logged).toContain('request rejected'); // the failed authentication was logged
+    expect(logged).not.toContain(token);
+    expect(logged).not.toContain(stale);
+    expect(logged).not.toContain('Bearer');
+  });
+
   it('never writes a token or key to the logs', () => {
     const log = lines.join('');
     expect(log.length).toBeGreaterThan(0);
+    expect(sentTokens.length).toBeGreaterThan(0);
     expect(log).not.toContain(key);
+    expect(log).not.toContain(anonKey);
+    for (const t of sentTokens) expect(log).not.toContain(t);
     expect(log).not.toContain('v1.AAAA.BBBB');
     expect(log).not.toContain('Bearer');
   });

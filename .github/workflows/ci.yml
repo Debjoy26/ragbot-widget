@@ -41,6 +41,8 @@ jobs:
         run: bash scripts/test-make-guards.sh
       - run: npm run test:integration
       - run: npm run build
+      - name: API smoke test (built output against the local stack)
+        run: node scripts/api-smoke.mjs
       - name: Stop local Supabase stack
         if: always()
         run: npx supabase stop --no-backup

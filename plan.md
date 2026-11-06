@@ -108,7 +108,7 @@ Also: create dev Supabase project (or local stack via Supabase CLI), dev Render/
 ### P2 — Shared contracts (`shared/`)
 - `contracts.ts`: request/response types for every route in TECH_SPECS §2–3; SSE event union `meta | delta | sources | handoff | done | error`. `handoff` carries `{reason, message, contact}` where `contact` comes from server config only.
 - `schemas.ts`: Zod schemas — chat request (rejects unknown fields such as `context`, `system`, `history`), public bot config (colour hex + https URL validation, no HTML), contact block (email format, E.164 phone, `https:` contact/WhatsApp URLs, hours + IANA time zone, localised escalation messages, at least one channel required), visitor token claims, job payloads per job type, data-entry form schemas keyed by `schema_key`, settings whitelist.
-- Error code enum: `INVALID_REQUEST, SESSION_EXPIRED, UNAUTHORIZED, FORBIDDEN, RATE_LIMITED, BUDGET_EXCEEDED, FILE_UNSUPPORTED, OCR_REQUIRED, INDEXING_FAILED, PROVIDER_UNAVAILABLE, STREAM_INTERRUPTED` (note `OCR_REQUIRED` appears in TECH_SPECS §7 but not §5 — add it).
+- Error code enum: `INVALID_REQUEST, SESSION_EXPIRED, UNAUTHORIZED, FORBIDDEN, RATE_LIMITED, BUDGET_EXCEEDED, FILE_UNSUPPORTED, OCR_REQUIRED, INDEXING_FAILED, PROVIDER_UNAVAILABLE, STREAM_INTERRUPTED, INTERNAL_ERROR` (note `OCR_REQUIRED` appears in TECH_SPECS §7 but not §5 — add it).
 - `providers.ts`: `ChatProvider`, `EmbeddingProvider`, `ModerationProvider` interfaces with typed, classified errors (`transient | rate_limited | auth | billing | permanent`).
 - `prompts.ts`: prompt template builder with delimited evidence blocks and versioned template IDs.
 
@@ -179,6 +179,11 @@ Every browser-callable function follows the rules in ADR 0017: `is_active_member
 - No admin routes or admin JWT handling: the panel doesn't call this API (ADR 0017).
 
 **Acceptance:** tests for expired/forged/wrong-bot visitor tokens.
+
+**Obligations from the P4 reviews:**
+- **P5:** add `Db` insert, conditional update and list methods; add a 40P01 retry and set `lock_timeout` in SQL. Pass `auth` into `ServerDeps`. Derive the bot only from `req.visitor`, and check `bot_profiles.enabled` in the same RPC as the budget reservation. Rate-limit on bot and session first and `request.clientIp` second, using an IPv6 /64. Routes log only ids, counts and codes.
+- **P7:** enforce `CHAT_DEADLINE_MS` with an AbortController. SSE needs reply hijacking, CORS headers set on the raw response, and heartbeats shorter than `CONNECTION_TIMEOUT_MS`. The worker reaper threshold must exceed `CHAT_DEADLINE_MS` plus a settle margin.
+- **P10/P12:** measure `X-Forwarded-For` on a real Render deploy and set `TRUSTED_PROXY_HOPS` from it.
 
 ### P5 — Visitor sessions & abuse controls
 - `POST /v1/sessions`: resolve bot by slug, check enabled, record rate-limit attempt (hashed key, no plain IP), optional challenge verification, insert `visitor_sessions`, return token + expiry.

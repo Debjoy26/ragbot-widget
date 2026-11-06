@@ -18,8 +18,8 @@ import {
 import type { Db } from '../lib/supabase.js';
 
 /**
- * Thrown for every authentication failure. Carries only a stable public code. The route layer maps
- * it to the error envelope; it is reconciled with the shared AppError at integration.
+ * Thrown for every authentication failure. Carries only a stable public code. toAppError()
+ * (lib/errors.ts) maps it to an AppError and the error handler turns that into the envelope.
  */
 export class VisitorAuthError extends Error {
   readonly code: ErrorCode;
@@ -55,6 +55,11 @@ export interface VisitorAuth {
 export interface CreateVisitorAuthOptions {
   /** Signing secret, at least 32 bytes (UTF-8). */
   secret: string;
+  /**
+   * Optional retired secret for key rotation. verifyToken() also accepts a token signed with it
+   * (until it expires); issueToken() never uses it. At least 32 bytes and different from `secret`.
+   */
+  previousSecret?: string | undefined;
   /** Token lifetime in seconds, a positive integer. */
   ttlSeconds: number;
   db: Pick<Db, 'selectOne'>;
@@ -67,6 +72,8 @@ const MIN_SECRET_BYTES = 32;
 const MAX_TOKEN_LENGTH = 1024;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const SIGNATURE_BYTES = 32;
+/** A token issued "in the future" by more than this is refused (clock skew allowance). */
+const MAX_IAT_SKEW_SECONDS = 60;
 
 interface SessionRow {
   token_version: number;
@@ -83,7 +90,7 @@ function decodeBase64url(part: string): Buffer | null {
 }
 
 export function createVisitorAuth(options: CreateVisitorAuthOptions): VisitorAuth {
-  const { secret, ttlSeconds, db } = options;
+  const { secret, previousSecret, ttlSeconds, db } = options;
   const now = options.now ?? Date.now;
 
   if (typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < MIN_SECRET_BYTES) {
@@ -92,10 +99,26 @@ export function createVisitorAuth(options: CreateVisitorAuthOptions): VisitorAut
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) {
     throw new TypeError('visitor token ttl must be a positive integer (seconds)');
   }
+  if (previousSecret !== undefined) {
+    if (
+      typeof previousSecret !== 'string' ||
+      Buffer.byteLength(previousSecret, 'utf8') < MIN_SECRET_BYTES
+    ) {
+      throw new TypeError(
+        `previous visitor token secret must be at least ${String(MIN_SECRET_BYTES)} bytes`,
+      );
+    }
+    if (previousSecret === secret) {
+      throw new TypeError('previous visitor token secret must differ from the current one');
+    }
+  }
   const key = Buffer.from(secret, 'utf8');
+  const previousKey =
+    previousSecret === undefined ? undefined : Buffer.from(previousSecret, 'utf8');
 
-  const sign = (signingInput: string): Buffer =>
-    createHmac('sha256', key).update(signingInput, 'utf8').digest();
+  const hmac = (k: Buffer, signingInput: string): Buffer =>
+    createHmac('sha256', k).update(signingInput, 'utf8').digest();
+  const sign = (signingInput: string): Buffer => hmac(key, signingInput);
 
   const nowSeconds = (): number => Math.floor(now() / 1000);
 
@@ -135,11 +158,13 @@ export function createVisitorAuth(options: CreateVisitorAuthOptions): VisitorAut
     if (payload === null || signature === null) throw unauthorized();
     if (signature.length !== SIGNATURE_BYTES) throw unauthorized();
 
-    // 2. Signature, in constant time on equal-length buffers.
-    const expected = sign(`${version}.${payloadPart}`);
-    if (expected.length !== signature.length || !timingSafeEqual(expected, signature)) {
-      throw unauthorized();
-    }
+    // 2. Signature, in constant time on equal-length buffers. When a previous secret is set both
+    // are always computed and compared, so the time taken does not say which one matched.
+    const signingInput = `${version}.${payloadPart}`;
+    const matchesCurrent = timingSafeEqual(sign(signingInput), signature);
+    const matchesPrevious =
+      previousKey !== undefined && timingSafeEqual(hmac(previousKey, signingInput), signature);
+    if (!matchesCurrent && !matchesPrevious) throw unauthorized();
 
     // 3. Claims. Our own signature covers them, but they are still checked strictly.
     let json: unknown;
@@ -151,8 +176,12 @@ export function createVisitorAuth(options: CreateVisitorAuthOptions): VisitorAut
     const parsed = visitorTokenClaimsSchema.safeParse(json);
     if (!parsed.success) throw unauthorized();
 
-    // 4. Expiry, only for a token we signed.
-    if (isTokenExpired(parsed.data, nowSeconds())) throw new VisitorAuthError('SESSION_EXPIRED');
+    // 4. Lifetime, only for a token we signed. A token dated in the future, or one that lives
+    // longer than the configured TTL, was not produced by this service as configured.
+    const current = nowSeconds();
+    if (parsed.data.iat > current + MAX_IAT_SKEW_SECONDS) throw unauthorized();
+    if (parsed.data.exp - parsed.data.iat > ttlSeconds) throw unauthorized();
+    if (isTokenExpired(parsed.data, current)) throw new VisitorAuthError('SESSION_EXPIRED');
     return parsed.data;
   }
 

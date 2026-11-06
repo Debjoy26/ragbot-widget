@@ -45,6 +45,33 @@ describe('API over real HTTP (loopback, fake DbPing)', () => {
     expect(live.headers.get('cache-control')).toBe('no-store');
   });
 
+  it('sends HSTS and a closed CSP over the wire (P4-D1)', async () => {
+    const res = await fetch(`${base()}/health/live`);
+    expect(res.headers.get('strict-transport-security')).toContain('max-age=');
+    expect(res.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; frame-ancestors 'none'",
+    );
+  });
+
+  it('a draining server answers /health/ready 503 at once, and /health/live stays 200', async () => {
+    const other = buildServer({
+      config: testConfig({ LOG_LEVEL: 'silent' }),
+      db: fakeDb(async () => true),
+    });
+    await other.listen({ port: 0, host: '127.0.0.1' });
+    const url = `http://127.0.0.1:${(other.server.address() as AddressInfo).port}`;
+    try {
+      expect((await fetch(`${url}/health/ready`)).status).toBe(200);
+      other.beginDrain();
+      const ready = await fetch(`${url}/health/ready`);
+      expect(ready.status).toBe(503);
+      expect(await ready.json()).toEqual({ status: 'unavailable' });
+      expect((await fetch(`${url}/health/live`)).status).toBe(200);
+    } finally {
+      await other.close();
+    }
+  });
+
   it('rejects an oversized body with 413 and the error envelope', async () => {
     const res = await fetch(`${base()}/echo`, {
       method: 'POST',

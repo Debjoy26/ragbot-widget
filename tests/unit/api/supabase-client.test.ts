@@ -81,6 +81,10 @@ describe('createDb configuration (fail closed)', () => {
       { ...base, url: 'ftp://host' },
       { ...base, url: 'http://user:pw@127.0.0.1:54321' },
       { ...base, url: 'http://127.0.0.1:54321?x=1' },
+      // http is for loopback only (P4-D1)
+      { ...base, url: 'http://project.supabase.co' },
+      { ...base, url: 'http://10.0.0.5:54321' },
+      { ...base, url: 'http://127.0.0.1.evil.example' },
       { ...base, secretKey: '' },
       { ...base, timeoutMs: 0 },
       { ...base, timeoutMs: -5 },
@@ -102,6 +106,21 @@ describe('createDb configuration (fail closed)', () => {
   });
 });
 
+describe('createDb URL scheme (P4-D1)', () => {
+  const base = { secretKey: KEY, timeoutMs: 1000 };
+  it('allows https anywhere and http on loopback only', () => {
+    for (const url of [
+      'https://project.supabase.co',
+      'http://127.0.0.1:54321',
+      'http://localhost:54321',
+      'http://[::1]:54321',
+    ]) {
+      expect(() => createDb({ ...base, url })).not.toThrow();
+    }
+    expect(() => createDb({ ...base, url: 'http://project.supabase.co' })).toThrow(TypeError);
+  });
+});
+
 describe('selectOne request encoding', () => {
   it('builds the exact URL for plain values', async () => {
     const { db, calls } = makeDb(() => json([{ token_version: 1 }]));
@@ -112,7 +131,7 @@ describe('selectOne request encoding', () => {
     );
     expect(row).toEqual({ token_version: 1 });
     expect(calls[0]?.url).toBe(
-      `${URL_BASE}/rest/v1/visitor_sessions?select=token_version,expires_at&id=eq.abc&bot_id=eq.def&limit=1`,
+      `${URL_BASE}/rest/v1/visitor_sessions?select=token_version,expires_at&id=eq.abc&bot_id=eq.def&limit=2`,
     );
     expect(calls[0]?.init.method).toBe('GET');
   });
@@ -201,6 +220,16 @@ describe('selectOne request encoding', () => {
     await expect(db.selectOne('visitor_sessions', {}, ['id'])).rejects.toThrow(TypeError);
     await expect(db.selectOne('visitor_sessions', { id: 'x' }, [])).rejects.toThrow(TypeError);
     expect(calls).toHaveLength(0);
+  });
+
+  it('asks for two rows, so a filter that matches more than one is visible (P4-D1)', async () => {
+    const { db, calls } = makeDb(() => json([{ a: 1 }, { a: 2 }]));
+    expect((await thrown(db.selectOne('t', { a: 'b' }, ['a']))).reason).toBe('invalid_response');
+    expect(new URL(calls[0]?.url ?? '').searchParams.get('limit')).toBe('2');
+    // One matching row is still returned.
+    expect(await makeDb(() => json([{ a: 1 }])).db.selectOne('t', { a: 'b' }, ['a'])).toEqual({
+      a: 1,
+    });
   });
 
   it('returns null for no row and refuses more than one row or a non-array', async () => {

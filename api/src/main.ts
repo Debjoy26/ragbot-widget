@@ -1,5 +1,6 @@
 import { createApp } from './app.js';
 import { ConfigError, type AppConfig } from './lib/config.js';
+import { errorClassName, forceExitDelayMs } from './lib/lifecycle.js';
 
 let app: ReturnType<typeof createApp>['app'];
 let config: AppConfig;
@@ -20,12 +21,15 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  // First: report not-ready at once, so the load balancer stops routing here while we drain.
+  app.beginDrain();
   app.log.info({ signal }, 'shutting down');
-  // In-flight requests cannot outlive REQUEST_TIMEOUT_MS, so it bounds the drain.
+  // A request already in flight can run up to REQUEST_TIMEOUT_MS and a chat answer up to
+  // CHAT_DEADLINE_MS, so the longer of the two (plus a margin) bounds the drain.
   const force = setTimeout(() => {
     app.log.error('graceful shutdown timed out');
     process.exit(1);
-  }, config.requestTimeoutMs);
+  }, forceExitDelayMs(config));
   force.unref();
   app.close().then(
     () => process.exit(0),
@@ -34,6 +38,17 @@ function shutdown(signal: string): void {
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Last-resort handlers: log the class name only (a message or stack may hold a secret) and exit 1,
+// so the platform restarts a process whose state can no longer be trusted.
+process.on('unhandledRejection', (reason) => {
+  app.log.fatal({ error_class: errorClassName(reason) }, 'unhandled rejection');
+  process.exit(1);
+});
+process.on('uncaughtException', (err) => {
+  app.log.fatal({ error_class: errorClassName(err) }, 'uncaught exception');
+  process.exit(1);
+});
 
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' });

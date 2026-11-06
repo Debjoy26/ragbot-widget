@@ -63,6 +63,7 @@ export interface CreateDbOptions {
 const IDENTIFIER = /^[a-z_]+$/;
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 const MAX_ERROR_BODY_CHARS = 4096;
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function checkIdentifier(kind: string, value: string): void {
   if (
@@ -92,8 +93,9 @@ export function createDb(options: CreateDbOptions): Db {
   } catch {
     throw new TypeError('database URL is not a valid URL');
   }
-  if (base.protocol !== 'https:' && base.protocol !== 'http:') {
-    throw new TypeError('database URL must be http(s)');
+  const loopback = LOOPBACK_HOSTS.has(base.hostname);
+  if (base.protocol !== 'https:' && !(base.protocol === 'http:' && loopback)) {
+    throw new TypeError('database URL must be https (http is allowed for loopback only)');
   }
   if (base.username !== '' || base.password !== '' || base.search !== '' || base.hash !== '') {
     throw new TypeError('database URL must not carry credentials, a query or a fragment');
@@ -180,7 +182,8 @@ export function createDb(options: CreateDbOptions): Db {
         }
         parts.push(`${column}=eq.${encodeURIComponent(String(value))}`);
       }
-      parts.push('limit=1');
+      // Ask for two rows so that a filter matching more than one is seen (and refused), not hidden.
+      parts.push('limit=2');
       const body = await send(`/${table}?${parts.join('&')}`, { method: 'GET' }, signal, true);
       if (!Array.isArray(body)) throw new DbError('invalid_response');
       if (body.length === 0) return null;

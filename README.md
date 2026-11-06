@@ -1,6 +1,6 @@
 # ragbot_widget
 
-Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P3 and P3.5: shared contracts, migrations and tests. The API, worker and widget are placeholders until P4, P6 and P8.
+Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P4: shared contracts, migrations, tests and the API foundation (config, logging, health, visitor tokens). The public chat routes, worker and widget arrive in P5 to P8.
 
 ## Project structure
 ```text
@@ -21,10 +21,12 @@ ragbot_widget/
 │   └── vercel.json
 ├── api/
 │   ├── src/
+│   │   ├── main.ts
+│   │   ├── app.ts
 │   │   ├── server.ts
 │   │   ├── routes/{chat,sessions,conversations,entries,health}.ts
 │   │   ├── services/{auth,retrieval,llm,moderation,limits,conversations,handoff,cache}.ts
-│   │   └── lib/{supabase,config,logger}.ts
+│   │   └── lib/{supabase,config,logger,errors,client-ip}.ts
 │   ├── package.json
 │   └── .env.example
 ├── worker/
@@ -67,7 +69,7 @@ ragbot_widget/
 ├── .nvmrc, .npmrc, .gitignore
 └── README.md
 ```
-The tree is cumulative: it shows the finished layout, and files appear in the phase that builds them. Not there yet: API routes, services and libs (P4, P5, P7), worker jobs and libs (P6, P9), widget modules, `theme.css` and `vercel.json` (P8), `render.yaml` and `scripts/*.mjs` (P10), `clients/` (P12). Brace notation abbreviates multiple files. Use npm workspaces and one committed root lockfile. Widget TypeScript is built into ordinary browser JavaScript. The deployment manifest contains public project identifiers only, never keys that confer privileged access.
+The tree is cumulative: it shows the finished layout, and files appear in the phase that builds them. Not there yet: API routes and services other than health and auth (P5, P7), worker jobs and libs (P6, P9), widget modules, `theme.css` and `vercel.json` (P8), `render.yaml` and `scripts/*.mjs` (P10), `clients/` (P12). Brace notation abbreviates multiple files. Use npm workspaces and one committed root lockfile. Widget TypeScript is built into ordinary browser JavaScript. The deployment manifest contains public project identifiers only, never keys that confer privileged access.
 
 ## Documentation
 - `PRD.md`: scope and acceptance criteria.
@@ -94,7 +96,7 @@ npm run build
 Database work goes through `make` (`make help`). `npm run test:integration` needs the local stack running. `npm run test:e2e` is not a gate until P8.
 
 ## Environment variables
-API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
+API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, `TRUSTED_PROXY_HOPS`, `BODY_LIMIT_BYTES`, `REQUEST_TIMEOUT_MS`, `CONNECTION_TIMEOUT_MS`, `READY_TIMEOUT_MS`, `DB_TIMEOUT_MS`, `VISITOR_TOKEN_TTL_SECONDS`, `CHAT_DEADLINE_MS`, `PROVIDER_MAX_ATTEMPTS`, optional `VISITOR_TOKEN_SECRET_PREVIOUS` for rotation, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
 Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never give the worker the visitor-signing key.
 AI roles are provider-agnostic (ADR 0014): `<ROLE>_PROVIDER` (`gemini` | `openai` | `anthropic` | `openai_compatible`), `<ROLE>_MODEL`, optional `<ROLE>_API_KEY` (else `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), and `<ROLE>_BASE_URL` for `openai_compatible`. Missing values fail closed. Changing the embedding model requires a full reindex. See `api/.env.example` and `worker/.env.example`.
 Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.

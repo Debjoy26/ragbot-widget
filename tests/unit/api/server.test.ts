@@ -261,12 +261,14 @@ describe('error handler', () => {
   });
 
   it.each([
+    // P4-D1: only these two are visitor-facing; every other state is a server fault here.
     ['RB001', 'BUDGET_EXCEEDED', 429, 'budget_exceeded'],
-    ['RB034', 'RATE_LIMITED', 429, 'quota_exceeded'],
-    ['RB033', 'FORBIDDEN', 403, 'forbidden'],
-    ['42501', 'FORBIDDEN', 403, 'permission_denied'],
-    ['22023', 'INVALID_REQUEST', 400, 'invalid_argument'],
-    ['RB011', 'INDEXING_FAILED', 500, 'activation_failed'],
+    ['RB004', 'INVALID_REQUEST', 400, 'request_conflict'],
+    ['RB034', 'INTERNAL_ERROR', 500, 'quota_exceeded'],
+    ['RB033', 'INTERNAL_ERROR', 500, 'forbidden'],
+    ['42501', 'INTERNAL_ERROR', 500, 'permission_denied'],
+    ['22023', 'INTERNAL_ERROR', 500, 'invalid_argument'],
+    ['RB011', 'INTERNAL_ERROR', 500, 'activation_failed'],
   ])('maps DB error %s to %s and logs the internal name', async (sqlstate, code, status, name) => {
     const { app: a, capture } = appWithCapture(testConfig());
     app = a;

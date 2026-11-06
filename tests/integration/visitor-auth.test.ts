@@ -310,4 +310,34 @@ describe('selectOne against the local stack', () => {
       db.selectOne('visitor_sessions', { id: `${session}&bot_id=neq.${botB}` }, ['token_version']),
     ).rejects.toMatchObject({ name: 'DbError', status: 400 });
   });
+
+  it('refuses a filter that matches more than one real row instead of returning the first (P4-D1)', async () => {
+    const bot = await createBot('multi');
+    await createSession(bot);
+    await createSession(bot);
+    await expect(db.selectOne('visitor_sessions', { bot_id: bot }, ['id'])).rejects.toMatchObject({
+      name: 'DbError',
+      reason: 'invalid_response',
+    });
+  });
+});
+
+describe('secret rotation against the local stack (P4-D1)', () => {
+  it('authenticates a session with a token signed by the previous secret, never issued with it', async () => {
+    const OLD = 'TEST-ONLY-retired-secret-0123456789-abcdefg';
+    const session = await createSession(botA);
+    const retired = createVisitorAuth({ secret: OLD, ttlSeconds: TTL, db });
+    const rotated = createVisitorAuth({ secret: SECRET, previousSecret: OLD, ttlSeconds: TTL, db });
+    const oldToken = retired.issueToken({
+      bot_id: botA,
+      session_id: session,
+      token_version: 1,
+    }).token;
+    expect((await rotated.authenticate(oldToken)).session_id).toBe(session);
+    // Without the previous secret the same token is refused.
+    await expect(auth.authenticate(oldToken)).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    // A token the rotated instance issues is verifiable by the current secret alone.
+    const fresh = rotated.issueToken({ bot_id: botA, session_id: session, token_version: 1 }).token;
+    expect((await auth.authenticate(fresh)).session_id).toBe(session);
+  });
 });

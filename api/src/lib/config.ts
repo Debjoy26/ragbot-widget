@@ -8,8 +8,15 @@ import { loadApiAiConfig, ProviderConfigError, type ApiAiConfig, type Env } from
  */
 export interface AppConfig {
   readonly supabaseUrl: string;
+  /**
+   * Secrets (this key, the two token secrets, the Turnstile key) and `ai` (which holds provider
+   * keys) are NON-ENUMERABLE: `JSON.stringify(config)`, `util.inspect(config)`, spreading the
+   * config and logging it show none of them. Direct property access still works.
+   */
   readonly supabaseSecretKey: string;
   readonly visitorTokenSecret: string;
+  /** Optional: a retired signing secret, accepted by verifyToken only, never used to sign. */
+  readonly visitorTokenSecretPrevious: string | undefined;
   readonly turnstileSecretKey: string;
   readonly allowedOrigins: readonly string[];
   readonly port: number;
@@ -65,7 +72,9 @@ const supabaseUrl = nonEmpty.transform((raw, ctx) => {
   }
   const loopback = LOOPBACK_HOSTS.has(url.hostname);
   const schemeOk = url.protocol === 'https:' || (url.protocol === 'http:' && loopback);
-  if (!schemeOk || url.username || url.password) {
+  // No credentials, query or fragment: the URL is a base for REST paths, nothing more.
+  const extras = raw.includes('?') || raw.includes('#') || url.search !== '' || url.hash !== '';
+  if (!schemeOk || url.username || url.password || extras) {
     ctx.issues.push({ code: 'custom', message: 'invalid', input: raw });
     return z.NEVER;
   }
@@ -95,10 +104,15 @@ const allowedOrigins = nonEmpty.transform((raw, ctx) => {
   return origins;
 });
 
+/** An unset or empty optional secret means "not configured"; anything else must be a valid secret. */
+const optionalSecret = (minBytes: number) =>
+  z.preprocess((v) => (v === '' ? undefined : v), secret(minBytes).optional());
+
 const envSchema = z.object({
   SUPABASE_URL: supabaseUrl,
   SUPABASE_SECRET_KEY: secret(1),
   VISITOR_TOKEN_SECRET: secret(MIN_SECRET_BYTES),
+  VISITOR_TOKEN_SECRET_PREVIOUS: optionalSecret(MIN_SECRET_BYTES),
   TURNSTILE_SECRET_KEY: secret(1),
   ALLOWED_ORIGINS: allowedOrigins,
   PORT: integer(1, 65_535),
@@ -127,6 +141,44 @@ function variablesIn(message: string): string[] {
   return [...new Set(message.match(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g) ?? [])];
 }
 
+const SECRET_VARIABLES = [
+  'VISITOR_TOKEN_SECRET',
+  'VISITOR_TOKEN_SECRET_PREVIOUS',
+  'TURNSTILE_SECRET_KEY',
+  'SUPABASE_SECRET_KEY',
+] as const;
+
+/** Names of secret variables that share a value with another one. Values are never returned. */
+function reusedSecrets(
+  values: Readonly<Record<(typeof SECRET_VARIABLES)[number], string | undefined>>,
+) {
+  const byValue = new Map<string, string[]>();
+  for (const name of SECRET_VARIABLES) {
+    const value = values[name];
+    if (value === undefined) continue;
+    byValue.set(value, [...(byValue.get(value) ?? []), name]);
+  }
+  return [...byValue.values()].filter((names) => names.length > 1).flat();
+}
+
+/** `.env.example` placeholders such as `<gemini-key>` must never be accepted as a key. */
+const PLACEHOLDER = /<[^>]*>/;
+
+/** Variables (by name) whose value is a placeholder and which supply a key the config uses. */
+function placeholderKeyVariables(ai: ApiAiConfig, env: Env): string[] {
+  const used = [ai.chatPrimary, ai.chatFallback, ai.embedding, ai.moderation].flatMap((r) =>
+    r === null ? [] : [r.apiKey],
+  );
+  const bad = new Set(used.filter((key) => PLACEHOLDER.test(key)));
+  if (bad.size === 0) return [];
+  const names = Object.entries(env)
+    .filter(
+      ([name, value]) => /_API_KEY$/.test(name) && value !== undefined && bad.has(value.trim()),
+    )
+    .map(([name]) => name);
+  return names.length > 0 ? names : ['AI provider API key'];
+}
+
 /** Validates the environment and returns a deeply frozen config. Throws ConfigError. */
 export function loadConfig(env: Env): AppConfig {
   const parsed = envSchema.safeParse(env);
@@ -146,11 +198,34 @@ export function loadConfig(env: Env): AppConfig {
   }
 
   const v = parsed.data;
-  return deepFreeze({
+
+  const placeholders = placeholderKeyVariables(ai, env);
+  if (placeholders.length > 0) {
+    throw new ConfigError(placeholders, `Invalid AI configuration: ${placeholders.join(', ')}`);
+  }
+
+  // Each deadline must fit inside the request timeout, or it could never fire first.
+  const tooLong = (['READY_TIMEOUT_MS', 'DB_TIMEOUT_MS'] as const).filter(
+    (name) => v[name] >= v.REQUEST_TIMEOUT_MS,
+  );
+  if (tooLong.length > 0) {
+    const names = [...tooLong, 'REQUEST_TIMEOUT_MS'];
+    throw new ConfigError(names, `Invalid configuration: ${names.join(', ')} (must be shorter)`);
+  }
+
+  // One secret, one purpose: a leaked or rotated value must not unlock something else.
+  const reused = reusedSecrets({
+    VISITOR_TOKEN_SECRET: v.VISITOR_TOKEN_SECRET,
+    VISITOR_TOKEN_SECRET_PREVIOUS: v.VISITOR_TOKEN_SECRET_PREVIOUS,
+    TURNSTILE_SECRET_KEY: v.TURNSTILE_SECRET_KEY,
+    SUPABASE_SECRET_KEY: v.SUPABASE_SECRET_KEY,
+  });
+  if (reused.length > 0) {
+    throw new ConfigError(reused, `Invalid configuration: ${reused.join(', ')} must all differ`);
+  }
+
+  const config = {
     supabaseUrl: v.SUPABASE_URL,
-    supabaseSecretKey: v.SUPABASE_SECRET_KEY,
-    visitorTokenSecret: v.VISITOR_TOKEN_SECRET,
-    turnstileSecretKey: v.TURNSTILE_SECRET_KEY,
     allowedOrigins: v.ALLOWED_ORIGINS,
     port: v.PORT,
     logLevel: v.LOG_LEVEL,
@@ -163,6 +238,23 @@ export function loadConfig(env: Env): AppConfig {
     visitorTokenTtlSeconds: v.VISITOR_TOKEN_TTL_SECONDS,
     chatDeadlineMs: v.CHAT_DEADLINE_MS,
     providerMaxAttempts: v.PROVIDER_MAX_ATTEMPTS,
-    ai,
-  });
+  };
+  // Secrets are defined as non-enumerable, read-only properties (see AppConfig). They are frozen
+  // here by hand because deepFreeze walks enumerable properties only.
+  const hidden: Record<string, unknown> = {
+    supabaseSecretKey: v.SUPABASE_SECRET_KEY,
+    visitorTokenSecret: v.VISITOR_TOKEN_SECRET,
+    visitorTokenSecretPrevious: v.VISITOR_TOKEN_SECRET_PREVIOUS,
+    turnstileSecretKey: v.TURNSTILE_SECRET_KEY,
+    ai: deepFreeze(ai),
+  };
+  for (const [name, value] of Object.entries(hidden)) {
+    Object.defineProperty(config, name, {
+      value,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  }
+  return deepFreeze(config) as unknown as AppConfig;
 }

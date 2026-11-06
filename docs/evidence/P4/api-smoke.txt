@@ -1,0 +1,27 @@
+ok   bad config (PORT): exits 1
+ok   bad config (PORT): names PORT
+ok   bad config (PORT): output does not contain its value
+ok   bad config (PORT): output does not contain its value
+ok   missing config (SUPABASE_SECRET_KEY): exits 1
+ok   missing config (SUPABASE_SECRET_KEY): names SUPABASE_SECRET_KEY
+ok   missing config (SUPABASE_SECRET_KEY): output does not contain its value
+ok   empty environment: exits 1
+ok   empty environment: names Invalid configuration
+ok   empty environment: output does not contain its value
+ok   starts and answers /health/live
+ok   /health/live is 200 {"status":"ok"}
+ok   /health/ready is 200 against the local stack
+ok   /nope answers the error envelope with a request id
+ok   security headers are set
+ok   CORS: an allowed origin is echoed
+ok   CORS: a refused origin gets no CORS headers
+ok   a bad URL gets the envelope, not a default body
+ok   while draining, /health/ready is 503 {"status":"unavailable"}
+ok   SIGTERM exits 0
+ok   output never contains a key or smoke secret
+ok   output never contains a key or smoke secret
+ok   output never contains a key or smoke secret
+ok   output never contains a key or smoke secret
+ok   the child wrote something to its log
+
+25 passed, 0 failed

@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { STATUS_CODES } from 'node:http';
+import type { Duplex } from 'node:stream';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  DB_ERROR_API_CODE,
   dbErrorFor,
   httpStatusFor,
   toErrorEnvelope,
@@ -19,6 +21,15 @@ import { DbError } from './supabase.js';
 
 /** Code used for failures nobody anticipated. */
 export const UNKNOWN_ERROR_CODE: ErrorCode = 'INTERNAL_ERROR';
+
+/** Longest retry hint that will be sent: one day. */
+export const MAX_RETRY_AFTER_SECONDS = 86_400;
+
+/** A valid non-negative integer within bounds, or undefined for a missing or unusable hint. */
+function clampRetryAfter(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
+  return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(0, Math.ceil(value)));
+}
 
 export interface AppErrorOptions {
   readonly retryAfterSeconds?: number;
@@ -41,9 +52,22 @@ export class AppError extends Error {
     super(code, options.cause === undefined ? undefined : { cause: options.cause });
     this.code = code;
     this.httpStatus = options.httpStatus ?? httpStatusFor(code);
-    this.retryAfterSeconds = options.retryAfterSeconds;
+    this.retryAfterSeconds = clampRetryAfter(options.retryAfterSeconds);
     this.internalName = options.internalName;
   }
+}
+
+/**
+ * Database error states that mean something to a visitor on a public route. Every other contract
+ * state (permission, policy, argument, activation and similar) is a fault in this service or its
+ * database setup, not something the caller did, so it is INTERNAL_ERROR. The internal name is
+ * still logged. Later admin routes that need the wider mapping must map it themselves.
+ */
+function fromDbName(name: DbErrorName): AppError {
+  const internalName = `db:${name}`;
+  if (name === 'budget_exceeded') return new AppError('BUDGET_EXCEEDED', { internalName });
+  if (name === 'request_conflict') return new AppError('INVALID_REQUEST', { internalName });
+  return new AppError(UNKNOWN_ERROR_CODE, { internalName });
 }
 
 /** Maps an error carrying a contract SQLSTATE in `code` (for example a PostgREST error). */
@@ -53,7 +77,7 @@ export function mapDbError(err: unknown): AppError | undefined {
   if (typeof sqlstate !== 'string') return undefined;
   const name: DbErrorName | undefined = dbErrorFor(sqlstate);
   if (name === undefined) return undefined;
-  return new AppError(DB_ERROR_API_CODE[name], { internalName: `db:${name}` });
+  return fromDbName(name);
 }
 
 function fastifyCode(err: unknown): string | undefined {
@@ -74,9 +98,7 @@ export function toAppError(err: unknown): AppError {
   }
   if (err instanceof DbError) {
     const name = err.sqlstate === undefined ? undefined : dbErrorFor(err.sqlstate);
-    if (name !== undefined) {
-      return new AppError(DB_ERROR_API_CODE[name], { internalName: `db:${name}` });
-    }
+    if (name !== undefined) return fromDbName(name);
     // Outage, timeout or an unmapped state: the dependency failed, not the caller.
     return new AppError('PROVIDER_UNAVAILABLE', { internalName: `db:${err.reason}` });
   }
@@ -120,31 +142,126 @@ export function envelopeFor(error: AppError, requestId: string): ErrorEnvelope {
   });
 }
 
-function sendError(request: FastifyRequest, reply: FastifyReply, error: AppError): FastifyReply {
-  if (error.retryAfterSeconds !== undefined) {
-    void reply.header('retry-after', String(error.retryAfterSeconds));
-  }
-  return reply
-    .status(error.httpStatus)
-    .type('application/json')
-    .send(envelopeFor(error, request.id));
+/** A static envelope body for the last resort: only a server-generated id, no client input. */
+function fallbackBody(requestId: unknown): string {
+  const id =
+    typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? requestId : randomUUID();
+  return JSON.stringify({ code: UNKNOWN_ERROR_CODE, request_id: id });
 }
 
-/** Installs the global error and not-found handlers. */
-export function registerErrorHandlers(app: FastifyInstance): void {
-  app.setErrorHandler((err: FastifyError | Error, request, reply) => {
+/**
+ * Last resort when building or sending the normal envelope failed: write a static 500 envelope
+ * straight to the socket, or drop the connection if a response is already under way. Nothing is
+ * left to Fastify's default error handler, which would echo the error message.
+ */
+function sendFallback(request: FastifyRequest, reply: FastifyReply): FastifyReply {
+  try {
+    const res = reply.raw;
+    if (res.headersSent || res.writableEnded) {
+      res.destroy();
+    } else {
+      const body = fallbackBody(request.id);
+      res.statusCode = 500;
+      res.setHeader('content-type', 'application/json; charset=utf-8');
+      res.setHeader('content-length', Buffer.byteLength(body));
+      res.setHeader('x-content-type-options', 'nosniff');
+      res.setHeader('cache-control', 'no-store');
+      res.end(body);
+    }
+  } catch {
+    try {
+      reply.raw.destroy();
+    } catch {
+      // nothing left to do
+    }
+  }
+  return reply;
+}
+
+/** Sends the envelope for an AppError. Exported for framework-level error paths. */
+export function sendError(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: AppError,
+): FastifyReply {
+  try {
+    if (error.retryAfterSeconds !== undefined) {
+      void reply.header('retry-after', String(error.retryAfterSeconds));
+    }
+    return reply
+      .status(error.httpStatus)
+      .type('application/json')
+      .send(envelopeFor(error, request.id));
+  } catch {
+    return sendFallback(request, reply);
+  }
+}
+
+/**
+ * Classifies, logs and answers any error. Logging rule for this and every later route: log only
+ * ids, counts and codes. Never a message, prompt, question, chunk, history, token or header value.
+ * Nothing in here can throw out to Fastify's own handler.
+ */
+export function handleError(
+  err: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): FastifyReply {
+  try {
     const error = toAppError(err);
     const fields = {
       err,
       error_code: error.code,
       internal: error.internalName,
       status: error.httpStatus,
+      // The HTTP status the database answered with, when the failure came from it.
+      db_status: err instanceof DbError ? err.status : undefined,
     };
     if (error.httpStatus >= 500) request.log.error(fields, 'request failed');
     else request.log.warn(fields, 'request rejected');
     if (reply.sent) return reply;
     return sendError(request, reply, error);
-  });
+  } catch {
+    return sendFallback(request, reply);
+  }
+}
+
+const CLIENT_ERROR_STATUS: Readonly<Record<string, number>> = {
+  ERR_HTTP_REQUEST_TIMEOUT: 408,
+  HPE_HEADER_OVERFLOW: 431,
+};
+
+/**
+ * Handler for `clientError` (a request that never became a request: bad request line, oversized
+ * headers, header timeout). Answers with a static envelope and closes. Nothing from the
+ * client or from the parser's error is echoed, and no route runs.
+ */
+export function clientErrorHandler(err: Error & { code?: string }, socket: Duplex): void {
+  // A reset connection has nobody to answer.
+  if (err.code === 'ECONNRESET' || socket.destroyed) return;
+  const status = (err.code !== undefined ? CLIENT_ERROR_STATUS[err.code] : undefined) ?? 400;
+  if (socket.writable) {
+    const id = randomUUID();
+    const body = JSON.stringify({ code: 'INVALID_REQUEST', request_id: id });
+    socket.write(
+      `HTTP/1.1 ${String(status)} ${STATUS_CODES[status] ?? 'Bad Request'}\r\n` +
+        'Content-Type: application/json; charset=utf-8\r\n' +
+        `Content-Length: ${String(Buffer.byteLength(body))}\r\n` +
+        `X-Request-Id: ${id}\r\n` +
+        'X-Content-Type-Options: nosniff\r\n' +
+        'Cache-Control: no-store\r\n' +
+        'Connection: close\r\n\r\n' +
+        body,
+    );
+  }
+  socket.destroy();
+}
+
+/** Installs the global error and not-found handlers. */
+export function registerErrorHandlers(app: FastifyInstance): void {
+  app.setErrorHandler((err: FastifyError | Error, request, reply) =>
+    handleError(err, request, reply),
+  );
 
   app.setNotFoundHandler((request, reply) =>
     sendError(

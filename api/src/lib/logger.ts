@@ -4,16 +4,35 @@ import type { LogLevel } from './config.js';
 
 /**
  * Structured logging for Fastify's built-in pino logger (P4).
- * Nothing sensitive is logged by design: request logs carry method, path (no query
- * string), status and duration only. The redaction list is a second line of defence
- * for anything a route logs by mistake (handover §4, CLAUDE.md invariants).
+ *
+ * RULE FOR EVERY LATER ROUTE: log only ids, counts and codes (request id, bot id, session id,
+ * number of chunks, error code, status). Never a message, question, prompt, answer, chunk text,
+ * history, document body, token, key or header value. Nothing sensitive is logged by design:
+ * request logs carry method, path (no query string), status and duration only. The redaction
+ * list below is a second line of defence for anything a route logs by mistake, not permission to
+ * log those fields (handover §4, CLAUDE.md invariants).
  */
 
-const REDACTED_HEADERS = ['authorization', 'cookie', 'set-cookie', 'x-api-key', 'apikey'] as const;
+const REDACTED_HEADERS = [
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'apikey',
+  'x-visitor-token',
+  'x-turnstile-token',
+  'idempotency-key',
+] as const;
 
 const REDACTED_FIELDS = [
   'message',
   'content',
+  'text',
+  'question',
+  'body',
+  'prompt',
+  'history',
+  'chunks',
   'token',
   'secret',
   'password',
@@ -23,6 +42,7 @@ const REDACTED_FIELDS = [
   'apikey',
   'api_key',
   'apiKey',
+  'accessToken',
   'access_token',
   'refresh_token',
   'visitor_token',
@@ -31,13 +51,21 @@ const REDACTED_FIELDS = [
   'idempotency_key',
 ] as const;
 
+/** "Authorization", "ApiKey", "AccessToken": first letter upper-cased. */
+const capitalised = (name: string): string => name.charAt(0).toUpperCase() + name.slice(1);
+/** "X-Visitor-Token", "Set-Cookie": every hyphen-separated part capitalised. */
+const titleCased = (name: string): string => name.split('-').map(capitalised).join('-');
+
+const FIELD_NAMES = [...new Set([...REDACTED_FIELDS, ...REDACTED_FIELDS.map(capitalised)])];
+const HEADER_NAMES = [...new Set([...REDACTED_HEADERS, ...REDACTED_HEADERS.map(titleCased)])];
+
 /** Wildcard prefixes up to four levels deep: pino cannot redact "at any depth". */
 const PREFIXES = ['', '*.', '*.*.', '*.*.*.', '*.*.*.*.'] as const;
 
 export const REDACT_PATHS: readonly string[] = Object.freeze([
-  ...PREFIXES.flatMap((p) => REDACTED_FIELDS.map((f) => `${p}${f}`)),
-  ...PREFIXES.flatMap((p) => REDACTED_HEADERS.map((h) => `${p}headers["${h}"]`)),
-  ...PREFIXES.flatMap((p) => REDACTED_HEADERS.map((h) => `${p}["${h}"]`)),
+  ...PREFIXES.flatMap((p) => FIELD_NAMES.map((f) => `${p}${f}`)),
+  ...PREFIXES.flatMap((p) => HEADER_NAMES.map((h) => `${p}headers["${h}"]`)),
+  ...PREFIXES.flatMap((p) => HEADER_NAMES.map((h) => `${p}["${h}"]`)),
 ]);
 
 /** Fresh server-generated id; a client-supplied request id is never trusted. */
