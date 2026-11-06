@@ -103,6 +103,9 @@ if [ "${1:-}" = "--self-test" ]; then
   plant fake15.txt "sk""-proj-${FAKE_BODY}${FAKE_BODY}" openai-style-key
   plant fake16.txt "DATABASE_URL=postgres""ql://app:${FAKE_BODY}@db.example.com:5432/app" postgres-url-password
   plant fake17.txt "postgres""://app:hunter2@127.0.0.1:5432/app" postgres-url-password
+  plant fake18.ts "const u = \`/t?tok""en=${FAKE_BODY}\`;" named-secret
+  plant fake19.ts "const STRIPE_API""_KEY = \`${FAKE_BODY}\`;" generic-assignment
+  plant fake20.ts "const u = \`/t?tok""en=\${x}${FAKE_BODY}\`;" named-secret
 
   # Allowed forms stay clean: exact references, placeholders, short values, local-stack default.
   {
@@ -112,6 +115,8 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s\n' "db_pass""word: changeme"
     printf '%s\n' "const cache""Key = 'doc:chunks:v1';"
     printf '%s\n' "if (token ==""= expectedToken) {}"
+    printf '%s\n' 'const u = `/t?tok''en=${tok''en}`;'
+    printf '%s\n' 'const m = `x apik''ey=${KEY}`;'
     printf '%s\n' "DATABASE_URL=postgres""ql://postgres:postgres@127.0.0.1:54322/postgres"
     printf '%s\n' "DATABASE_URL=postgres""ql://app:<password>@db.example.com/app"
     printf '%s\n' 'DATABASE_URL=postgres''ql://app:${DB_PASSWORD}@db.example.com/app'
@@ -230,6 +235,10 @@ fixed_rule private-key-block '-----BEGIN ([A-Z]+ )*PRIVATE KEY-----'
 # not assignments. Rule labels: service-role-key (name contains service_role), generic-assignment
 # (an upper-case *_API_KEY, *_SECRET or *_SECRET_KEY name with "="), named-secret (the rest).
 #
+# A value ends at the first space, quote, backtick or "#", so an exact reference inside a JS template
+# literal (`...token=${token}`) is read as the reference ${token}, not as ${token}`. A value that itself
+# starts with a backtick is judged exactly as before (no backtick cut).
+#
 # Value allow-list: empty; <angle-bracket> placeholder; an exact $NAME or ${NAME} reference;
 # anything else beginning with "$" is NOT allowed; values under 12 characters; and the one public,
 # documented Supabase local-stack JWT secret default (exact match only).
@@ -278,7 +287,8 @@ named_filter() {
         sub(/^[ \t]+/, "", after)
         sub("^[\"" q "]", "", after)                # opening quote
         value = after
-        sub("[ \t\"" q "#].*$", "", value)          # first token (drops prose, closing quote, comment)
+        if (substr(value, 1, 1) == "`") sub("[ \t\"" q "#].*$", "", value)   # template-literal value: unchanged
+        else sub("[ \t\"" q "`#].*$", "", value)   # first token (drops prose, closing quote or backtick, comment)
         sub(/[,;]+$/, "", value)
         strict = 0
         thisLabel = "named-secret"

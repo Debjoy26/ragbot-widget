@@ -1,10 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { createVisitorAuth, VisitorAuthError } from '../../../api/src/services/auth.ts';
 
 // P4-T2 unit tests for authenticate() with a STUBBED database (labelled fake; the real rows are
 // exercised in tests/integration/visitor-auth.test.ts).
 
-const SECRET = 'TEST-ONLY-secret-0123456789-abcdefghijklmnop';
+const SECRET = randomBytes(32).toString('hex');
 const BOT = '11111111-1111-4111-8111-111111111111';
 const OTHER_BOT = '33333333-3333-4333-8333-333333333333';
 const SESSION = '22222222-2222-4222-8222-222222222222';

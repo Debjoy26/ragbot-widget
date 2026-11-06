@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -101,11 +102,12 @@ describe('API over raw sockets (loopback, fake DbPing)', () => {
   });
 
   it('does not echo a bad URL carrying a secret-looking value', async () => {
+    const urlSecret = randomBytes(12).toString('hex');
     const res = await raw(port, [
-      'GET /%zz?token=secret-in-url-123 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n',
+      `GET /%zz?token=${urlSecret} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
     ]);
     expect(res.status).toBe(400);
-    expect(res.text).not.toContain('secret-in-url-123');
+    expect(res.text).not.toContain(urlSecret);
   });
 
   it('answers a bad request line with a static response that echoes nothing, then closes', async () => {

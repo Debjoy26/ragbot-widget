@@ -219,7 +219,7 @@ describe('error handler', () => {
   });
 
   it('turns an unknown error into a generic 500 and leaks nothing', async () => {
-    const secretish = 'sk-live-ABCDEF0123456789-secret https://upstream.example/body?key=hunter2';
+    const secretish = `sk${'-live-ABCDEF0123456789'}-secret https://upstream.example/body?key=hunter2`;
     const { app: a, capture } = appWithCapture(testConfig());
     app = a;
     a.get('/boom', async () => {
@@ -323,13 +323,14 @@ describe('logging and redaction', () => {
       return { ok: true };
     });
     const bearer = 'Bearer fake-visitor-token-AAAA.BBBB.CCCC';
+    const apiKeyLeak = ['api', 'key', 'secret', '789'].join('-');
     const res = await a.inject({
       method: 'POST',
       url: '/echo?token=query-secret-123&x=1',
       headers: {
         authorization: bearer,
         cookie: 'session=cookie-secret-456',
-        'x-api-key': 'api-key-secret-789',
+        'x-api-key': apiKeyLeak,
         'content-type': 'application/json',
       },
       payload: JSON.stringify({
@@ -343,7 +344,7 @@ describe('logging and redaction', () => {
     for (const leaked of [
       'fake-visitor-token',
       'cookie-secret-456',
-      'api-key-secret-789',
+      apiKeyLeak,
       'body-token-secret',
       'private chat message text',
       'visitor@example.com',

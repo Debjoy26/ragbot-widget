@@ -1,10 +1,10 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createVisitorAuth, VisitorAuthError } from '../../../api/src/services/auth.ts';
 
 // P4-D1 (A-6): token lifetime limits and secret rotation. Every secret below is a labelled fake.
 
-const SECRET = 'TEST-ONLY-secret-0123456789-abcdefghijklmnop';
+const SECRET = randomBytes(32).toString('hex');
 const PREVIOUS = 'TEST-ONLY-previous-0123456789-abcdefghijklmn';
 const THIRD = 'TEST-ONLY-third-----0123456789-abcdefghijklmn';
 const BOT = '11111111-1111-4111-8111-111111111111';

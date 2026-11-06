@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, type Db } from '../../api/src/lib/supabase.ts';
@@ -16,7 +16,7 @@ import { getLocalPrivilegedKey, getLocalStack, keyHeaders } from './helpers/loca
 // two private test bots (unique slugs) and removed afterwards; the seed is not used.
 
 const RUN = randomUUID().slice(0, 8);
-const SECRET = 'TEST-ONLY-integration-secret-0123456789-abcdef';
+const SECRET = randomBytes(32).toString('hex');
 const TTL = 900;
 
 let apiUrl: string;
@@ -163,7 +163,7 @@ describe('visitor auth against the local stack', () => {
   it('refuses a forged token (another secret) for a real session with 401', async () => {
     const session = await createSession(botA);
     const forger = createVisitorAuth({
-      secret: 'TEST-ONLY-forger-secret-0123456789-abcdefgh',
+      secret: randomBytes(32).toString('hex'),
       ttlSeconds: TTL,
       db,
     });

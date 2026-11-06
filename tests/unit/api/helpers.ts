@@ -1,14 +1,19 @@
+import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { loadConfig, type AppConfig } from '../../../api/src/lib/config.ts';
 import { buildLoggerOptions } from '../../../api/src/lib/logger.ts';
 import type { DbPing } from '../../../api/src/lib/supabase.ts';
 import { buildServer } from '../../../api/src/server.ts';
 
-// FAKE values for tests only. None of these is a real credential.
-export const FAKE_SUPABASE_KEY = 'fake-supabase-secret-key-for-tests-0001';
-export const FAKE_VISITOR_SECRET = 'fake-visitor-token-secret-0123456789abcdef-test';
-export const FAKE_TURNSTILE_KEY = 'fake-turnstile-secret-for-tests-0002';
-export const FAKE_AI_KEY = 'fake-gemini-api-key-for-tests-0003';
+// FAKE values for tests only, random per run. None of these is a real credential.
+function hex32(): string {
+  return randomBytes(32).toString('hex');
+}
+
+export const FAKE_SUPABASE_KEY = hex32();
+export const FAKE_VISITOR_SECRET = hex32();
+export const FAKE_TURNSTILE_KEY = hex32();
+export const FAKE_AI_KEY = hex32();
 
 export function validEnv(overrides: Record<string, string | undefined> = {}) {
   const env: Record<string, string | undefined> = {

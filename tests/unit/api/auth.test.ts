@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   bearerToken,
@@ -10,8 +10,12 @@ import {
 
 // P4-T2 unit tests for visitor token issue/verify. Every secret below is a labelled fake.
 
-const SECRET = 'TEST-ONLY-secret-0123456789-abcdefghijklmnop';
-const OTHER_SECRET = 'TEST-ONLY-other--0123456789-abcdefghijklmnop';
+function hex32(): string {
+  return randomBytes(32).toString('hex');
+}
+
+const SECRET = hex32();
+const OTHER_SECRET = hex32();
 const BOT = '11111111-1111-4111-8111-111111111111';
 const SESSION = '22222222-2222-4222-8222-222222222222';
 const T0_MS = 1_800_000_000_000; // fixed clock

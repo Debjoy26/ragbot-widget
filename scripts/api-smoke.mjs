@@ -15,6 +15,7 @@
 // No network access other than loopback.
 
 import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -25,9 +26,9 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 const ALLOWED_ORIGIN = 'https://smoke-allowed.example.com';
 const REFUSED_ORIGIN = 'https://smoke-refused.example.com';
 
-// SMOKE-ONLY values. None of these is a real credential. All must differ from each other.
+// SMOKE-ONLY values (the signing secret is random per run). None of these is a real credential. All must differ from each other.
 const SMOKE_SECRETS = {
-  VISITOR_TOKEN_SECRET: 'SMOKE-ONLY-visitor-token-secret-0123456789abcdef',
+  VISITOR_TOKEN_SECRET: randomBytes(32).toString('hex'),
   TURNSTILE_SECRET_KEY: 'SMOKE-ONLY-turnstile-secret',
   GEMINI_API_KEY: 'SMOKE-ONLY-gemini-api-key',
 };
