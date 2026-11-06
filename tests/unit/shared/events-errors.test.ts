@@ -136,9 +136,10 @@ describe('error codes', () => {
     'INDEXING_FAILED',
     'PROVIDER_UNAVAILABLE',
     'STREAM_INTERRUPTED',
+    'INTERNAL_ERROR',
   ];
 
-  it('contains exactly the 11 stable codes', () => {
+  it('contains exactly the 12 stable codes', () => {
     expect([...ERROR_CODES]).toEqual(expected);
   });
 
@@ -156,7 +157,7 @@ describe('error codes', () => {
 
   it('recognises only known codes', () => {
     expect(isErrorCode('OCR_REQUIRED')).toBe(true);
-    expect(isErrorCode('INTERNAL_ERROR')).toBe(false);
+    expect(isErrorCode('NOT_A_REAL_CODE')).toBe(false);
     expect(isErrorCode(500)).toBe(false);
   });
 

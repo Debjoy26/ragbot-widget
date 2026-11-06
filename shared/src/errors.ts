@@ -18,6 +18,7 @@ export const ERROR_CODES = [
   'INDEXING_FAILED',
   'PROVIDER_UNAVAILABLE',
   'STREAM_INTERRUPTED',
+  'INTERNAL_ERROR',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -34,6 +35,7 @@ export const ERROR_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   INDEXING_FAILED: 500,
   PROVIDER_UNAVAILABLE: 503,
   STREAM_INTERRUPTED: 502,
+  INTERNAL_ERROR: 500,
 };
 
 /** The only shape an error may take on the wire (HTTP body or SSE `error` payload). */
@@ -85,21 +87,21 @@ export type DbErrorName = (typeof DB_ERROR_STATES)[DbErrorState];
  */
 export const DB_ERROR_API_CODE: Readonly<Record<DbErrorName, ErrorCode>> = Object.freeze({
   budget_exceeded: 'BUDGET_EXCEEDED',
-  budget_policy_missing: 'BUDGET_EXCEEDED',
+  budget_policy_missing: 'INTERNAL_ERROR',
   reservation_not_active: 'INVALID_REQUEST',
   request_conflict: 'INVALID_REQUEST',
   document_not_found: 'INVALID_REQUEST',
   activation_failed: 'INDEXING_FAILED',
   embedding_change_requires_reindex: 'INVALID_REQUEST',
   lease_not_held: 'INDEXING_FAILED',
-  retention_policy_missing: 'INVALID_REQUEST',
+  retention_policy_missing: 'INTERNAL_ERROR',
   conflict: 'INVALID_REQUEST',
   file_too_large: 'INVALID_REQUEST',
   mfa_required: 'FORBIDDEN',
   forbidden: 'FORBIDDEN',
   quota_exceeded: 'RATE_LIMITED',
   settings_invalid: 'INVALID_REQUEST',
-  policy_missing: 'INVALID_REQUEST',
+  policy_missing: 'INTERNAL_ERROR',
   not_found: 'INVALID_REQUEST',
   upload_missing: 'INVALID_REQUEST',
   invalid_argument: 'INVALID_REQUEST',

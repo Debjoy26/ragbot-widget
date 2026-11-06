@@ -61,7 +61,7 @@ describe('dbErrorFor (G-14)', () => {
 
   it('keeps the API envelope codes separate from database states', () => {
     for (const code of ERROR_CODES) expect(Object.keys(DB_ERROR_STATES)).not.toContain(code);
-    expect(ERROR_CODES).toHaveLength(11);
+    expect(ERROR_CODES).toHaveLength(12);
   });
 
   it('knows every errcode raised in the migrations on disk, not only RBxxx', () => {

@@ -54,7 +54,7 @@ Events: `meta` (request/conversation/message IDs), `delta` (approved text), `sou
 A duplicate idempotency key cannot spend twice; reconcile ongoing/completed requests. If replay is unsupported, return the completed result/status instead of regenerating.
 
 ## 5. Errors
-Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORBIDDEN`, `RATE_LIMITED`, `BUDGET_EXCEEDED`, `FILE_UNSUPPORTED`, `OCR_REQUIRED`, `INDEXING_FAILED`, `PROVIDER_UNAVAILABLE`, `STREAM_INTERRUPTED`. Use appropriate HTTP status before streaming; after headers are sent, use an error event. Do not reveal stack traces or raw provider response bodies.
+Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORBIDDEN`, `RATE_LIMITED`, `BUDGET_EXCEEDED`, `FILE_UNSUPPORTED`, `OCR_REQUIRED`, `INDEXING_FAILED`, `PROVIDER_UNAVAILABLE`, `STREAM_INTERRUPTED`, `INTERNAL_ERROR`. Use appropriate HTTP status before streaming; after headers are sent, use an error event. Do not reveal stack traces or raw provider response bodies.
 
 ## 6. Retrieval/embedding
 - Choose one embedding space and dimension per active indexed corpus; use its compatible query encoder.

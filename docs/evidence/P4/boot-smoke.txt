@@ -1,0 +1,9 @@
+bad config exit 1 | names variable true | leaks value false
+missing origins exit 1
+/health/live 200 {"status":"ok"} | nosniff nosniff | acao null
+/health/ready 200 {"status":"ok"} | nosniff nosniff | acao null
+/nope 404 {"code":"INVALID_REQUEST","request_id":"<id>"} | nosniff nosniff | acao null
+/health/live 200 {"status":"ok"} | nosniff nosniff | acao https://client.example.com
+/health/live 200 {"status":"ok"} | nosniff nosniff | acao null
+SIGTERM exit 0 null
+logs leak key false
