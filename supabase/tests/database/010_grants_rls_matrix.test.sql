@@ -32,7 +32,7 @@ insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget
   '{"repeated_no_knowledge_threshold": 2}'::jsonb,
   '{"answer_cache_enabled": false}'::jsonb);
 insert into public.documents (id, bot_id, title, status, disclosure_policy) values ('d1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Doc', 'ready', 'public_answer');
-insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status) values ('e1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', 1, 'path/ver1', 'application/pdf', 'ready');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status) values ('e1000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', 1, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ver1.txt', 'application/pdf', 'ready');
 update public.documents set active_version_id = 'e1000000-0000-4000-8000-000000000001' where id = 'd1000000-0000-4000-8000-000000000001';
 insert into public.document_chunks (id, document_version_id, chunk_index, content, embedding) values ('c1000000-0000-4000-8000-000000000001', 'e1000000-0000-4000-8000-000000000001', 0, 'chunk', (select array_agg(0.1::real) from generate_series(1, 1536))::extensions.vector);
 insert into public.visitor_sessions (id, bot_id, expires_at) values ('a1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', now() + interval '1 hour');
@@ -81,7 +81,7 @@ select throws_ok($q$insert into public.documents (bot_id, title) values ('b10000
 select throws_ok($q$update public.documents set id = id where false$q$, '42501', null, 'anon: update documents -> denied');
 select throws_ok($q$delete from public.documents where false$q$, '42501', null, 'anon: delete documents -> denied');
 select throws_ok($q$select count(*) from public.document_versions$q$, '42501', null, 'anon: select document_versions -> permission denied');
-select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, '42501', null, 'anon: insert document_versions -> denied');
+select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, '42501', null, 'anon: insert document_versions -> denied');
 select throws_ok($q$update public.document_versions set id = id where false$q$, '42501', null, 'anon: update document_versions -> denied');
 select throws_ok($q$delete from public.document_versions where false$q$, '42501', null, 'anon: delete document_versions -> denied');
 select throws_ok($q$select count(*) from public.document_chunks$q$, '42501', null, 'anon: select document_chunks -> permission denied');
@@ -180,7 +180,7 @@ select throws_ok($q$insert into public.documents (bot_id, title) values ('b10000
 select throws_ok($q$update public.documents set id = id where false$q$, '42501', null, 'nonmember: update documents -> denied');
 select throws_ok($q$delete from public.documents where false$q$, '42501', null, 'nonmember: delete documents -> denied');
 select is((select count(*) from public.document_versions)::int, 0, 'nonmember: select document_versions -> granted but RLS hides all rows');
-select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, '42501', null, 'nonmember: insert document_versions -> denied');
+select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, '42501', null, 'nonmember: insert document_versions -> denied');
 select throws_ok($q$update public.document_versions set id = id where false$q$, '42501', null, 'nonmember: update document_versions -> denied');
 select throws_ok($q$delete from public.document_versions where false$q$, '42501', null, 'nonmember: delete document_versions -> denied');
 select throws_ok($q$select count(*) from public.document_chunks$q$, '42501', null, 'nonmember: select document_chunks -> permission denied');
@@ -279,7 +279,7 @@ select throws_ok($q$insert into public.documents (bot_id, title) values ('b10000
 select throws_ok($q$update public.documents set id = id where false$q$, '42501', null, 'analyst: update documents -> denied');
 select throws_ok($q$delete from public.documents where false$q$, '42501', null, 'analyst: delete documents -> denied');
 select cmp_ok((select count(*) from public.document_versions)::int, '>=', 1, 'analyst: select document_versions -> rows visible');
-select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, '42501', null, 'analyst: insert document_versions -> denied');
+select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, '42501', null, 'analyst: insert document_versions -> denied');
 select throws_ok($q$update public.document_versions set id = id where false$q$, '42501', null, 'analyst: update document_versions -> denied');
 select throws_ok($q$delete from public.document_versions where false$q$, '42501', null, 'analyst: delete document_versions -> denied');
 select throws_ok($q$select count(*) from public.document_chunks$q$, '42501', null, 'analyst: select document_chunks -> permission denied');
@@ -378,7 +378,7 @@ select throws_ok($q$insert into public.documents (bot_id, title) values ('b10000
 select throws_ok($q$update public.documents set id = id where false$q$, '42501', null, 'admin: update documents -> denied');
 select throws_ok($q$delete from public.documents where false$q$, '42501', null, 'admin: delete documents -> denied');
 select cmp_ok((select count(*) from public.document_versions)::int, '>=', 1, 'admin: select document_versions -> rows visible');
-select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, '42501', null, 'admin: insert document_versions -> denied');
+select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, '42501', null, 'admin: insert document_versions -> denied');
 select throws_ok($q$update public.document_versions set id = id where false$q$, '42501', null, 'admin: update document_versions -> denied');
 select throws_ok($q$delete from public.document_versions where false$q$, '42501', null, 'admin: delete document_versions -> denied');
 select throws_ok($q$select count(*) from public.document_chunks$q$, '42501', null, 'admin: select document_chunks -> permission denied');
@@ -477,7 +477,7 @@ select throws_ok($q$insert into public.documents (bot_id, title) values ('b10000
 select throws_ok($q$update public.documents set id = id where false$q$, '42501', null, 'owner: update documents -> denied');
 select throws_ok($q$delete from public.documents where false$q$, '42501', null, 'owner: delete documents -> denied');
 select cmp_ok((select count(*) from public.document_versions)::int, '>=', 1, 'owner: select document_versions -> rows visible');
-select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, '42501', null, 'owner: insert document_versions -> denied');
+select throws_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, '42501', null, 'owner: insert document_versions -> denied');
 select throws_ok($q$update public.document_versions set id = id where false$q$, '42501', null, 'owner: update document_versions -> denied');
 select throws_ok($q$delete from public.document_versions where false$q$, '42501', null, 'owner: delete document_versions -> denied');
 select throws_ok($q$select count(*) from public.document_chunks$q$, '42501', null, 'owner: select document_chunks -> permission denied');
@@ -615,7 +615,7 @@ select lives_ok($q$insert into public.documents (bot_id, title) values ('b100000
 select lives_ok($q$update public.documents set id = id where false$q$, 'service_role: update documents -> allowed');
 select lives_ok($q$delete from public.documents where false$q$, 'service_role: delete documents -> allowed');
 select cmp_ok((select count(*) from public.document_versions)::int, '>=', 1, 'service_role: select document_versions -> rows visible');
-select lives_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'path/ins', 'text/plain')$q$, 'service_role: insert document_versions -> allowed');
+select lives_ok($q$insert into public.document_versions (document_id, version_number, storage_path, media_type) values ('d1000000-0000-4000-8000-000000000001', 2, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/path-ins.txt', 'text/plain')$q$, 'service_role: insert document_versions -> allowed');
 select lives_ok($q$update public.document_versions set id = id where false$q$, 'service_role: update document_versions -> allowed');
 select lives_ok($q$delete from public.document_versions where false$q$, 'service_role: delete document_versions -> allowed');
 select cmp_ok((select count(*) from public.document_chunks)::int, '>=', 1, 'service_role: select document_chunks -> rows visible');

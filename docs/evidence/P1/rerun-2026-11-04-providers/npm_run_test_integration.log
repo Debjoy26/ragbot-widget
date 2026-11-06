@@ -1,0 +1,16 @@
+
+> ragbot-widget@0.1.0 test:integration
+> vitest run --project integration --passWithNoTests
+
+
+ RUN  v5.1.0 /home/kali/Desktop/ragbot-widget
+
+No test files found, exiting with code 0
+
+projects: integration
+
+|integration| 
+
+include: tests/integration/**/*.test.ts
+exclude:  **/node_modules/**, **/.git/**
+

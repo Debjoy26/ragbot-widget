@@ -105,10 +105,12 @@ Provision isolated services, install branding, configure secrets and limits, run
 - Approved maximum file size/pages, OCR availability, rate limits, retention, and spending caps must be configured; missing values fail closed.
 - Rollback must restore a prior widget release and compatible API; database changes use forward-safe migrations.
 
-## 9. Open decisions before implementation
+## 9. Decisions before implementation
+These are settled in `docs/decisions/` unless marked open. ADR 0014 revises the provider choices.
 - Supported initial chat/embedding providers and embedding dimensions.
 - OCR provider, if scanned PDFs are in scope.
 - Prompt/output moderation policy and latency trade-off.
 - Retention period, disclosure rules, provider data processing terms, and client jurisdiction.
-- Hosting resources and per-client commercial limits.
+- Hosting resources and per-client commercial limits (open: no ADR yet).
+- Feedback buttons (deferred, ADR 0011) and the answer cache (off by default, ADR 0012).
 - Per-client contact channels, business hours, localised escalation messages, and the repeated-miss threshold for contact routing.

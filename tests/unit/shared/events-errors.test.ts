@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ADMIN_ROUTES,
   ERROR_CODES,
   ERROR_HTTP_STATUS,
   HANDOFF_REASONS,
@@ -115,12 +114,12 @@ describe('SSE event schemas', () => {
 });
 
 describe('route table', () => {
-  it('lists every TECH_SPECS route and no feedback route (ADR 0011)', () => {
-    const all = [...PUBLIC_ROUTES, ...ADMIN_ROUTES].map((r) => `${r.method} ${r.path}`);
-    expect(all).toHaveLength(13);
+  it('lists the public routes only: no feedback route (ADR 0011) and no /v1/admin/* (ADR 0017)', () => {
+    const all = PUBLIC_ROUTES.map((r) => `${r.method} ${r.path}`);
+    expect(all).toHaveLength(6);
     expect(all.some((r) => /feedback/i.test(r))).toBe(false);
+    expect(all.some((r) => r.includes('/admin'))).toBe(false);
     expect(all).toContain('GET /v1/conversations/:id');
-    expect(all).toContain('PATCH /v1/admin/bot-settings');
   });
 });
 

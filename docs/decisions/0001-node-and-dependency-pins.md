@@ -11,5 +11,5 @@
 Node 26 only just entered LTS and Render support is unverified; Node 24 is mature and supported until 2028.
 
 ## Consequences
-- Supabase CLI is not installed locally; installing it needs separate owner approval (required for local migration testing).
+- Supabase CLI was not installed at the time. It is now pinned as a dev dependency (3.0.0). The Node pin is 24.22.2.
 - Exact versions are recorded in the P1 report, not here.

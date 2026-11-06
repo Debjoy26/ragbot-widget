@@ -126,6 +126,60 @@ if grep -q CLI-CALLED <<<"$OUT"; then ok "db-plan with a good ref reaches the st
 mk -i db-create "$STUB" "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD"
 if grep -q CLI-CALLED <<<"$OUT"; then ok "db-create with matching refs reaches the stub"; else bad "db-create with matching refs did not reach the stub"; fi
 
+# --- first-admin: the guards run before `node` (C-6) ---
+# `node` is replaced by a stub found first on PATH. The stub answers `node -v` with the pinned version
+# so check-node passes, and for anything else only prints NODE-CALLED. The real node, the script and
+# any Supabase project are never reached; no SUPABASE_* variable is passed on.
+STUBDIR="$TMP/stub-bin"
+mkdir -p "$STUBDIR"
+printf '#!/usr/bin/env bash\nif [ "${1:-}" = "-v" ]; then echo "v%s"; exit 0; fi\necho NODE-CALLED\nexit 0\n' \
+	"$(tr -d '[:space:]' <"$ROOT/.nvmrc")" >"$STUBDIR/node"
+chmod +x "$STUBDIR/node"
+GOODMAIL=owner@client.example.com
+
+# fa <make args...>: run make with the stub node first on PATH. -i makes failed prerequisites non-fatal,
+# so a recipe guard has to stop the run by itself. Sets OUT.
+fa() {
+	OUT="$(cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKELEVEL -u SUPABASE_URL -u SUPABASE_SECRET_KEY -u EMAIL \
+		PATH="$STUBDIR:$PATH" make --no-print-directory -f Makefile "$@" 2>&1)"
+}
+# fa_env <VAR=value> <make args...>: same, with one exported variable.
+fa_env() {
+	local envset="$1"; shift
+	OUT="$(cd "$ROOT" && env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS -u MAKELEVEL -u SUPABASE_URL -u SUPABASE_SECRET_KEY -u EMAIL \
+		"$envset" PATH="$STUBDIR:$PATH" make --no-print-directory -f Makefile "$@" 2>&1)"
+}
+
+# fa_stops <name> <make args...>: with and without -i, node must not be called.
+fa_stops() {
+	local name="$1"; shift
+	rm -f "$MARKER"
+	fa first-admin "$@"
+	if grep -q NODE-CALLED <<<"$OUT" || [ -e "$MARKER" ]; then bad "first-admin $name reached node"; else ok "first-admin $name stops before node"; fi
+	fa -i first-admin "$@"
+	if grep -q NODE-CALLED <<<"$OUT" || [ -e "$MARKER" ]; then bad "first-admin -i $name reached node"; else ok "first-admin -i $name stops before node"; fi
+}
+
+fa first-admin "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD" "EMAIL=$GOODMAIL"
+if grep -q NODE-CALLED <<<"$OUT"; then ok "first-admin with valid refs and email reaches the node stub"; else bad "first-admin with valid refs and email did not reach the node stub"; fi
+
+fa_stops "bad ref" PROJECT_REF=BAD CONFIRM_REF=BAD "EMAIL=$GOODMAIL"
+fa_stops "uppercase ref" PROJECT_REF=ABCDEFGHIJKLMNOPQRST CONFIRM_REF=ABCDEFGHIJKLMNOPQRST "EMAIL=$GOODMAIL"
+fa_stops "missing PROJECT_REF" "CONFIRM_REF=$GOOD" "EMAIL=$GOODMAIL"
+fa_stops "mismatched CONFIRM_REF" "PROJECT_REF=$GOOD" "CONFIRM_REF=$OTHER" "EMAIL=$GOODMAIL"
+fa_stops "missing CONFIRM_REF" "PROJECT_REF=$GOOD" "EMAIL=$GOODMAIL"
+fa_stops "missing EMAIL" "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD"
+fa_stops "empty EMAIL" "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD" "EMAIL="
+for bad_mail in 'not-an-email' 'owner@' '@client.example.com' 'owner@client' 'owner @client.example.com' \
+	"owner@client.example.com"$'\n' "owner@client.example.com; touch $MARKER" "owner@client.example.com --role admin"; do
+	fa_stops "malformed EMAIL [${bad_mail:0:24}]" "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD" "EMAIL=$bad_mail"
+done
+fa_stops 'EMAIL containing $' "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD" 'EMAIL=ow$ner@client.example.com'
+fa_stops 'EMAIL containing a make function' "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD" 'EMAIL=$(shell touch '"$MARKER"')@client.example.com'
+rm -f "$MARKER"
+fa_env "EMAIL=$GOODMAIL" first-admin "PROJECT_REF=$GOOD" "CONFIRM_REF=$GOOD"
+if grep -q NODE-CALLED <<<"$OUT"; then bad "first-admin with an exported EMAIL reached node"; else ok "first-admin with an exported EMAIL stops before node"; fi
+
 # --- origin: exported / make -e ---
 expect_refused_env "exported PROJECT_REF refused" "PROJECT_REF=$GOOD" check-ref
 expect_refused_env "make -e with exported PROJECT_REF refused" "PROJECT_REF=$GOOD" -e check-ref

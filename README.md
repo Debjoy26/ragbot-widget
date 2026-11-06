@@ -1,6 +1,6 @@
 # ragbot_widget
 
-Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). This is the proposed implementation layout, not a claim that the code already exists.
+Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P3 and P3.5: shared contracts, migrations and tests. The API, worker and widget are placeholders until P4, P6 and P8.
 
 ## Project structure
 ```text
@@ -34,7 +34,7 @@ ragbot_widget/
 │   │   └── lib/{extract,chunk,embeddings}.ts
 │   └── package.json
 ├── shared/
-│   ├── src/{contracts,schemas,providers,prompts}.ts
+│   ├── src/{contracts,schemas,errors,providers,prompts,index}.ts
 │   └── package.json
 ├── supabase/
 │   ├── config.toml
@@ -43,22 +43,31 @@ ragbot_widget/
 │   │   ├── 002_vectors.sql
 │   │   ├── 003_grants_rls_storage.sql
 │   │   ├── 004_jobs_limits_budgets.sql
-│   │   └── 005_retention.sql
+│   │   ├── 005_retention.sql
+│   │   ├── 006_reaper_settle_reply_lock.sql
+│   │   ├── 007_run_state_guard.sql
+│   │   ├── 008_p3d5_fixes.sql
+│   │   ├── 009_admin_documents.sql
+│   │   └── 010_admin_settings.sql
+│   ├── tests/database/      # pgTAP
 │   └── seed.sql
 ├── database/                # FDE entry point: symlinks to supabase/ SQL, runbook
 ├── clients/client-a/deployment.example.json
 ├── scripts/{deploy-client,smoke-test}.mjs
+├── scripts/{race-db,test-make-guards,secret-scan}.sh
 ├── tests/{unit,integration,evaluation,e2e}/
 ├── docs/
 ├── Makefile                 # make help: install, create local or client database
+├── .github/workflows/ci.yml
 ├── package.json
 ├── package-lock.json
 ├── render.yaml
-├── tsconfig.json
-├── .gitignore
+├── tsconfig.json, tsconfig.base.json
+├── eslint.config.mjs, vitest.config.ts, playwright.config.ts
+├── .nvmrc, .npmrc, .gitignore
 └── README.md
 ```
-Brace notation abbreviates multiple files. Use npm workspaces and one committed root lockfile. Widget TypeScript is built into ordinary browser JavaScript. The deployment manifest contains public project identifiers only, never keys that confer privileged access.
+The tree is cumulative: it shows the finished layout, and files appear in the phase that builds them. Not there yet: API routes, services and libs (P4, P5, P7), worker jobs and libs (P6, P9), widget modules, `theme.css` and `vercel.json` (P8), `render.yaml` and `scripts/*.mjs` (P10), `clients/` (P12). Brace notation abbreviates multiple files. Use npm workspaces and one committed root lockfile. Widget TypeScript is built into ordinary browser JavaScript. The deployment manifest contains public project identifiers only, never keys that confer privileged access.
 
 ## Documentation
 - `PRD.md`: scope and acceptance criteria.
@@ -71,8 +80,8 @@ Brace notation abbreviates multiple files. Use npm workspaces and one committed 
 - `handover.md`: context and invariants for whoever picks up the work.
 
 ## Local setup contract
-Install a supported Node.js LTS release; pin its exact version and compatible dependency versions during implementation. Provision a development Supabase project or local stack and test provider credentials.
-Proposed scripts to implement:
+Install the Node version in `.nvmrc` and run `nvm use`. Exact dependency versions are pinned in `package-lock.json`.
+Main scripts (some start placeholders until their phase):
 ```bash
 npm ci
 npm run db:migrate:dev
@@ -82,7 +91,7 @@ npm run dev:widget
 npm test
 npm run build
 ```
-These commands are a required script interface for the future codebase; this documentation bundle does not contain runnable application code. Run the three development processes in separate terminals.
+Database work goes through `make` (`make help`). `npm run test:integration` needs the local stack running. `npm run test:e2e` is not a gate until P8.
 
 ## Environment variables
 API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
@@ -121,7 +130,7 @@ npx supabase login                     # once per machine
    make db-advisors PROJECT_REF=<ref>
    ```
 
-5. Finish the manual steps in [`database/README.md`](database/README.md): enable TOTP, create the first admin, and add the client's bot and settings rows.
+5. Finish the manual steps in [`database/README.md`](database/README.md): set the Auth options (public signup off, TOTP on, phone MFA off, password length at least 12, secure password change on), create the first admin with `make first-admin`, and add the client's bot and settings rows.
 
 To recreate a local database instead, run `make db-start`, then `make db-local`. This wipes local data.
 
@@ -129,7 +138,7 @@ To recreate a local database instead, run `make db-start`, then `make db-local`.
 
 ## Deployment order per client
 1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).
-2. Provision the first admin and active membership through trusted operator tooling; configure Auth site/redirect URLs for the admin domain and enable TOTP, because every private read and admin action needs `aal2` (ADR 0015).
+2. Provision the first admin and active membership with `make first-admin`, after turning public signup off; configure Auth site/redirect URLs for the admin domain and enable TOTP, because every private read and admin action needs `aal2` (ADR 0015).
 3. Test grants/RLS as anon, nonmember, analyst, admin, and privileged backend.
 4. Deploy Render API and worker from the repository root using their workspace build/start commands. Provision secrets separately for each client and configure the queue and retention settings.
 5. Set API health path `/health/ready`; configure CORS for actual website origins. Verify visitor sessions.

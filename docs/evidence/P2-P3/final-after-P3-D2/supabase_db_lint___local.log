@@ -1,0 +1,7 @@
+Warning: --local isn't needed (local is the default) and will be removed in v4
+Target: local stack (127.0.0.1:54322)
+Linting schema: extensions
+Linting schema: public
+
+No schema errors found
+{"results":[],"message":"db lint","target":{"kind":"local","host":"127.0.0.1","port":54322}}

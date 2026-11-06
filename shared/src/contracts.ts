@@ -1,6 +1,7 @@
 /**
- * Public and admin API contracts (TECH_SPECS §2–§6.2) plus the canonical enum
- * value lists shared with the database CHECK constraints (DATABASE_SCHEMA).
+ * Public API contracts (TECH_SPECS §2, §4–§5) plus the canonical enum value lists
+ * shared with the database CHECK constraints (DATABASE_SCHEMA). The retired
+ * `/v1/admin/*` surface is gone (ADR 0017); admin operations are SQL RPCs.
  *
  * Browser-safe: no Node imports, no runtime dependencies. Optional properties are
  * written as `?: T | undefined` so Zod-inferred types are assignable under
@@ -227,12 +228,35 @@ export interface HistoryMessage {
   readonly created_at: string;
 }
 
-/** GET /v1/conversations/:id (same session only, bounded, oldest first). */
+/**
+ * GET /v1/conversations/:id query string. UNCONFIRMED shape (P3-D5 G-17).
+ * `before` is the id of the oldest message the client already holds; the server returns
+ * the next page of messages older than it. Omitted: the newest page.
+ */
+export interface ConversationHistoryRequest {
+  readonly before?: string | undefined;
+}
+
+/** GET /v1/conversations/:id (same session only, bounded, oldest first within a page). */
 export interface ConversationHistoryResponse {
   readonly conversation_id: string;
   readonly messages: readonly HistoryMessage[];
-  /** True when older messages exist beyond the server-enforced bound. */
+  /** True when older messages exist; request them with `before` = id of the first message here. */
   readonly has_more: boolean;
+}
+
+/**
+ * Response to a duplicate `Idempotency-Key` (same request hash): the stored status of the
+ * original run, never a regenerated answer and never message content. UNCONFIRMED shape (G-17);
+ * the client fetches content from the history route.
+ */
+export interface IdempotentReplayResponse {
+  readonly request_id: string;
+  readonly run_state: RequestRunState;
+  readonly conversation_id: string | null;
+  readonly message_id: string | null;
+  /** Final message status once the run has produced a message; null while it has not. */
+  readonly status: MessageStatus | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,69 +313,13 @@ export type SseEventName = SseEvent['event'];
 export const SSE_EVENT_NAMES = ['meta', 'delta', 'sources', 'handoff', 'done', 'error'] as const;
 
 // ---------------------------------------------------------------------------
-// Administrative routes (TECH_SPECS §3). All require a Supabase access token,
-// active membership, required role and applicable MFA assurance.
+// Bot settings patch (whitelist). There is no /v1/admin/* surface: the admin panel
+// calls browser-callable SQL RPCs directly under the member's own JWT (ADR 0017), and
+// SQL validates the merged result. `botSettingsPatchSchema` is the client-side whitelist.
 // ---------------------------------------------------------------------------
 
-/** POST /v1/admin/documents */
-export interface AdminCreateDocumentRequest {
-  readonly bot_id: string;
-  readonly title: string;
-  readonly filename: string;
-  readonly media_type: MediaType;
-  readonly size_bytes: number;
-  readonly disclosure_policy: DisclosurePolicy;
-}
-export interface AdminCreateDocumentResponse {
-  readonly document_id: string;
-  readonly version_id: string;
-  readonly upload_url: string;
-  /** ISO 8601 UTC timestamp. */
-  readonly upload_expires_at: string;
-}
-
-/** POST /v1/admin/documents/:id/complete */
-export interface AdminCompleteDocumentRequest {
-  readonly version_id: string;
-}
-export interface AdminCompleteDocumentResponse {
-  readonly document_id: string;
-  readonly version_id: string;
-  readonly job_id: string;
-}
-
-/** POST /v1/admin/documents/:id/reindex */
-export interface AdminReindexDocumentRequest {
-  /** Defaults to the document's current permitted version when omitted. */
-  readonly version_id?: string | undefined;
-}
-export interface AdminReindexDocumentResponse {
-  readonly job_id: string;
-}
-
-/** POST /v1/admin/documents/:id/download */
-export interface AdminDownloadDocumentResponse {
-  readonly download_url: string;
-  /** ISO 8601 UTC timestamp (short-lived). */
-  readonly expires_at: string;
-}
-
-/** DELETE /v1/admin/documents/:id: retrieval is excluded immediately; cleanup is queued. */
-export interface AdminDeleteDocumentResponse {
-  readonly document_id: string;
-  readonly status: 'deleted';
-  readonly cleanup_job_id: string;
-}
-
-/**
- * PATCH /v1/admin/bot-settings: whitelisted fields only (see `botSettingsPatchSchema`).
- * Every field is optional; `null` clears an optional contact field.
- */
-export interface AdminBotSettingsPatchRequest {
-  readonly bot_id: string;
-  readonly patch: AdminBotSettingsPatch;
-}
-export interface AdminBotSettingsPatch {
+/** Whitelisted fields only (see `botSettingsPatchSchema`). `null` clears an optional contact field. */
+export interface BotSettingsPatch {
   readonly display_name?: string | undefined;
   readonly greeting?: string | undefined;
   readonly suggested_questions?: readonly string[] | undefined;
@@ -370,15 +338,44 @@ export interface AdminBotSettingsPatch {
   readonly tone?: string | undefined;
   readonly scope?: string | undefined;
 }
-export interface AdminBotSettingsPatchResponse {
-  readonly bot_id: string;
-  readonly settings_version: number;
+
+// ---------------------------------------------------------------------------
+// client_settings JSON keys that SQL reads (fail closed when missing or invalid).
+// Other keys inside these objects are not part of this contract.
+// ---------------------------------------------------------------------------
+
+export interface BudgetPolicy {
+  /** Daily spend cap in USD; read by `reserve_request_budget` (RB002 when missing or invalid). */
+  readonly daily_cap_usd: number;
 }
 
-/** POST /v1/admin/conversations/:id/delete (retention-aware workflow). */
-export interface AdminDeleteConversationResponse {
-  readonly conversation_id: string;
-  readonly status: 'deletion_queued' | 'deleted';
+export interface RetentionPolicy {
+  /** Conversation retention in days (ADR 0006: 90); read by the purge jobs (RB020 when invalid). */
+  readonly conversation_days: number;
+  /** Usage-record retention in months (ADR 0006: 13). */
+  readonly usage_months: number;
+}
+
+export interface RatePolicyRequired {
+  /** `begin_request_run` per-session concurrency cap (RB002 when missing or invalid). */
+  readonly concurrent_requests_per_session: number;
+}
+
+export interface QuotaRule {
+  readonly limit: number;
+  readonly window_seconds: number;
+}
+
+export const QUOTA_KINDS = ['register', 'upload', 'reindex', 'write'] as const;
+export type QuotaKind = (typeof QUOTA_KINDS)[number];
+
+/** `upload_policy` including the P3.5 keys (RB036 when a required key is missing or invalid). */
+export interface UploadPolicy {
+  readonly max_bytes: number;
+  readonly max_pages: number;
+  readonly index_max_attempts: number;
+  readonly cleanup_max_attempts: number;
+  readonly quotas: Readonly<Record<QuotaKind, QuotaRule>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,12 +391,104 @@ export const PUBLIC_ROUTES = [
   { method: 'GET', path: '/v1/conversations/:id' },
 ] as const;
 
-export const ADMIN_ROUTES = [
-  { method: 'POST', path: '/v1/admin/documents' },
-  { method: 'POST', path: '/v1/admin/documents/:id/complete' },
-  { method: 'POST', path: '/v1/admin/documents/:id/reindex' },
-  { method: 'POST', path: '/v1/admin/documents/:id/download' },
-  { method: 'DELETE', path: '/v1/admin/documents/:id' },
-  { method: 'PATCH', path: '/v1/admin/bot-settings' },
-  { method: 'POST', path: '/v1/admin/conversations/:id/delete' },
+// ---------------------------------------------------------------------------
+// Browser RPC responses (P3.5-T3). What PostgREST returns for each browser-callable function in
+// supabase/migrations/009 and 010. A function declared `returns table` comes back as a JSON array of
+// rows; a scalar comes back as the bare value; `void` comes back as null. The matching strict Zod schemas
+// are in schemas.ts and are checked against real HTTP responses by tests/integration/admin-real-session.test.ts.
+// ---------------------------------------------------------------------------
+
+/** `document_versions.failure_code` (CHECK in the database). */
+export const FAILURE_CODES = [
+  'FILE_UNSUPPORTED',
+  'OCR_REQUIRED',
+  'INDEXING_FAILED',
+  'BUDGET_EXCEEDED',
+  'SUPERSEDED',
 ] as const;
+export type FailureCode = (typeof FAILURE_CODES)[number];
+
+export interface AdminRegisterDocumentRow {
+  readonly document_id: string;
+  readonly version_id: string;
+  readonly storage_path: string;
+}
+
+export interface AdminAddDocumentVersionRow {
+  readonly version_id: string;
+  readonly version_number: number;
+  readonly storage_path: string;
+}
+
+export interface AdminCompleteUploadRow {
+  readonly version_id: string;
+  readonly status: DocumentVersionStatus;
+  readonly job_queued: boolean;
+}
+
+export interface AdminRetryVersionRow {
+  readonly version_id: string;
+  readonly status: DocumentVersionStatus;
+}
+
+export interface AdminReindexDocumentRow {
+  readonly version_id: string;
+  readonly version_number: number;
+}
+
+export interface AdminDocumentStatusRow {
+  readonly document_id: string;
+  readonly title: string;
+  readonly status: DocumentStatus;
+  readonly active_version_id: string | null;
+  readonly latest_version_id: string | null;
+  readonly latest_version_number: number | null;
+  readonly latest_version_status: DocumentVersionStatus | null;
+  readonly batches_done: number | null;
+  readonly batches_total: number | null;
+  readonly failure_code: FailureCode | null;
+}
+
+export interface AdminBotListRow {
+  readonly id: string;
+  readonly slug: string;
+  /** NULL until the bot has a public config row. */
+  readonly display_name: string | null;
+  readonly enabled: boolean;
+  readonly settings_version: number;
+}
+
+/** One row. The public-config fields are NULL until a first update creates the config row. */
+export interface AdminSettingsRow {
+  readonly bot_id: string;
+  readonly slug: string;
+  readonly enabled: boolean;
+  readonly settings_version: number;
+  readonly tone: string | null;
+  readonly scope: string | null;
+  readonly max_bytes: number | null;
+  readonly max_pages: number | null;
+  readonly display_name: string | null;
+  readonly greeting: string | null;
+  readonly suggested_questions: readonly string[] | null;
+  readonly primary_color: string | null;
+  readonly position: WidgetPosition | null;
+  readonly privacy_url: string | null;
+  readonly supported_languages: readonly string[] | null;
+  readonly escalation_label: string | null;
+  readonly escalation_messages: Readonly<Record<string, string>> | null;
+  readonly contact_email: string | null;
+  readonly contact_phone: string | null;
+  readonly contact_whatsapp_url: string | null;
+  readonly contact_page_url: string | null;
+  readonly business_hours: Readonly<Record<string, unknown>> | null;
+  readonly timezone: string | null;
+}
+
+export interface AdminMemberRow {
+  readonly user_id: string;
+  readonly role: AdminRole;
+  readonly active: boolean;
+  /** The member's sign-in email (B-7); NULL if the auth user is gone. */
+  readonly label: string | null;
+}

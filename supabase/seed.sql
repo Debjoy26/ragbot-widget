@@ -18,6 +18,7 @@ insert into public.bot_profiles (
 );
 
 -- is_published is derived from bot_profiles.enabled by trigger (the dev bot is enabled, so this row is published).
+-- supported_languages must equal bot_profiles.allowed_languages (the enable gate checks it).
 insert into public.public_bot_config (
   bot_id, bot_slug, display_name, greeting, suggested_questions, primary_color, position,
   privacy_url, supported_languages, escalation_label, escalation_messages,
@@ -38,11 +39,11 @@ insert into public.public_bot_config (
   null,
   null,
   null,
-  '{"mon": {"open": "09:00", "close": "17:00"}, "tue": {"open": "09:00", "close": "17:00"}, "wed": {"open": "09:00", "close": "17:00"}, "thu": {"open": "09:00", "close": "17:00"}, "fri": {"open": "09:00", "close": "17:00"}}'::jsonb,
+  '{"mon-fri": "09:00-17:00"}'::jsonb,
   'Asia/Kolkata'
 );
 
--- Conservative limits from ADR 0007; retention from ADR 0006; handoff defaults from ADR 0013;
+-- Conservative limits from ADR 0007 (dev-only quota and attempt values below are placeholders); retention from ADR 0006; handoff defaults from ADR 0013;
 -- answer cache OFF by default (ADR 0012).
 insert into public.client_settings (
   bot_id, allowed_origins, rate_policy, budget_policy, retention_policy,
@@ -60,7 +61,18 @@ insert into public.client_settings (
   }'::jsonb,
   '{"daily_cap_usd": 5}'::jsonb,
   '{"conversation_days": 90, "usage_months": 13}'::jsonb,
-  '{"max_bytes": 20971520, "max_pages": 300}'::jsonb,
+  '{
+    "max_bytes": 20971520,
+    "max_pages": 300,
+    "index_max_attempts": 3,
+    "cleanup_max_attempts": 3,
+    "quotas": {
+      "register": {"limit": 20, "window_seconds": 3600},
+      "upload": {"limit": 40, "window_seconds": 3600},
+      "reindex": {"limit": 10, "window_seconds": 3600},
+      "write": {"limit": 60, "window_seconds": 3600}
+    }
+  }'::jsonb,
   '{
     "repeated_no_knowledge_threshold": 2,
     "triggers": ["no_knowledge", "out_of_scope", "human_requested", "blocked", "unavailable", "repeated_no_knowledge"]

@@ -22,7 +22,7 @@
 Session creation is not proof of human identity. Rate limits/bot challenges and spending controls remain mandatory. Optional history may be disabled entirely in the MVP.
 
 ## 3. Administrative operations
-The admin panel never calls the Render API (ADR 0017). It reads under RLS and writes through database functions and Storage policies, planned in `plan.md` P3.5 and not built yet. Function names are decided then. Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules.
+The admin panel never calls the Render API (ADR 0017). It reads under RLS and writes through database functions and Storage policies, listed in `DATABASE_SCHEMA.md` "Admin RPCs". Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules.
 | Operation | Purpose |
 |---|---|
 | Register document | Validate metadata, create document and version, return the generated storage path |
@@ -77,7 +77,7 @@ Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORB
 - `messages.handoff_reason` is persisted; admins read aggregated gaps via the `knowledge_gaps` RPC.
 
 ## 6.2 Caching (latency)
-All caches are bot-scoped, version-keyed, backend-only, and can be disabled by a kill switch in `client_settings.cache_policy`.
+All caches are version-keyed, backend-only, and can be disabled by a kill switch in `client_settings.cache_policy`. Answer and retrieval caches are bot-scoped. Query embedding and moderation caches are keyed by content hash, have no `bot_id`, and hold no raw text or visitor data, so a verdict or embedding can be reused for identical input.
 | Layer | Key | Storage | Invalidation |
 |---|---|---|---|
 | Provider prompt caching | Byte-identical prefix per bot, settings version and prompt template | Provider | Prefix changes on version change |
@@ -99,7 +99,7 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 - Visitor bearer token binds bot, session, expiry; conversation lookup checks ownership.
 - CORS is not authentication. Do not rely on IP or user-agent as identity.
 - TLS, trusted proxy configuration, canonical IP handling, payload/concurrency/time limits.
-- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority. Ingestion uses a job-based reservation (planned in P3.5), and the worker never calls a provider without one.
+- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority. Ingestion uses a job-based reservation (`reserve_job_budget`), and the worker never calls a provider without one.
 - Disable raw model HTML/remote images. Use safe source links and no inline scripts.
 - Generic untrusted prompts/documents never grant access or change server configuration.
 

@@ -19,7 +19,7 @@ insert into public.admin_memberships (user_id, role, active) values
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
   ('b1000000-0000-4000-8000-0000000000a1', 'mfa-bot', 'x', array['en'], 'm', 1536);
 insert into public.documents (id, bot_id, title) values ('d1000000-0000-4000-8000-0000000000a1', 'b1000000-0000-4000-8000-0000000000a1', 'Doc');
-insert into public.document_versions (id, document_id, version_number, storage_path, media_type) values ('e2000000-0000-4000-8000-0000000000a1', 'd1000000-0000-4000-8000-0000000000a1', 1, 'mfa/v1', 'text/plain');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type) values ('e2000000-0000-4000-8000-0000000000a1', 'd1000000-0000-4000-8000-0000000000a1', 1, 'ab000000-0000-4000-8000-000000000001/ab000000-0000-4000-8000-000000000002/ab000000-0000-4000-8000-000000000003/mfa-v1.txt', 'text/plain');
 insert into public.visitor_sessions (id, bot_id, expires_at) values ('a1000000-0000-4000-8000-0000000000a1', 'b1000000-0000-4000-8000-0000000000a1', now() + interval '1 hour');
 insert into public.conversations (id, bot_id, visitor_session_id) values ('c1000000-0000-4000-8000-0000000000a1', 'b1000000-0000-4000-8000-0000000000a1', 'a1000000-0000-4000-8000-0000000000a1');
 insert into public.messages (id, conversation_id, role, content) values ('81000000-0000-4000-8000-0000000000a1', 'c1000000-0000-4000-8000-0000000000a1', 'user', 'question');

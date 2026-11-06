@@ -5,6 +5,9 @@
 ifneq (,$(findstring $$,$(value PROJECT_REF)$(value CONFIRM_REF)))
 $(error PROJECT_REF and CONFIRM_REF must not contain $$)
 endif
+ifneq (,$(findstring $$,$(value EMAIL)))
+$(error EMAIL must not contain $$)
+endif
 
 # Remote targets always need an explicit PROJECT_REF and never use the CLI's linked project.
 # Migrations live in supabase/migrations (see database/README.md).
@@ -21,7 +24,7 @@ NODE_VERSION := $(shell cat .nvmrc)
 # recipes. The origin test refuses values that came from the environment or from `make -e`.
 # Every remote recipe re-runs these tests itself, so nothing depends on check-ref having stopped
 # the build (for example `make -i`). $(origin ...) only ever expands to a fixed word.
-export PROJECT_REF CONFIRM_REF
+export PROJECT_REF CONFIRM_REF EMAIL
 # Fixed collation, so [a-z] means the 26 ASCII letters in every locale.
 export LC_ALL := C
 # Known limit: a valid ref set through MAKEFLAGS in the environment counts as "command line" and make
@@ -33,7 +36,7 @@ CONFIRM_FAIL = { echo "Not confirmed. Type the same ref again on the command lin
 
 .PHONY: help check-node check-docker check-cli check-ref check-confirm install \
 	db-start db-stop db-local db-test db-race db-lint test-make \
-	db-plan db-create db-status db-advisors
+	db-plan db-create db-status db-advisors first-admin
 
 help:
 	@echo "Setup"
@@ -56,6 +59,9 @@ help:
 	@echo "                                        the CLI then asks again"
 	@echo "  make db-status PROJECT_REF=<ref>      Compare local and remote migration history"
 	@echo "  make db-advisors PROJECT_REF=<ref>    Run security and performance advisors"
+	@echo "  make first-admin PROJECT_REF=<ref> CONFIRM_REF=<ref> EMAIL=<address>"
+	@echo "                                        Invite the first owner (needs SUPABASE_URL and SUPABASE_SECRET_KEY in the"
+	@echo "                                        environment; sets no password, prints no link)"
 
 check-node:
 	@test "$$(node -v 2>/dev/null)" = "v$(NODE_VERSION)" || \
@@ -123,3 +129,12 @@ db-status: check-cli check-ref
 db-advisors: check-cli check-ref
 	@$(REF_TEST) || $(REF_FAIL); \
 	$(SUPABASE) db advisors --remote="$$PROJECT_REF" --type all
+
+# Invites the first owner and adds the membership (scripts/create-first-admin.mjs). SUPABASE_URL and
+# SUPABASE_SECRET_KEY must already be in the environment; they are never passed on the command line.
+# The address is read by the shell from its environment ("$$EMAIL"), like the refs.
+first-admin: check-node check-ref check-confirm
+	@$(CONFIRM_TEST) || $(CONFIRM_FAIL); \
+	[[ "$(origin EMAIL)" == "command line" && "$$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$$ ]] || \
+		{ echo "EMAIL must be given on the make command line and be an email address, e.g. make first-admin PROJECT_REF=<ref> CONFIRM_REF=<ref> EMAIL=owner@example.com"; exit 1; }; \
+	node scripts/create-first-admin.mjs --email "$$EMAIL" --role owner --confirm-project "$$CONFIRM_REF"

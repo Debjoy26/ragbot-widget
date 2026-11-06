@@ -15,19 +15,21 @@
   "scripts": {
     "build": "tsc -b && npm run build -w widget",
     "typecheck": "tsc -b && tsc -p widget --noEmit && tsc -p tests --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run --project unit",
-    "test:integration": "vitest run --project integration --passWithNoTests",
-    "test:e2e": "playwright test",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "playwright test --pass-with-no-tests",
     "db:start": "supabase start",
     "db:migrate:dev": "supabase db reset",
     "dev:api": "npm run dev -w api",
     "dev:worker": "npm run dev -w worker",
     "dev:widget": "npm run dev -w widget",
     "clean": "tsc -b --clean && rm -rf widget/dist",
-    "test:db": "supabase test db"
+    "test:db": "supabase test db",
+    "secret-scan": "bash scripts/secret-scan.sh",
+    "secret-scan:self-test": "bash scripts/secret-scan.sh --self-test"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

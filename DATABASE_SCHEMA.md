@@ -31,8 +31,8 @@ This is one schema in the client-specific Supabase project, not a database per f
 | request_runs | id, bot_id, visitor_session_id, idempotency_key, request_hash, state, reserved_tokens, started_at, finished_at | Unique scoped idempotency key; payload mismatch is rejected. |
 | usage_events | id, bot_id, request_id, job_id, provider, model, operation, input_tokens, output_tokens, estimated_cost, latency_ms, created_at | Include failed/fallback attempts and indexing; estimates reconciled with provider usage. |
 | rate_limit_buckets | key_hash, window_start, window_seconds, request_count, expires_at | Composite uniqueness; atomic increments. No plain IP storage by default. |
-| budget_reservations | id, bot_id, request_id, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. Planned in P3.5: job-based reservations for ingestion, counted toward the same daily cap. |
-| audit_logs | id, actor_user_id, action, resource_type, resource_id, request_id, safe_metadata, created_at | Backend writes; no raw secrets or full document payloads. |
+| budget_reservations | id, bot_id, request_id, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. `job_id` marks a job-based reservation for ingestion; both kinds count toward the same daily cap. Only one `reserved` row may exist per job, and a retry takes a new reservation. |
+| audit_logs | id, actor_user_id, action, resource_type, resource_id, request_id, safe_metadata, created_at | Written by the backend and through `admin_audit`; no raw secrets or full document payloads. |
 | client_settings | bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy, feature_flags, updated_at | Internal settings; only explicitly whitelisted fields editable by admin. `handoff_policy`: enabled triggers and repeated-miss threshold (default 2). `cache_policy`: answer-cache opt-in (default off), TTLs, kill switch. Planned in P3.5: attempt limits for `index_document` and `cleanup`, read by the admin RPCs; a missing value fails closed. |
 | query_embedding_cache | key_hash, embedding_model, embedding, created_at, last_hit_at, expires_at | Key is a hash of model, dimensions and normalised query. Raw query text is not stored. |
 | moderation_cache | key_hash, policy_version, verdict, created_at, expires_at | Key is a hash of moderation model, policy version and normalised text. |
@@ -41,11 +41,11 @@ This is one schema in the client-specific Supabase project, not a database per f
 ## Database operations
 - `match_document_chunks`: bounded similarity query; filters by bot, active document version, deleted state, and disclosure policy. Execute by the backend role only, not `anon`.
 - `claim_jobs`: atomically claim due work using transaction/row locks and a lease. Expired leases become recoverable.
-- `activate_document_version`: atomically switch the active pointer and increment `corpus_version` after all expected chunks exist and validation succeeds. Planned in P3.5: refuse a version older than the active one, which it allows today.
-- `reserve_request_budget`: atomically check caps and reserve capacity before external calls. It needs a request run, so the worker can't use it for ingestion; P3.5 adds a job-based reservation.
+- `activate_document_version`: atomically switch the active pointer and increment `corpus_version` after all expected chunks exist and validation succeeds. It refuses a version older than the active one (RB011).
+- `reserve_request_budget`: atomically check caps and reserve capacity before external calls. It needs a request run, so ingestion uses `reserve_job_budget`.
 - `record_rate_limit_attempt`: atomically increment a bounded window.
 - `mark_document_deleted`: immediately exclude retrieval, increment `corpus_version`, then enqueue cleanup.
-- Admin RPCs (`plan.md` P3.5, ADR 0017, not built): document registration, versions, upload completion, reindex, delete, status, settings read and update, conversation delete. Each checks `is_active_member_mfa` first, validates its own input and writes `audit_logs` in the same transaction. Settings are validated as a merged result, and calls are limited by per-bot quotas.
+- Admin RPCs: see "Admin RPCs" below. Each checks membership, role and `aal2` first, validates its own input and writes `audit_logs` in the same transaction.
 - `knowledge_gaps`: aggregate unanswered questions by `handoff_reason` and frequency for active admins/analysts; bounded and date-filtered.
 - Never expose arbitrary SQL execution or unbounded search RPCs.
 - Functions using SECURITY DEFINER require a fixed safe search path, explicit authorization, and restricted EXECUTE grants. Prefer SECURITY INVOKER where feasible.
@@ -61,7 +61,7 @@ This is one schema in the client-specific Supabase project, not a database per f
 | data_entries | None | None | Read if permitted | Read | Validate/write |
 | bot_profiles/client_settings | None | None | None or restricted RPC | Safe read and whitelisted update RPC | Manage |
 | jobs/usage | None | None | Safe status/aggregate RPC | Safe status/aggregate RPC | Write/claim |
-| memberships, sessions, budgets, request_runs | None | None | None | Restricted management API | Manage |
+| memberships, sessions, budgets, request_runs | None | None | None | None directly; member list through `admin_list_members` | Manage |
 | audit_logs | None | None | None | Read redacted records | Append |
 | query_embedding_cache, moderation_cache, answer_cache | None | None | None | None (hit-rate via safe aggregate RPC) | Read/write |
 | knowledge_gaps RPC | None | None | Execute | Execute | — |
@@ -71,17 +71,18 @@ RLS does not itself provide column-level security. Use column grants, minimal se
 ### Matrix rulings (2026-11-04, implemented in `003_grants_rls_storage.sql`)
 Ambiguous cells above are resolved fail-closed:
 - Analyst **may** read `documents`/`document_versions` metadata; analyst has **no** access to `data_entries` (admin/owner read).
-- No authenticated role reads or writes `bot_profiles`/`client_settings` directly; settings change only through the whitelisted admin RPCs (revised by ADR 0017; planned in P3.5, not built).
+- No authenticated role reads or writes `bot_profiles`/`client_settings` directly; settings change only through the whitelisted admin RPCs (revised by ADR 0017).
 - Membership is project-wide (one database per client): `admin_memberships(user_id unique, role, active)`; `is_active_member(roles)` re-reads the live row on every call, so revocation is immediate.
 - Safe aggregate RPCs callable by authenticated users, each re-checking active membership: `job_status_summary()`, `usage_daily_summary(from, to)` (≤ 92 days; cache hit-rate derives from `operation = 'answer_cache_hit'`), `knowledge_gaps(from, to, limit)` (≤ 92 days, limit ≤ 200).
-- `audit_logs`: admin/owner read; only the service role and the ADR 0017 admin RPCs write.
+- `audit_logs`: admin/owner read. Writers are the service role and `admin_audit`, which only the admin RPCs can reach. `admin_audit` allows a fixed list of metadata keys with short scalar values. A refused or failed call rolls back, so it leaves no audit row.
 
 ### Database conventions fixed in P3
-- Custom SQLSTATEs: `RB001` budget exceeded · `RB002` budget policy missing/invalid · `RB003` reservation not active · `RB004` request conflict · `RB010` document not found · `RB011` activation failed · `RB020` retention policy missing · `22023` invalid argument.
-- `client_settings` JSON keys read by SQL: `budget_policy.daily_cap_usd`, `retention_policy.conversation_days`, `retention_policy.usage_months`. Missing values fail closed.
+- Custom SQLSTATEs: `RB001` budget exceeded · `RB002` budget policy missing/invalid · `RB003` reservation not active · `RB004` request conflict · `RB010` document not found · `RB011` activation failed · `RB012` embedding change requires reindex · `RB013` lease not held · `RB020` retention policy missing · `22023` invalid argument · `RB030` conflict (stale version or wrong state) · `RB031` file too large · `RB032` MFA required · `RB033` forbidden · `RB034` quota exceeded · `RB035` settings invalid · `RB036` policy missing · `RB037` not found · `RB038` upload missing. PostgREST returns `42501` when a role lacks EXECUTE. `shared/src/errors.ts` maps all of them.
+- `client_settings` JSON keys read by SQL: `budget_policy.daily_cap_usd`, `retention_policy.conversation_days`, `retention_policy.usage_months`, `rate_policy.concurrent_requests_per_session`, and in `upload_policy`: `max_bytes`, `max_pages`, `index_max_attempts`, `cleanup_max_attempts`, `quotas.{register,upload,reindex,write}.{limit,window_seconds}`. Missing values fail closed.
 - `match_document_chunks(bot_id, query_embedding, match_count 1..50, min_similarity)` rejects out-of-range `match_count` (no clamping).
 - Fail-closed defaults: `documents.disclosure_policy` defaults to `excluded`; `bot_profiles.enabled` defaults to `false`; policy columns and `jobs.max_attempts` have no default.
 - Rate-limit and cache keys are 64-char lowercase hex digests (CHECK).
+- `client_settings.feature_flags` keys, read by the API and widget config: `output_moderation_mode` (`buffer` or `rolling`, ADR 0004), `turnstile_required` (ADR 0010), `markdown_enabled` (ADR 0008), `history_enabled` (ADR 0009). A missing key takes the ADR default. Consumers land in P5, P7 and P8.
 
 ### Security hardening (debug cycle P3-D1, 2026-11-04)
 - **MFA in the database (ADR 0015):** every authenticated private read (documents, versions, conversations, messages, sources, analysis, data entries, audit logs) and the three aggregate RPCs require `is_active_member_mfa(roles)` = active membership **and** JWT `aal = 'aal2'`. `is_active_member(roles)` stays as a role probe only.
@@ -117,16 +118,45 @@ Ambiguous cells above are resolved fail-closed:
 - Only `service_role`, `postgres` and the table owner may hold INSERT or UPDATE on `messages` (catalog test). The reply trigger depends on this: its first branch runs under the writer's RLS.
 - `knowledge_gaps` after a question is deleted: the reply pointer becomes null, so an answer with no `request_id` falls to rule 3 and pairs with the latest earlier question. No migration deletes single messages today. Pinned by test.
 
+## Admin RPCs (B-12)
+Browser-callable, `SECURITY DEFINER`, `EXECUTE` to `authenticated` only, in migrations 009 and 010. "Quota" is the `upload_policy.quotas` kind each consumes.
+
+| Function | Roles (`aal2`) | Quota | Purpose |
+|---|---|---|---|
+| `admin_register_document` | owner, admin | register | New document and first version; returns the generated path |
+| `admin_add_document_version` | owner, admin | register | New version of a document |
+| `admin_complete_upload` | owner, admin | upload | Confirm the object and queue indexing; repeat calls queue one job |
+| `admin_retry_version` | owner, admin | reindex | Retry a failed or stuck version |
+| `admin_reindex_document` | owner, admin | reindex | New version from the active file; the live version keeps serving |
+| `admin_document_status` | owner, admin, analyst | — | Paged state, batches and safe failure code |
+| `admin_request_download` | owner, admin | write | Audit a download and return the path |
+| `admin_delete_document` | owner, admin | write | Exclude from retrieval, cancel queued indexing, queue cleanup |
+| `admin_list_bots` | owner, admin, analyst | — | Bots, including unpublished ones |
+| `admin_get_settings` | owner, admin, analyst | — | Safe settings read, works before publishing |
+| `admin_update_settings` | owner, admin | write | Whitelisted fields; `expected_settings_version` required; merged result validated |
+| `admin_set_bot_enabled` | owner, admin | write | Enable (gate applies) or disable |
+| `admin_delete_conversation` | owner, admin | write | Delete a conversation and everything under it |
+| `admin_list_members` | owner, admin | — | Members with their email as a label (B-7) |
+| `schema_version` | any signed-in user | — | Migration number |
+
+Use the `settings_version` an update returns for the next call. One update can move it by more than one, and operator edits move it too. `schema_version()` must be raised with every migration.
+
+Service role only: `reserve_job_budget` (the worker reserves per attempt, then settles or releases on every exit path), `purge_terminal_jobs`. An expired job reservation keeps counting toward the cap until settled, because a stale worker can still settle it. `admin_set_bot_enabled` uses the write quota only when enabling, so disabling always works.
+
+P6 must: set `failure_code`, `batches_done` and `batches_total`; compare `upload_etag` and fail closed when it is null; fence chunk writes on the job lease, and re-run cleanup if the document was deleted while a job ran; treat the versions of a deleted document as gone when deciding whether an object is still referenced; set `documents.status` when a first version fails; remove abandoned `pending_upload` versions and their objects; never delete an object another version references.
+
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.
-- Uploads go directly from the admin panel under `storage.objects` policies that allow only the path of a `pending_upload` version (ADR 0017; planned in P3.5, not built).
+- Uploads go directly from the admin panel. Policy `knowledge_insert_pending_version` allows only the path of a `pending_upload` version, for owner and admin at `aal2`, within 24 hours of registering. There is no UPDATE or DELETE policy, so nothing in the browser can overwrite or remove an object. All policies are `to authenticated`.
+- `admin_complete_upload` confirms the object in `storage.objects` and compares its size and type with the registered values. Signed URLs are bearer links: revoking a member doesn't recall one already issued, so keep their expiry short.
+- A reindex version reuses the active version's `storage_path`, so the path isn't unique. Cleanup may delete an object only when no other `document_versions` row references it.
 - Browser cannot overwrite active originals or upload arbitrary paths.
 - The worker validates final object size and content before indexing.
 - Original-file downloads are allowed only to authorised admins by Storage policy, with short-lived links, after an RPC writes the audit row. Storage can't write to `audit_logs`, so a stolen session could skip that RPC; Storage logs are the backstop.
 - Delete original objects through the delete RPC and the worker cleanup job; do not let the browser orphan active chunks.
 
 ## Indexes and integrity
-- Unique bot slug; unique document/version sequence; unique chunk sequence; unique job dedupe key; unique `answer_cache.cache_key_hash`.
+- Unique bot slug; unique document/version sequence; unique chunk sequence; job dedupe key unique among live jobs (use a plain insert or an RPC, because a partial index can't be named by an upsert); unique `answer_cache.cache_key_hash`.
 - Index on `messages (handoff_reason, created_at)` where `handoff_reason` is not null, for the knowledge-gaps view; `expires_at` indexes on cache tables for cleanup.
 - B-tree indexes on ownership, foreign keys, conversation time, job availability/state, and usage date.
 - pgvector HNSW or IVFFlat index selected after dataset testing, using the operator class matching the distance metric.

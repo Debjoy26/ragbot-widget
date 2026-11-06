@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/worker.js",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../.env src/worker.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/worker.ts",
     "start": "node dist/worker.js"
   },
   "dependencies": {

@@ -23,6 +23,7 @@ supabase/.branches/
 playwright-report/
 test-results/
 *.log
+!docs/evidence/**/*.log
 
 # OS / editor
 .DS_Store

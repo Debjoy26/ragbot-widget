@@ -14,6 +14,8 @@
 # have, so the race did not happen. That ordering is retried once. A warning that remains fails the run,
 # as does a verdict that is not CONSISTENT or a run that does not cover every ordering.
 # RACE_DELAY overrides the delay before the second connection; the guard test uses it.
+# Orderings that must not block (expect "fast") fail when the second statement waited; orderings that
+# prove overlap from row timestamps (verdict "NOOVERLAP ...") are retried once and then warn like the others.
 #
 # The reaper (expire_stuck_request_runs) is global, so it also reaps other stuck runs in the local DB.
 # Rows are created for one synthetic bot and removed on exit.
@@ -31,6 +33,13 @@ case "${DOCKER_HOST:-}" in
   "" | unix://*) ;;
   *) echo "race-db: DOCKER_HOST points at a non-local daemon; refusing to run" >&2; exit 2 ;;
 esac
+# The docker CLI may point at a remote daemon through a context (not only through DOCKER_HOST). Only a local
+# unix socket is accepted; an unreadable context fails closed.
+DOCKER_ENDPOINT="$(docker context inspect --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null)"
+case "$DOCKER_ENDPOINT" in
+  unix://*) ;;
+  *) echo "race-db: the docker context endpoint is not a local unix socket (scheme '${DOCKER_ENDPOINT%%://*}'); refusing to run" >&2; exit 2 ;;
+esac
 if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != "true" ]; then
   echo "race-db: container $C is not running (start the local stack: make db-start)" >&2
   exit 2
@@ -47,22 +56,46 @@ C1=ac300000-0000-4000-8000-000000000001; C2=ac300000-0000-4000-8000-000000000002
 U=ac400000-0000-4000-8000-000000000001;  U2=ac400000-0000-4000-8000-000000000002
 A=ac500000-0000-4000-8000-000000000001;  A2=ac500000-0000-4000-8000-000000000002
 RUN=ac600000-0000-4000-8000-000000000001
+RUN2=ac600000-0000-4000-8000-000000000002
+J1=ac700000-0000-4000-8000-000000000001; J2=ac700000-0000-4000-8000-000000000002
+BUCKET=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+OWNR=ae100000-0000-4000-8000-000000000001; ADMN=ae100000-0000-4000-8000-000000000002
+DOC=ae200000-0000-4000-8000-000000000001;  VER=ae300000-0000-4000-8000-000000000001
 
 pq() { docker exec -i "$C" psql -U postgres -X -q -At -v ON_ERROR_STOP=1 -v VERBOSITY=verbose "$@"; }
 
+# Rows the P3.5 orderings leave behind besides the bot: users (memberships cascade), Storage objects (the
+# Storage delete guard is lifted for this session only), index jobs and the admin quota counters.
+# audit_logs is append-only, so audit rows written by those orderings stay in the local database.
+CLEAN_P35="delete from auth.users where id in ('$OWNR', '$ADMN');
+    delete from public.jobs where payload ->> 'bot_id' = '$BOT';
+    delete from public.rate_limit_buckets where key_hash in (
+      encode(sha256(convert_to('admin_quota:$BOT:register', 'utf8')), 'hex'),
+      encode(sha256(convert_to('admin_quota:$BOT:upload', 'utf8')), 'hex'),
+      encode(sha256(convert_to('admin_quota:$BOT:reindex', 'utf8')), 'hex'),
+      encode(sha256(convert_to('admin_quota:$BOT:write', 'utf8')), 'hex'));
+    set storage.allow_delete_query = 'true';
+    delete from storage.objects where bucket_id = 'knowledge' and name like '$BOT/%';"
+
 cleanup() {
-  pq -c "delete from public.bot_profiles where id = '$BOT'" >/dev/null 2>&1
+  pq -c "delete from public.bot_profiles where id = '$BOT';
+    delete from public.jobs where id in ('$J1', '$J2');
+    delete from public.rate_limit_buckets where key_hash = '$BUCKET';
+    $CLEAN_P35" >/dev/null 2>&1
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=14
+EXPECTED=26
 
 # Fresh fixture: one bot with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
   pq -c "delete from public.bot_profiles where id = '$BOT';
+    delete from public.jobs where id in ('$J1', '$J2');
+    delete from public.rate_limit_buckets where key_hash = '$BUCKET';
+    $CLEAN_P35
     insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions)
       values ('$BOT', 'race-db', 'x', array['en'], 'm', 1536);
     insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy)
@@ -82,7 +115,7 @@ classify() { # rc errfile allowed-sqlstates
   case " $3 " in *" $st "*) echo "err:$st" ;; *) echo "err:$st(unexpected)" ;; esac
 }
 
-run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allowed, second-allowed, expect-block (yes|no)
+run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allowed, second-allowed, expect-block (yes|no|fast)
   local name="$1" setup="$2" first="$3" second="$4" verdict="$5" fa="$6" sa="$7" eb="$8"
   n=$((n + 1))
   fixture "$setup"
@@ -102,10 +135,16 @@ run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allow
   case "$ares$bres" in *"(unexpected)"*) bad=1 ;; esac
   local v
   v="$(pq -c "$verdict" 2>"$TMP/v.err")" || { v="VIOLATION: verdict query failed"; bad=1; }
-  local note=""
+  local note="" noov=0
   if [ "$bad" -eq 1 ]; then note=" UNEXPECTED ERROR"; fail=$((fail + 1)); fi
-  case "$v" in CONSISTENT*) ;; *) fail=$((fail + 1)) ;; esac
-  if [ "$eb" = "yes" ] && [ "$ms" -lt "$BLOCKED_MS" ]; then
+  case "$v" in
+    NOOVERLAP*) noov=1 ;;
+    CONSISTENT*) ;;
+    *) fail=$((fail + 1)) ;;
+  esac
+  if [ "$eb" = "yes" ] && [ "$ms" -lt "$BLOCKED_MS" ]; then noov=1; fi
+  if [ "$eb" = "fast" ] && [ "$ms" -ge "$BLOCKED_MS" ]; then note="$note UNEXPECTED BLOCK"; fail=$((fail + 1)); fi
+  if [ "$noov" -eq 1 ]; then
     if [ "$retrying" -eq 0 ]; then
       printf '%-46s => no overlap, retrying once (%d ms)\n' "$name" "$ms"
       retrying=1; n=$((n - 1)); run_order "$@"; retrying=0
@@ -167,6 +206,62 @@ V_RESERVE="select case
   else 'CONSISTENT: run ' || r.state || ', reservation ' || coalesce(b.state, 'none') end
   from public.request_runs r left join public.budget_reservations b on b.request_id = r.id where r.id = '$RUN'"
 
+# ---- Two workers, two starts, two counters, two reservations (P3-D5, G-10) ----
+# claim_jobs: two queued jobs (type warm_answer_cache, so no other local job is picked); each worker
+# claims one. Overlap is read from the leases: both claims take locked_until = transaction start + lease,
+# so the second worker started after the first and before the first committed (HOLD seconds later).
+JOBS="insert into public.jobs (id, type, payload, max_attempts, available_at, created_at) values
+  ('$J1', 'warm_answer_cache', '{}', 3, now() - interval '1 minute', now() - interval '2 minutes'),
+  ('$J2', 'warm_answer_cache', '{}', 3, now() - interval '1 minute', now() - interval '1 minute');"
+CLAIM1="select * from public.claim_jobs('race-w1', 1, 600, array['warm_answer_cache']);"
+CLAIM2="select * from public.claim_jobs('race-w2', 1, 600, array['warm_answer_cache']);"
+V_CLAIM="select case
+  when (select count(*) from public.jobs where id in ('$J1', '$J2') and state = 'running' and attempts = 1) <> 2
+    then 'VIOLATION: expected both jobs claimed exactly once, found ' ||
+         (select string_agg(state || '/' || attempts, ',' order by id) from public.jobs where id in ('$J1', '$J2'))
+  when (select count(distinct locked_by) from public.jobs where id in ('$J1', '$J2')) <> 2
+    then 'VIOLATION: both jobs are held by the same worker'
+  when (select count(*) from public.jobs where id in ('$J1', '$J2') and locked_by in ('race-w1', 'race-w2')) <> 2
+    then 'VIOLATION: a job is held by an unknown worker'
+  when not coalesce((select extract(epoch from (w2.locked_until - w1.locked_until)) between 0 and $HOLD - 0.3
+                       from public.jobs w1, public.jobs w2
+                      where w1.locked_by = 'race-w1' and w2.locked_by = 'race-w2' and w1.id in ('$J1', '$J2') and w2.id in ('$J1', '$J2')), false)
+    then 'NOOVERLAP: the second claim did not start while the first was open'
+  else 'CONSISTENT: each job claimed once, by a different worker' end"
+
+# begin_request_run: session cap 1. The second start must wait for the session row lock and then see the
+# first run; two runs for the session would mean the cap check raced.
+CAP1="update public.client_settings set rate_policy = '{\"concurrent_requests_per_session\": 1}' where bot_id = '$BOT';"
+BEGIN1="select * from public.begin_request_run('$BOT', '$SESS', 1, '00000000-0000-4000-8000-0000000b0001', repeat('a', 64));"
+BEGIN2="select * from public.begin_request_run('$BOT', '$SESS', 1, '00000000-0000-4000-8000-0000000b0002', repeat('b', 64));"
+V_BEGIN="select case
+  when (select count(*) from public.request_runs where visitor_session_id = '$SESS') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.request_runs where visitor_session_id = '$SESS') || ' runs admitted for a session capped at 1'
+  when (select idempotency_key from public.request_runs where visitor_session_id = '$SESS') <> '00000000-0000-4000-8000-0000000b0001'
+    then 'VIOLATION: the later start was admitted'
+  else 'CONSISTENT: one run admitted, the second start was limited' end"
+
+# record_rate_limit_attempt: both attempts on one key and window are counted (no lost update).
+RATE1="select * from public.record_rate_limit_attempt('$BUCKET', 86400, 1);"
+V_RATE="select case
+  when (select count(*) from public.rate_limit_buckets where key_hash = '$BUCKET') = 0 then 'VIOLATION: no counter row'
+  when (select sum(request_count) from public.rate_limit_buckets where key_hash = '$BUCKET') <> 2
+    then 'VIOLATION: counted ' || (select sum(request_count) from public.rate_limit_buckets where key_hash = '$BUCKET') || ' of 2 attempts'
+  else 'CONSISTENT: both attempts counted' end"
+
+# reserve_request_budget: cap 1.5, two reservations of 1.0 for two runs of one bot. The second reserve
+# waits for the settings row lock, then must see the first and fail with RB001 (budget_exceeded).
+CAP15="update public.client_settings set budget_policy = '{\"daily_cap_usd\": 1.5}' where bot_id = '$BOT';"
+RUN2_ROW="insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash, state, started_at)
+  values ('$RUN2', '$BOT', '$SESS', '00000000-0000-4000-8000-0000000ace02', repeat('b', 64), 'running', now() - interval '10 minutes');"
+RESERVE2="select public.reserve_request_budget('$BOT', '$RUN2', 1.0, 3600);"
+V_CAP="select case
+  when (select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = '$BOT' and state = 'reserved') > 1.5
+    then 'VIOLATION: reserved ' || (select sum(amount) from public.budget_reservations where bot_id = '$BOT' and state = 'reserved') || ' against a cap of 1.5'
+  when (select count(*) from public.budget_reservations where bot_id = '$BOT') <> 1
+    then 'VIOLATION: expected exactly one reservation, found ' || (select count(*) from public.budget_reservations where bot_id = '$BOT')
+  else 'CONSISTENT: one reservation fits the cap, the other was refused' end"
+
 run_order "reply in flight, question moved"        ""                       "$INS"        "$MOVE_U"   "$V_REPLY" ""      "23514" yes
 run_order "reply in flight, question role changed" ""                       "$INS"        "$SETROLE_U" "$V_REPLY" ""      "23514" yes
 run_order "question move in flight, reply"         ""                       "$MOVE_U"     "$INS"      "$V_REPLY" ""      "23514" yes
@@ -181,6 +276,113 @@ run_order "release in flight, reaper"              "$RUN_ROW $RESERVE"      "$RE
 run_order "reaper in flight, release"              "$RUN_ROW $RESERVE"      "$REAP"       "$RELEASE"  "$V_NOT_HELD" "" "RB003" yes
 run_order "reserve in flight, reaper"              "$RUN_ROW"               "$RESERVE"    "$REAP"     "$V_SKIPPED" ""  ""      no
 run_order "reaper in flight, reserve"              "$RUN_ROW"               "$REAP"       "$RESERVE"  "$V_RESERVE" ""  "RB004" yes
+
+run_order "claim in flight, second worker claims"  "$JOBS"                  "$CLAIM1"     "$CLAIM2"   "$V_CLAIM" ""    ""      fast
+run_order "start in flight, second start (cap 1)"  "$CAP1"                  "$BEGIN1"     "$BEGIN2"   "$V_BEGIN" ""    ""      yes
+run_order "attempt in flight, second attempt"      ""                       "$RATE1"      "$RATE1"    "$V_RATE"  ""    ""      yes
+run_order "reserve in flight, second reserve (cap)" "$RUN_ROW $RUN2_ROW $CAP15" "$RESERVE" "$RESERVE2" "$V_CAP"  ""    "RB001" yes
+
+# ---- P3.5: the admin document functions under real concurrency (browser role, aal2 claims) ----
+# The two callers are an owner and an admin, each a real session as `authenticated` with an aal2 JWT.
+# complete_upload: two completes of one version. The second waits for the document lock, then sees the
+# version uploaded and queues nothing: one job.
+# add_document_version: two adds to one document get distinct numbers (the document row is locked).
+# reserve_job_budget: cap 1.5, two reservations of 1.0 for two running jobs: the cap is never exceeded.
+AS_OWNER="set local role authenticated; select set_config('request.jwt.claims', '{\"sub\":\"$OWNR\",\"aal\":\"aal2\",\"role\":\"authenticated\"}', true);"
+AS_ADMIN="set local role authenticated; select set_config('request.jwt.claims', '{\"sub\":\"$ADMN\",\"aal\":\"aal2\",\"role\":\"authenticated\"}', true);"
+ADMIN_FIX="insert into auth.users (id, aud, role, email) values
+    ('$OWNR', 'authenticated', 'authenticated', 'race-owner@example.test'),
+    ('$ADMN', 'authenticated', 'authenticated', 'race-admin@example.test');
+  insert into public.admin_memberships (user_id, role) values ('$OWNR', 'owner'), ('$ADMN', 'admin');
+  update public.client_settings set upload_policy = '{\"max_bytes\": 1048576, \"index_max_attempts\": 3, \"cleanup_max_attempts\": 3,
+    \"quotas\": {\"register\": {\"limit\": 100, \"window_seconds\": 3600}, \"upload\": {\"limit\": 100, \"window_seconds\": 3600},
+    \"reindex\": {\"limit\": 100, \"window_seconds\": 3600}, \"write\": {\"limit\": 100, \"window_seconds\": 3600}}}' where bot_id = '$BOT';
+  insert into public.documents (id, bot_id, title) values ('$DOC', '$BOT', 'race doc');
+  insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size)
+    values ('$VER', '$DOC', 1, '$BOT/$DOC/$VER/original.txt', 'text/plain', 100);
+  insert into storage.objects (bucket_id, name, metadata)
+    values ('knowledge', '$BOT/$DOC/$VER/original.txt', '{\"size\": 100, \"mimetype\": \"text/plain\", \"eTag\": \"race-etag\"}');"
+COMPLETE_O="$AS_OWNER select * from public.admin_complete_upload('$VER');"
+COMPLETE_A="$AS_ADMIN select * from public.admin_complete_upload('$VER');"
+V_COMPLETE="select case
+  when (select count(*) from public.jobs where dedupe_key = 'index:version:$VER') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.jobs where dedupe_key = 'index:version:$VER') || ' jobs queued for one version'
+  when (select status from public.document_versions where id = '$VER') <> 'uploaded' then 'VIOLATION: the version is not uploaded'
+  else 'CONSISTENT: one job for the version' end"
+ADD_O="$AS_OWNER select * from public.admin_add_document_version('$DOC', 'text/plain', 100);"
+ADD_A="$AS_ADMIN select * from public.admin_add_document_version('$DOC', 'text/plain', 100);"
+V_ADD="select case
+  when (select count(*) from public.document_versions where document_id = '$DOC') <> 3
+    then 'VIOLATION: expected 3 versions, found ' || (select count(*) from public.document_versions where document_id = '$DOC')
+  when (select count(distinct version_number) from public.document_versions where document_id = '$DOC') <> 3
+    or (select max(version_number) from public.document_versions where document_id = '$DOC') <> 3
+    then 'VIOLATION: version numbers are not 1, 2, 3'
+  else 'CONSISTENT: versions 1, 2 and 3' end"
+JOBS_RUN="insert into public.jobs (id, type, payload, state, max_attempts) values
+  ('$J1', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid), 'running', 3),
+  ('$J2', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid), 'running', 3);"
+RESERVE_J1="select public.reserve_job_budget('$BOT', '$J1', 1.0, 3600);"
+RESERVE_J2="select public.reserve_job_budget('$BOT', '$J2', 1.0, 3600);"
+
+run_order "complete in flight, second complete"    "$ADMIN_FIX"             "$COMPLETE_O" "$COMPLETE_A" "$V_COMPLETE" ""  ""      yes
+run_order "add version in flight, second add"      "$ADMIN_FIX"             "$ADD_O"      "$ADD_A"    "$V_ADD"   ""    ""      yes
+run_order "job reserve in flight, second (cap)"    "$CAP15 $JOBS_RUN"       "$RESERVE_J1" "$RESERVE_J2" "$V_CAP" ""    "RB001" yes
+
+# settings: two admin_update_settings calls with the same expected version. The bot has no public config yet, so
+# both patches bring display_name and supported_languages. The second waits for the bot row lock, then sees the
+# version the first moved: one wins, the other gets RB030 (a lost update would leave version 2 with the second name).
+UPD_FIX="update public.bot_profiles set settings_version = 1 where id = '$BOT';"  # the fixture's own updates moved it
+UPD_O="$AS_OWNER select public.admin_update_settings('$BOT', 1, '{\"display_name\": \"Owner Name\", \"supported_languages\": [\"en\"]}');"
+UPD_A="$AS_ADMIN select public.admin_update_settings('$BOT', 1, '{\"display_name\": \"Admin Name\", \"supported_languages\": [\"en\"]}');"
+V_UPD="select case
+  when (select count(*) from public.public_bot_config where bot_id = '$BOT') <> 1 then 'VIOLATION: no config row was created'
+  when (select display_name from public.public_bot_config where bot_id = '$BOT') <> 'Owner Name'
+    then 'VIOLATION: the stale writer won: ' || (select display_name from public.public_bot_config where bot_id = '$BOT')
+  when (select settings_version from public.bot_profiles where id = '$BOT') <> 2
+    then 'VIOLATION: settings_version is ' || (select settings_version from public.bot_profiles where id = '$BOT') || ', expected 2'
+  else 'CONSISTENT: one writer won, the stale one was refused' end"
+
+# quota: register limit 1; two registers in parallel. The second waits for the counter row, then is refused
+# (RB034), so exactly one document exists and the counter never goes over the limit.
+QUOTA1="update public.client_settings set upload_policy = jsonb_set(upload_policy, '{quotas,register}', '{\"limit\": 1, \"window_seconds\": 86400}') where bot_id = '$BOT';"
+REG_O="$AS_OWNER select * from public.admin_register_document('$BOT', 'race quota one', 'text/plain', 10, 'excluded');"
+REG_A="$AS_ADMIN select * from public.admin_register_document('$BOT', 'race quota two', 'text/plain', 10, 'excluded');"
+QKEY="encode(sha256(convert_to('admin_quota:$BOT:register', 'utf8')), 'hex')"
+V_QUOTA="select case
+  when (select count(*) from public.documents where bot_id = '$BOT' and title like 'race quota %') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.documents where bot_id = '$BOT' and title like 'race quota %') || ' documents registered under a limit of 1'
+  when (select coalesce(sum(request_count), 0) from public.rate_limit_buckets where key_hash = $QKEY) <> 1
+    then 'VIOLATION: counter is ' || (select coalesce(sum(request_count), 0) from public.rate_limit_buckets where key_hash = $QKEY) || ', expected 1'
+  else 'CONSISTENT: one register within the limit, the other refused' end"
+
+# retry: a failed version, two admin_retry_version calls. The second waits for the document lock, then sees the
+# version uploaded with a live job (RB030): exactly one job.
+FAILED_VER="update public.document_versions set status = 'failed', failure_code = 'INDEXING_FAILED' where id = '$VER';"
+RETRY_O="$AS_OWNER select * from public.admin_retry_version('$VER');"
+RETRY_A="$AS_ADMIN select * from public.admin_retry_version('$VER');"
+V_RETRY="select case
+  when (select count(*) from public.jobs where dedupe_key = 'index:version:$VER') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.jobs where dedupe_key = 'index:version:$VER') || ' jobs for one retried version'
+  when (select status from public.document_versions where id = '$VER') <> 'uploaded' then 'VIOLATION: the version is not uploaded'
+  else 'CONSISTENT: one job for the retried version' end"
+
+# delete versus complete, both orders. Whoever goes first, the document ends deleted with no live index job:
+# complete first (job queued) is cancelled by the delete; delete first makes the complete find nothing (RB037).
+DEL_O="$AS_OWNER select public.admin_delete_document('$DOC');"
+DEL_A="$AS_ADMIN select public.admin_delete_document('$DOC');"
+V_DELCOMP="select case
+  when (select deleted_at from public.documents where id = '$DOC') is null then 'VIOLATION: the document is not deleted'
+  when exists (select 1 from public.jobs where type = 'index_document' and state in ('queued', 'running') and payload ->> 'document_id' = '$DOC')
+    then 'VIOLATION: a live index job remains for the deleted document'
+  when (select count(*) from public.jobs where type = 'cleanup' and state = 'queued' and payload ->> 'resource_id' = '$DOC') <> 1
+    then 'VIOLATION: expected one queued cleanup job'
+  else 'CONSISTENT: deleted, no live index job, one cleanup job' end"
+
+run_order "update in flight, same-version update"  "$ADMIN_FIX $UPD_FIX"    "$UPD_O"      "$UPD_A"    "$V_UPD"   ""    "RB030" yes
+run_order "register in flight, second (quota 1)"   "$ADMIN_FIX $QUOTA1"     "$REG_O"      "$REG_A"    "$V_QUOTA" ""    "RB034" yes
+run_order "retry in flight, second retry"          "$ADMIN_FIX $FAILED_VER" "$RETRY_O"    "$RETRY_A"  "$V_RETRY" ""    "RB030" yes
+run_order "delete in flight, complete"             "$ADMIN_FIX"             "$DEL_O"      "$COMPLETE_A" "$V_DELCOMP" "" "RB037" yes
+run_order "complete in flight, delete"             "$ADMIN_FIX"             "$COMPLETE_O" "$DEL_A"    "$V_DELCOMP" ""    ""      yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

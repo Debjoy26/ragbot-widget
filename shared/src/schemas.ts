@@ -19,6 +19,7 @@ import {
   DOCUMENT_STATUSES,
   DOCUMENT_VERSION_STATUSES,
   EXTRACTION_METHODS,
+  FAILURE_CODES,
   HANDOFF_REASONS,
   JOB_STATES,
   JOB_TYPES,
@@ -32,14 +33,30 @@ import {
   VISITOR_VISIBLE_ROLES,
   WEEKDAYS,
   WIDGET_POSITIONS,
-  type AdminBotSettingsPatch,
+  type AdminAddDocumentVersionRow,
+  type AdminBotListRow,
+  type AdminCompleteUploadRow,
+  type AdminDocumentStatusRow,
+  type AdminMemberRow,
+  type AdminRegisterDocumentRow,
+  type AdminReindexDocumentRow,
+  type AdminRetryVersionRow,
+  type AdminSettingsRow,
+  type BotSettingsPatch,
+  type BudgetPolicy,
   type ChatRequest,
   type ContactBlock,
   type CreateEntryRequest,
   type CreateSessionRequest,
+  type CreateSessionResponse,
+  type ConversationHistoryRequest,
   type ConversationHistoryResponse,
   type HandoffContact,
+  type IdempotentReplayResponse,
   type PublicBotConfig,
+  type RatePolicyRequired,
+  type RetentionPolicy,
+  type UploadPolicy,
   type SseEvent,
   type VisitorTokenClaims,
 } from './contracts.js';
@@ -83,7 +100,7 @@ function hasControlChars(value: string, allowWhitespace: boolean): boolean {
   return false;
 }
 
-/** Plain text: trimmed, bounded, no angle brackets (no HTML) and no control characters. */
+/** Plain text: trimmed, bounded, no angle brackets (no HTML) and no control characters. Strict; `excerptText` is the only relaxation. */
 export function plainText(max: number) {
   return z
     .string()
@@ -91,6 +108,37 @@ export function plainText(max: number) {
     .min(1)
     .max(max)
     .refine((v) => !/[<>]/.test(v), 'must be plain text without HTML')
+    .refine((v) => !hasControlChars(v, false), 'must not contain control characters');
+}
+
+/**
+ * Collapses every whitespace run (newlines and tabs included) to one space and strips
+ * remaining control characters (NUL included), then trims. `excerptText` rejects newlines,
+ * tabs and control characters, so callers must normalise a document excerpt with this first.
+ */
+export function normaliseExcerpt(text: string): string {
+  let out = '';
+  for (const part of text.split(/\s+/)) {
+    let clean = '';
+    for (let i = 0; i < part.length; i += 1) {
+      const c = part.charCodeAt(i);
+      if (c >= 0x20 && c !== 0x7f) clean += part[i];
+    }
+    if (clean !== '') out += (out === '' ? '' : ' ') + clean;
+  }
+  return out;
+}
+
+/**
+ * Source excerpt: angle brackets and `>` are allowed as literal text because the widget
+ * renders with `textContent` (never as HTML). Control characters, including NUL, are not.
+ */
+export function excerptText(max: number) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
     .refine((v) => !hasControlChars(v, false), 'must not contain control characters');
 }
 
@@ -102,6 +150,42 @@ export function freeText(max: number) {
     .min(1)
     .max(max)
     .refine((v) => !hasControlChars(v, true), 'must not contain control characters');
+}
+
+/**
+ * Invisible format characters rejected in admin-authored settings text (CONTRACT-P3D5
+ * Addendum; the SQL check uses the same class): U+00AD, U+061C, U+115F, U+1160, U+200B..U+200F,
+ * U+202A..U+202E, U+2060..U+206F, U+2800, U+3164, U+FEFF, U+FFA0 and the tag block U+E0000..U+E007F. Defined once, here.
+ */
+const FORMAT_CHARS =
+  /[\u00AD\u061C\u115F\u1160\u200B-\u200F\u202A-\u202E\u2060-\u206F\u2800\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}]/u;
+
+export function hasFormatChars(value: string): boolean {
+  return FORMAT_CHARS.test(value);
+}
+
+const NO_FORMAT_CHARS_MESSAGE = 'must not contain invisible format characters';
+
+/** `plainText` for admin settings fields: additionally rejects format characters. */
+export function settingsPlainText(max: number) {
+  return plainText(max).refine((v) => !hasFormatChars(v), NO_FORMAT_CHARS_MESSAGE);
+}
+
+/** Multi-line admin text (`scope`): `freeText` plus the format-character rule. */
+export function settingsFreeText(max: number) {
+  return freeText(max).refine((v) => !hasFormatChars(v), NO_FORMAT_CHARS_MESSAGE);
+}
+
+/** Single-line admin text (`tone`): no newline or carriage return, no other control character (a tab is allowed), no format character. */
+export function settingsSingleLineText(max: number) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine((v) => !/[\n\r]/.test(v), 'must be a single line')
+    .refine((v) => !hasControlChars(v, true), 'must not contain control characters')
+    .refine((v) => !hasFormatChars(v), NO_FORMAT_CHARS_MESSAGE);
 }
 
 export const uuidSchema = z.uuid();
@@ -120,8 +204,17 @@ export const emailSchema = z.email().max(254);
 export const E164_PATTERN = /^\+[1-9]\d{6,14}$/;
 export const phoneE164Schema = z.string().regex(E164_PATTERN);
 
+/** C0 controls (U+0000..U+001F), DEL and C1 controls (U+0080..U+009F). */
+function hasC0C1Controls(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return true;
+  }
+  return false;
+}
+
 export function isHttpsUrl(value: string): boolean {
-  if (value.length > 2048 || /[\s<>"'\\]/.test(value)) return false;
+  if (value.length > 2048 || /[\s<>"'\\]/.test(value) || hasC0C1Controls(value)) return false;
   let url: URL;
   try {
     url = new URL(value);
@@ -175,7 +268,7 @@ export const businessHoursSchema = z
     { message: 'business_hours keys must be weekdays or ranges and values HH:MM-HH:MM' },
   );
 
-const escalationMessageSchema = plainText(300);
+const escalationMessageSchema = settingsPlainText(300);
 export const escalationMessagesSchema = z
   .record(languageTagSchema, escalationMessageSchema)
   .refine((m) => Object.keys(m).length >= 1 && Object.keys(m).length <= 20, {
@@ -243,7 +336,7 @@ const contactFieldShape = {
 };
 
 const contactBlockShape = {
-  escalation_label: plainText(60),
+  escalation_label: settingsPlainText(60),
   escalation_messages: escalationMessagesSchema,
   ...contactFieldShape,
 };
@@ -286,9 +379,9 @@ export const publicBotConfigSchema = z
   .object({
     bot_id: z.uuid(),
     bot_slug: botSlugSchema,
-    display_name: plainText(80),
-    greeting: plainText(500),
-    suggested_questions: z.array(plainText(200)).max(6),
+    display_name: settingsPlainText(80),
+    greeting: settingsPlainText(500),
+    suggested_questions: z.array(settingsPlainText(200)).max(6),
     primary_color: hexColorSchema,
     position: widgetPositionSchema,
     privacy_url: dbOptional(httpsUrlSchema),
@@ -408,26 +501,26 @@ export const jobSchema = z.discriminatedUnion('type', [
 export type Job = z.infer<typeof jobSchema>;
 
 // ---------------------------------------------------------------------------
-// Admin: settings whitelist (PATCH /v1/admin/bot-settings)
+// Settings whitelist (sent to the admin_update_settings RPC under the member's own JWT)
 // ---------------------------------------------------------------------------
 
 /**
  * Only public-config fields plus `bot_profiles.tone` and `.scope` may be patched.
  * Strict on purpose: identity_prompt, embedding_*, allowed_origins, rate/budget/cache/
  * retention/upload policies, feature flags, bot_id and slug are all rejected here.
- * `null` clears an optional contact field. The route must re-validate the merged
- * result with `publicBotConfigSchema` (channel and language cross-checks).
+ * `null` clears an optional contact field. This is the client-side whitelist only:
+ * SQL validates the merged result (channel and language cross-checks, RB035).
  */
 export const botSettingsPatchSchema = z
   .strictObject({
-    display_name: plainText(80).optional(),
-    greeting: plainText(500).optional(),
-    suggested_questions: z.array(plainText(200)).max(6).optional(),
+    display_name: settingsPlainText(80).optional(),
+    greeting: settingsPlainText(500).optional(),
+    suggested_questions: z.array(settingsPlainText(200)).max(6).optional(),
     primary_color: hexColorSchema.optional(),
     position: widgetPositionSchema.optional(),
     privacy_url: httpsUrlSchema.nullable().optional(),
     supported_languages: supportedLanguagesSchema.optional(),
-    escalation_label: plainText(60).optional(),
+    escalation_label: settingsPlainText(60).optional(),
     escalation_messages: escalationMessagesSchema.optional(),
     contact_email: emailSchema.nullable().optional(),
     contact_phone: phoneE164Schema.nullable().optional(),
@@ -435,43 +528,58 @@ export const botSettingsPatchSchema = z
     contact_page_url: httpsUrlSchema.nullable().optional(),
     business_hours: businessHoursSchema.nullable().optional(),
     timezone: timezoneSchema.nullable().optional(),
-    tone: freeText(500).optional(),
-    scope: freeText(2000).optional(),
+    tone: settingsSingleLineText(500).optional(),
+    scope: settingsFreeText(2000).optional(),
   })
   .refine((p) => Object.values(p).some((v) => v !== undefined), {
     message: 'patch must change at least one field',
   });
 
-export const adminBotSettingsPatchRequestSchema = z.strictObject({
-  bot_id: z.uuid(),
-  patch: botSettingsPatchSchema,
-});
-
-// ---------------------------------------------------------------------------
-// Admin: documents and conversations
-// ---------------------------------------------------------------------------
-
-export const adminCreateDocumentRequestSchema = z.strictObject({
-  bot_id: z.uuid(),
-  title: plainText(200),
-  filename: z
-    .string()
-    .trim()
-    .min(1)
-    .max(255)
-    .refine((v) => !/[/\\]/.test(v) && !hasControlChars(v, false) && !v.includes('..'), {
-      message: 'filename must not contain path separators or control characters',
-    }),
-  media_type: mediaTypeSchema,
-  size_bytes: z.int().positive(),
-  disclosure_policy: disclosurePolicySchema,
-});
-
-export const adminCompleteDocumentRequestSchema = z.strictObject({ version_id: z.uuid() });
-export const adminReindexDocumentRequestSchema = z.strictObject({
-  version_id: z.uuid().optional(),
-});
 export const idParamSchema = z.strictObject({ id: z.uuid() });
+
+// ---------------------------------------------------------------------------
+// client_settings JSON keys that SQL reads (G-18). The numeric ranges mirror the SQL
+// regexes, so a value this schema accepts is also accepted by the function that reads it.
+// `rate_policy` is loose on purpose: only the key SQL depends on is validated here.
+// ---------------------------------------------------------------------------
+
+/** Daily cap: non-negative, plain decimal notation (SQL matches `^[0-9]+(\.[0-9]+)?$`). */
+const dailyCapSchema = z
+  .number()
+  .finite()
+  .nonnegative()
+  .refine((n) => /^[0-9]+(\.[0-9]+)?$/.test(String(n)), 'must be a plain decimal number');
+
+export const budgetPolicySchema = z.strictObject({ daily_cap_usd: dailyCapSchema });
+
+export const retentionPolicySchema = z.strictObject({
+  conversation_days: z.int().min(1).max(999_999),
+  usage_months: z.int().min(1).max(9_999),
+});
+
+export const ratePolicyRequiredSchema = z.looseObject({
+  concurrent_requests_per_session: z.int().min(1).max(9_999),
+});
+
+// Ranges mirror admin_consume_quota (limit ^[1-9][0-9]{0,5}$, window <= 86400) and
+// admin_policy_int (max_bytes 1..1099511627776) in migration 009.
+export const quotaRuleSchema = z.strictObject({
+  limit: z.int().min(1).max(999_999),
+  window_seconds: z.int().min(1).max(86_400),
+});
+
+export const uploadPolicySchema = z.strictObject({
+  max_bytes: z.int().min(1).max(1_099_511_627_776),
+  max_pages: z.int().positive(),
+  index_max_attempts: z.int().min(1).max(20),
+  cleanup_max_attempts: z.int().min(1).max(20),
+  quotas: z.strictObject({
+    register: quotaRuleSchema,
+    upload: quotaRuleSchema,
+    reindex: quotaRuleSchema,
+    write: quotaRuleSchema,
+  }),
+});
 
 // ---------------------------------------------------------------------------
 // Data entries (POST /v1/entries): explicit, registered, strict form schemas only
@@ -548,6 +656,23 @@ export const historyMessageSchema = z.strictObject({
   created_at: z.iso.datetime({ offset: true }),
 });
 
+/** Query string of GET /v1/conversations/:id (G-17, unconfirmed shape). */
+export const conversationHistoryRequestSchema = z.strictObject({ before: z.uuid().optional() });
+
+/** Duplicate `Idempotency-Key` response: stored status only (G-17, unconfirmed shape). */
+export const idempotentReplayResponseSchema = z
+  .strictObject({
+    request_id: z.string().min(1).max(64),
+    run_state: requestRunStateSchema,
+    conversation_id: z.uuid().nullable(),
+    message_id: z.uuid().nullable(),
+    status: messageStatusSchema.nullable(),
+  })
+  .refine((r) => r.status === null || r.message_id !== null, {
+    message: 'status requires message_id',
+    path: ['status'],
+  });
+
 export const conversationHistoryResponseSchema = z.strictObject({
   conversation_id: z.uuid(),
   messages: z.array(historyMessageSchema).max(200),
@@ -568,7 +693,7 @@ export const sourceRefSchema = z.strictObject({
   chunk_id: z.string().regex(CHUNK_ID_PATTERN),
   title: plainText(200),
   section: plainText(200).optional(),
-  excerpt: plainText(1000).optional(),
+  excerpt: excerptText(1000).optional(),
   url: httpsUrlSchema.optional(),
 });
 
@@ -603,6 +728,122 @@ export const sseEventSchema = z.discriminatedUnion('event', [
 ]);
 
 // ---------------------------------------------------------------------------
+// Browser RPC responses (P3.5-T3). Strict: an unexpected column fails, so a change to a function's
+// RETURNS TABLE shows up in tests/integration/admin-real-session.test.ts. Output only: values the database
+// has already validated are not re-validated here beyond type and shape. Table functions are arrays of
+// rows (PostgREST), scalars are bare values, void functions return null.
+// ---------------------------------------------------------------------------
+
+export const failureCodeSchema = z.enum(FAILURE_CODES);
+
+export const adminRegisterDocumentRowSchema = z.strictObject({
+  document_id: z.uuid(),
+  version_id: z.uuid(),
+  storage_path: z.string().min(1),
+});
+export const adminRegisterDocumentResponseSchema = z
+  .array(adminRegisterDocumentRowSchema)
+  .length(1);
+
+export const adminAddDocumentVersionRowSchema = z.strictObject({
+  version_id: z.uuid(),
+  version_number: z.int().min(1),
+  storage_path: z.string().min(1),
+});
+export const adminAddDocumentVersionResponseSchema = z
+  .array(adminAddDocumentVersionRowSchema)
+  .length(1);
+
+export const adminCompleteUploadRowSchema = z.strictObject({
+  version_id: z.uuid(),
+  status: documentVersionStatusSchema,
+  job_queued: z.boolean(),
+});
+export const adminCompleteUploadResponseSchema = z.array(adminCompleteUploadRowSchema).length(1);
+
+export const adminRetryVersionRowSchema = z.strictObject({
+  version_id: z.uuid(),
+  status: documentVersionStatusSchema,
+});
+export const adminRetryVersionResponseSchema = z.array(adminRetryVersionRowSchema).length(1);
+
+export const adminReindexDocumentRowSchema = z.strictObject({
+  version_id: z.uuid(),
+  version_number: z.int().min(1),
+});
+export const adminReindexDocumentResponseSchema = z.array(adminReindexDocumentRowSchema).length(1);
+
+export const adminDocumentStatusRowSchema = z.strictObject({
+  document_id: z.uuid(),
+  title: z.string(),
+  status: documentStatusSchema,
+  active_version_id: z.uuid().nullable(),
+  latest_version_id: z.uuid().nullable(),
+  latest_version_number: z.int().min(1).nullable(),
+  latest_version_status: documentVersionStatusSchema.nullable(),
+  batches_done: z.int().min(0).nullable(),
+  batches_total: z.int().min(0).nullable(),
+  failure_code: failureCodeSchema.nullable(),
+});
+export const adminDocumentStatusResponseSchema = z.array(adminDocumentStatusRowSchema);
+
+/** The storage path to hand to Storage's signed-URL call. */
+export const adminRequestDownloadResponseSchema = z.string().min(1);
+
+/** `void` functions: PostgREST answers 204 with an empty body, which the test helper reads as null. */
+export const adminVoidResponseSchema = z.null();
+
+export const adminBotListRowSchema = z.strictObject({
+  id: z.uuid(),
+  slug: botSlugSchema,
+  display_name: z.string().nullable(),
+  enabled: z.boolean(),
+  settings_version: z.int().min(1),
+});
+export const adminListBotsResponseSchema = z.array(adminBotListRowSchema);
+
+export const adminSettingsRowSchema = z.strictObject({
+  bot_id: z.uuid(),
+  slug: botSlugSchema,
+  enabled: z.boolean(),
+  settings_version: z.int().min(1),
+  tone: z.string().nullable(),
+  scope: z.string().nullable(),
+  max_bytes: z.int().positive().nullable(),
+  max_pages: z.int().positive().nullable(),
+  display_name: z.string().nullable(),
+  greeting: z.string().nullable(),
+  suggested_questions: z.array(z.string()).nullable(),
+  primary_color: hexColorSchema.nullable(),
+  position: widgetPositionSchema.nullable(),
+  privacy_url: z.string().nullable(),
+  supported_languages: z.array(languageTagSchema).nullable(),
+  escalation_label: z.string().nullable(),
+  escalation_messages: z.record(z.string(), z.string()).nullable(),
+  contact_email: z.string().nullable(),
+  contact_phone: z.string().nullable(),
+  contact_whatsapp_url: z.string().nullable(),
+  contact_page_url: z.string().nullable(),
+  // Output side: kept loose on purpose (the seed file stores a different shape from the patch schema).
+  business_hours: z.record(z.string(), z.unknown()).nullable(),
+  timezone: z.string().nullable(),
+});
+export const adminGetSettingsResponseSchema = z.array(adminSettingsRowSchema).length(1);
+
+/** `admin_update_settings` and `admin_set_bot_enabled`: the new settings_version. */
+export const adminSettingsVersionResponseSchema = z.int().min(1);
+
+export const adminMemberRowSchema = z.strictObject({
+  user_id: z.uuid(),
+  role: adminRoleSchema,
+  active: z.boolean(),
+  label: z.string().nullable(),
+});
+export const adminListMembersResponseSchema = z.array(adminMemberRowSchema);
+
+export const schemaVersionResponseSchema = z.int().min(1);
+
+// ---------------------------------------------------------------------------
 // Compile-time conformance: schema output must stay assignable to the contract types.
 // (Type-only; erased at runtime.)
 // ---------------------------------------------------------------------------
@@ -615,8 +856,24 @@ export type SchemaConformance = [
   AssertAssignable<z.output<typeof publicBotConfigSchema>, PublicBotConfig>,
   AssertAssignable<z.output<typeof handoffContactSchema>, HandoffContact>,
   AssertAssignable<z.output<typeof visitorTokenClaimsSchema>, VisitorTokenClaims>,
-  AssertAssignable<z.output<typeof botSettingsPatchSchema>, AdminBotSettingsPatch>,
+  AssertAssignable<z.output<typeof createSessionResponseSchema>, CreateSessionResponse>,
+  AssertAssignable<z.output<typeof botSettingsPatchSchema>, BotSettingsPatch>,
   AssertAssignable<z.output<typeof createEntryRequestSchema>, CreateEntryRequest>,
+  AssertAssignable<z.output<typeof conversationHistoryRequestSchema>, ConversationHistoryRequest>,
   AssertAssignable<z.output<typeof conversationHistoryResponseSchema>, ConversationHistoryResponse>,
+  AssertAssignable<z.output<typeof idempotentReplayResponseSchema>, IdempotentReplayResponse>,
+  AssertAssignable<z.output<typeof budgetPolicySchema>, BudgetPolicy>,
+  AssertAssignable<z.output<typeof retentionPolicySchema>, RetentionPolicy>,
+  AssertAssignable<z.output<typeof ratePolicyRequiredSchema>, RatePolicyRequired>,
+  AssertAssignable<z.output<typeof uploadPolicySchema>, UploadPolicy>,
   AssertAssignable<z.output<typeof sseEventSchema>, SseEvent>,
+  AssertAssignable<z.output<typeof adminRegisterDocumentRowSchema>, AdminRegisterDocumentRow>,
+  AssertAssignable<z.output<typeof adminAddDocumentVersionRowSchema>, AdminAddDocumentVersionRow>,
+  AssertAssignable<z.output<typeof adminCompleteUploadRowSchema>, AdminCompleteUploadRow>,
+  AssertAssignable<z.output<typeof adminRetryVersionRowSchema>, AdminRetryVersionRow>,
+  AssertAssignable<z.output<typeof adminReindexDocumentRowSchema>, AdminReindexDocumentRow>,
+  AssertAssignable<z.output<typeof adminDocumentStatusRowSchema>, AdminDocumentStatusRow>,
+  AssertAssignable<z.output<typeof adminBotListRowSchema>, AdminBotListRow>,
+  AssertAssignable<z.output<typeof adminSettingsRowSchema>, AdminSettingsRow>,
+  AssertAssignable<z.output<typeof adminMemberRowSchema>, AdminMemberRow>,
 ];

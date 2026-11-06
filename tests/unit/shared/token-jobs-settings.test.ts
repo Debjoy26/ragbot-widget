@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  adminBotSettingsPatchRequestSchema,
   botSettingsPatchSchema,
   createEntryRequestSchema,
   createEntrySchemaRegistry,
@@ -102,10 +101,6 @@ describe('settings whitelist', () => {
         scope: 'Questions about our products only',
         contact_phone: null,
       }).success,
-    ).toBe(true);
-    expect(
-      adminBotSettingsPatchRequestSchema.safeParse({ bot_id: BOT_ID, patch: { greeting: 'Hi' } })
-        .success,
     ).toBe(true);
   });
 

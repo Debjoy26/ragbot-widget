@@ -7,7 +7,7 @@ Everything needed to recreate the ragbot database. Run all commands from the rep
 | Path | Contents |
 |---|---|
 | `migrations/` | The schema, in order: `001` to the latest |
-| `seed.dev.sql` | Placeholder bot for local development. **Never apply it to a client database** |
+| `seed.dev.sql` | Link to `supabase/seed.sql`. Placeholder bot for local development. **Never apply it to a client database** |
 | `tests/` | pgTAP database tests |
 
 These are symlinks into `supabase/`, where the Supabase CLI reads them. Each file exists once, so this folder cannot drift from what the CLI applies. On Windows, use WSL, or enable symlinks when cloning.
@@ -81,13 +81,13 @@ The migrations create the schema, grants, RLS and the private `knowledge` storag
   - Set a minimum password length of at least 12.
   - Turn on secure password change.
   - Add the admin panel's domain to the site URL and redirect list.
-- Create the first admin with a short-lived invite link, and their active membership (`README.md`, "Deployment order per client"). Never set a password for them: a password that leaks before TOTP enrolment gives full access.
-- Add the client's rows to `bot_profiles`, `public_bot_config` and `client_settings`. Missing limits fail closed, so the bot will not serve until they are set. Once P3.5 is built, `client_settings` also needs the job attempt limits, and a bot can't be enabled without a contact channel and an escalation message for every supported language.
+- With public signup off, create the first admin with `make first-admin PROJECT_REF=<ref> CONFIRM_REF=<ref> EMAIL=<address>`, which sends a short-lived invite link and adds their active membership. `SUPABASE_URL` and `SUPABASE_SECRET_KEY` must be in the environment. An account that has already signed in is refused unless you pass `--adopt-existing` to the script. Never set a password for them: a password that leaks before TOTP enrolment gives full access.
+- Add the client's rows to `bot_profiles`, `public_bot_config` and `client_settings`. Missing limits fail closed, so the bot will not serve until they are set. `client_settings.upload_policy` also needs `index_max_attempts`, `cleanup_max_attempts` and `quotas` for `register`, `upload`, `reindex` and `write`, and a bot can't be enabled without a contact channel and an escalation message for every supported language.
 
 ## Expected advisor results
 
 - `rls_enabled_no_policy`: expected. Ordinary client access to those tables is denied.
-- `authenticated_security_definer_function_executable`: five functions, granted on purpose in migration `003`.
+- `authenticated_security_definer_function_executable`: the five functions from migration `003` plus the 14 admin RPCs in `DATABASE_SCHEMA.md`, granted on purpose. Each is reviewed and checks its caller first.
 - `unused_index`: expected on a new database.
 - `unindexed_foreign_keys` on `request_runs_session_fk`: false positive. `request_runs_idempotency_key` already serves this lookup.
 

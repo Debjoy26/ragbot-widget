@@ -1,0 +1,13 @@
+
+> ragbot-widget@0.1.0 test
+> vitest run --project unit
+
+
+ RUN  v5.1.0 /home/kali/Desktop/ragbot-widget
+
+
+ Test Files  9 passed (9)
+      Tests  157 passed (157)
+   Start at  01:10:45
+   Duration  1.07s (import 45%, transform 29%, tests 24%, worker 2%)
+

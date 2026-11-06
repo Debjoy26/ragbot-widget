@@ -24,7 +24,7 @@
 | P0 | Decisions & prerequisites | Resolved open decisions, accounts, credentials | — | Decision log signed off |
 | P1 | Monorepo scaffold & tooling | npm workspaces, TS, lint, test runners, CI | P0 (Node version) | `npm ci && npm run build && npm test` green on empty skeleton |
 | P2 | Shared contracts package | Zod schemas, API/event contracts, error codes, provider interfaces | P1 | Unit tests for every schema |
-| P3 | Database & storage | Migrations 001–007, RPCs, grants/RLS, bucket, seed | P0 (embedding dims), P1 | RLS/grant integration matrix green |
+| P3 | Database & storage | Migrations 001–008, RPCs, grants/RLS, bucket, seed | P0 (embedding dims), P1 | RLS/grant integration matrix green |
 | P3.5 | Admin data layer | RPCs and Storage policies for all admin writes (ADR 0017) | P3 | Role tests for every function; security review |
 | P4 | API foundation | Fastify server, config validation, logging, health, visitor auth | P2, P3 | Health + auth integration tests |
 | P5 | Visitor sessions & abuse controls | `/v1/sessions`, rate limits, budget reservation, idempotency | P4 | Forged-token, race, and idempotency tests |
@@ -85,6 +85,9 @@ Resolve PRD §9 open decisions before writing code that depends on them. Record 
 | Token persistence: memory only vs sessionStorage | P8 | Memory is default (UI_SCHEMA §7). |
 | Bot challenge for `/v1/sessions` (e.g. Turnstile) | P5 | "Optional challenge". |
 | Node LTS exact version, Fastify/Zod versions | P1 | Pin. |
+| Feedback buttons (D12) | P8 | Deferred (ADR 0011). |
+| Answer cache and TTL (D13) | P7.5 | Off by default (ADR 0012). |
+| Contact channels, hours, messages, miss threshold (D14) | P3, P7, P8 | ADR 0013. |
 
 Also: create dev Supabase project (or local stack via Supabase CLI), dev Render/Vercel accounts, test provider keys with low spending caps.
 
@@ -121,6 +124,8 @@ Also: create dev Supabase project (or local stack via Supabase CLI), dev Render/
 | `005_retention.sql` | Retention helpers, expiry functions for sessions/rate buckets/stale reservations; scheduling via worker cleanup jobs (or pg_cron if approved). |
 | `006_reaper_settle_reply_lock.sql` | Debug cycle P3-D3: reaper sets reservations to `expired`; row lock on the reply target. |
 | `007_run_state_guard.sql` | Debug cycle P3-D4: a new reservation needs a live run; `request_runs` state guard. |
+| `008_p3d5_fixes.sql` | Debug cycle P3-D5: audit gaps G-1 to G-8. |
+| `009_admin_documents.sql`, `010_admin_settings.sql` | P3.5 (below). |
 | `seed.sql` | Dev-only bot profile, public config, client_settings with conservative limits. **No** real admin users. |
 
 Also: operator script for first admin membership (trusted tooling, not seed).
@@ -179,7 +184,7 @@ Every browser-callable function follows the rules in ADR 0017: `is_active_member
 - `POST /v1/sessions`: resolve bot by slug, check enabled, record rate-limit attempt (hashed key, no plain IP), optional challenge verification, insert `visitor_sessions`, return token + expiry.
 - `services/limits.ts`: wrappers around `record_rate_limit_attempt` (per-session and per-IP-hash windows) and `reserve_request_budget` / settle / release.
 - Idempotency: `request_runs` with unique `(bot_id, visitor_session_id, idempotency_key)`; request hash comparison → mismatch = `INVALID_REQUEST`; duplicate in progress → 409-style status; completed → return stored final status, never regenerate.
-- Concurrency: one active generation per conversation.
+- Concurrency: one active generation per visitor session (`begin_request_run`). `request_runs` has no conversation link.
 
 **Tests:** parallel budget race (N concurrent reservations never exceed cap), duplicate idempotency key cannot spend twice, payload-mismatch rejection, rate-limit window rollover.
 
@@ -256,7 +261,7 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 - `public_bot_config`: `escalation_label`, `escalation_messages jsonb` (per language), `contact_email`, `contact_phone`, `contact_whatsapp_url`, `contact_page_url` (replaces/aliases `escalation_url`), `business_hours jsonb`, `timezone`. CHECK constraints for format where SQL can enforce it; full validation in backend.
 - `client_settings.handoff_policy jsonb`: repeated-miss threshold, enabled triggers.
 - `messages.handoff_reason text` CHECK in (`no_knowledge`, `out_of_scope`, `human_requested`, `blocked`, `unavailable`, `repeated_no_knowledge`).
-- Index on `(bot_id, handoff_reason, created_at)` via conversations for the knowledge-gaps view.
+- Index on `(handoff_reason, created_at)` via conversations for the knowledge-gaps view.
 
 #### Cache schema additions (into P3 migrations)
 - `bot_profiles.settings_version int` and `bot_profiles.corpus_version bigint`. `activate_document_version` and `mark_document_deleted` increment `corpus_version` in the same transaction; the settings update increments `settings_version`.

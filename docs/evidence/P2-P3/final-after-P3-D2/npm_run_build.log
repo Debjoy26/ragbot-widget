@@ -1,0 +1,9 @@
+
+> ragbot-widget@0.1.0 build
+> tsc -b && npm run build -w widget
+
+
+> @ragbot/widget@1.0.0 build
+> node scripts/build.mjs
+
+built widget v1.0.0

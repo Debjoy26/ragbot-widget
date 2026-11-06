@@ -35,5 +35,8 @@ The API still serves the widget: sessions, chat, retrieval and all AI keys. The 
 - **Errors:** the panel handles SQLSTATEs from RPCs, including stable `RB0xx` codes, instead of the API envelope.
 - **Retired:** the `/v1/admin/*` routes, admin JWT verification in the API, admin CORS and `VITE_API_URL`. Admin route shapes in `shared/src` are removed when P3.5 replaces them.
 
-## To confirm when built
-Exact Storage permissions for signed URLs and upload progress; reading `storage.objects` from an RPC to confirm an upload exists; how a new version gets its file, because `document_versions.storage_path` is unique.
+## Confirmed when built
+- **Signed download URLs:** creating one needs only the SELECT policy. The URL then works without a session until it expires, and revoking a member doesn't recall it.
+- **Signed upload URLs:** creating one needs the INSERT policy, so only owner and admin at `aal2` on a pending path.
+- **Reading `storage.objects`:** a `SECURITY DEFINER` function owned by `postgres` can read it on local and remote; `postgres` has BYPASSRLS. It isn't reachable through PostgREST.
+- **A new version's file:** a reindex reuses the active version's `storage_path`, so that column is no longer unique. Cleanup deletes an object only when no other version references it.

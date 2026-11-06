@@ -9,7 +9,7 @@
 - Conversations and messages: **90 days**, then deleted by the cleanup job.
 - Usage/billing records: **13 months**, with no message content.
 - Knowledge-gap records follow conversation retention.
-- Obtain DPAs from each provider (Anthropic, OpenAI, Supabase, Render, Vercel, Cloudflare); use zero-data-retention options where offered.
+- Obtain DPAs from each provider (Google, Anthropic, OpenAI, Supabase, Render, Vercel, Cloudflare; Google added by ADR 0014); use zero-data-retention options where offered.
 
 ## Open
 Jurisdiction confirmation and DPAs are release-gate items (PRD §7/§8); missing retention config fails closed.
