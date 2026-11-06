@@ -1,0 +1,9 @@
+rpc admin_list_bots          401
+rpc admin_list_members       401
+rpc schema_version           401
+rpc admin_document_status    404
+table public_bot_config      200
+table messages               401
+table admin_memberships      401
+table document_versions      401
+storage upload anon {"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security 
