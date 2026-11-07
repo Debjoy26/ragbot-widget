@@ -1,7 +1,7 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-07**
-> Overall: **🟡 P0 to P4 approved by owner and on `main`. P5 built, tested and debugged on branch `phase/p5`, awaiting owner approval before `main`; migration 011 not on the hosted project. Migrations 001–010 applied to the remote dev project 2026-11-06 (§2). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
+> Overall: **🟡 P0 to P5 approved by owner and on `main`. Migrations 001–011 applied to the hosted dev project (2026-11-07). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
 > Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
@@ -18,7 +18,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P3 | Database & storage migrations | ✅ | Accepted by owner 2026-11-05. Acceptance criteria met (every DB-level matrix cell has a passing test; API-level cells documented for P5/P9). On `main` @ `19438c5` (code `6b24002`). Security chain: P3-R1 → P3-D1 (`65cc738`) → re-review P3-R2 (14 of 15 fixed, M4 partial) → P3-D2 (`6b24002`) → P3-R3 (2026-11-05, static) → P3-D3 (2026-11-05, committed `815cfb9`; R3-1, R3-2, R3-3 fixed; migration 006, applied to remote dev project 2026-11-05) → P3-R4 (2026-11-05, static; no fixes made; not an approval; findings au–ba) → P3-D4 (committed as `e2a044e`); migration 007 later applied to the remote; outcomes §3a au–bh) → P3-R5 (static; P3-D4 fixes not re-reviewed, §3a bg). Final P3-D4 gates (local, Opus reruns): pgTAP 19 files, 1601 passed; unit 157; 14 race orderings; 80 guard tests; npm lint, format:check, typecheck, build, test exit 0. Final pgTAP on `6b24002`: 17 files, 1465 passed, 0 failed; `db lint` clean. P3-D3 local gates (recorded before commit `815cfb9`): pgTAP 18 files, 1485 passed, 0 failed; unit 157 passed; `db lint` clean; lint, format:check, typecheck, build exit 0. D-a, D-b, D-c resolved via ADR 0015, ADR 0016 and approved debug cycles (ADR 0016 confirmation open, §3a ag). Migrations 001–006 applied to remote dev project 2026-11-05 (§2). D1 validation check pending (§3a c). Open: §3a ac (partly), ad, ae, af, ag, ah, am, an, ao, at (partly), av, aw (partly), az, bb–bh. Resolved: ai, aj–al, ap, aq, ar, as, au, ax, ay, ba. Audit gaps (§3b) closed in P3-D5, except G-17 and G-28 (partly) and L-1, L-6 (open on the remote); migrations 007–010 applied to the remote 2026-11-06. |
 | P3.5 | Admin data layer (ADR 0017) | ✅ | Accepted by owner 2026-11-06. On `main` and on the remote dev project (migrations 009, 010). Evidence: `docs/evidence/P3-D5/SUMMARY.md`, `docs/evidence/P3-D5-remote/SUMMARY.md`. Open: §3a bj to bm |
 | P4 | API foundation | ✅ | Merge approved by owner 2026-11-06; on `main`. Evidence `docs/evidence/P4/SUMMARY.md`. Open: §3a bn, bo |
-| P5 | Visitor sessions & abuse controls | 🟡 | Built, tested and debugged on branch `phase/p5`; awaiting owner approval before `main`; migration 011 not on the hosted project. Evidence `docs/evidence/P5/SUMMARY.md`. Production daily cap open, fails closed (§3a a) |
+| P5 | Visitor sessions & abuse controls | ✅ | Approved by owner and merged to `main` 2026-11-07; migration 011 on the hosted dev project. Evidence `docs/evidence/P5/SUMMARY.md`, `docs/evidence/P5-remote/SUMMARY.md`. Open: §3a bp |
 | P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
 | P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c) |
 | P7.5 | Caching & latency | ⬜ | D13 decided (ADR 0012); C7 answer cache off by default; schema additions go into P3 |
@@ -62,6 +62,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] Remote apply 2026-11-06 (owner-approved): migrations 007–010 applied to the dev project; history 001–010; catalog md5 identical to local; advisors as expected (19 WARN, the set in `database/README.md`). No seed. pgTAP and real sessions not run against the remote. Evidence: `docs/evidence/P3-D5-remote/SUMMARY.md`
 - [x] P4 API foundation built, tested and debugged (2026-11-06; owner-approved; merged to `main` and pushed after owner approval). Final gates (Opus reruns, integrated tree; Node 24.22.2, Supabase CLI 3.0.0, local stack at migration 010): `npm run build` 0; `make db-local` and `make db-test` 0 (23 files, 2478 passed); `make db-lint` 0; `make db-race` 0 (26 orderings, 0 problems); `make test-make` 0 (116 passed); `npm run test:integration` 0 (576 passed); `npm test` 0 (1232 passed); `node scripts/api-smoke.mjs` 0 (25 passed); lint, format:check, typecheck 0; secret-scan self-test and scan 0, no hits. Evidence: `docs/evidence/P4/SUMMARY.md`. Awaiting owner approval.
 - [x] P5 visitor sessions and abuse controls built, tested and debugged on branch `phase/p5` (2026-11-07; owner-approved; not on `main`; not pushed; awaiting owner approval). Migration 011 local only, not on the hosted dev project. Final gates (Opus runs on the merged tree; Node 24.22.2, Supabase CLI 3.0.0, local stack at migration 011): `npm run build` 0; `make db-local` and `make db-test` 0 (24 files, 2639 passed); `make db-lint` 0; `make test-make` 0 (116 passed); `npm run test:integration` 0 (612 passed); `npm test` 0 (1515 passed); `node scripts/api-smoke.mjs` 0 (35 passed); lint, format:check, typecheck 0; secret-scan self-test and scan 0, no hits; `make db-race` 0 (35 orderings, 0 problems, at `9847aac`, before P5-D2). The owner stopped the race suite before it finished, so it was **not re-run on the final tree**. Reviews P5-R1, R2, R3 are static and self-reported. Evidence: `docs/evidence/P5/SUMMARY.md`.
+
+- [x] P5 closed 2026-11-07: owner approved; migration 011 applied to the hosted dev project (schema matches local; advisors unchanged); `phase/p5` merged to `main`. Evidence: `docs/evidence/P5-remote/SUMMARY.md`
 
 ## 3. Open decisions (P0)
 
@@ -153,7 +155,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **bn)** P4 not proven (`docs/evidence/P4/SUMMARY.md`): P4-D2 and P4-D3 not independently re-reviewed (covered by tests and Opus integration). No mutation run across the API suite (individual fixes shown to fail on old code by workers; self-reported). Not on a real host: `TRUSTED_PROXY_HOPS` not measured on Render; no Render deploy; API not run against the hosted database. `REQUEST_TIMEOUT_MS` firing not tested (Node's check interval is 30 seconds). Redaction is a name list, four levels deep; later routes must log only ids, counts and codes.
 - **bo)** Later-phase obligations from P4: see `plan.md` P4 section.
 - **bp)** P5 not proven (`docs/evidence/P5/SUMMARY.md`): race suite not re-run on the final tree (owner stopped it); rule-following race ordering waits about 1.8 s against a 2 s lock timeout and may flake on a slow machine; Turnstile never called for real (fake verifier only), and the widget must render it with action `session_create` (not built yet); shared NAT: the per-IP preflight is shared across bots, so keep `SESSION_PREFLIGHT_PER_IP_LIMIT` well above the per-bot per-IP limit; a wrong `TRUSTED_PROXY_HOPS` puts everyone in one bucket, and measuring it on Render stays a P10 gate; `FOR SHARE` contention under load untested (P11); `rate_limit_buckets` grows under IPv6 rotation until P6 schedules `purge_expired_rate_limit_buckets`; the plan's `Db` insert, update and list methods were replaced by service-role RPCs (design deviation).
-- **bq)** Migration 011 is not on the hosted dev project (still at 010). Applying it needs owner approval; run `get_advisors` after.
+- **bq)** ~~Migration 011 is not on the hosted dev project (still at 010). Applying it needs owner approval; run `get_advisors` after.~~ Done 2026-11-07: 011 applied, schema matches local, advisors unchanged.
 
 ### 3b. P3-D5 backlog
 
@@ -294,11 +296,10 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner reviews P5 (`docs/evidence/P5/SUMMARY.md`) and approves merging `phase/p5` to `main`; then decides on applying migration 011 to the hosted project (§3a bq).
-2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
-3. Admin panel runs `contracts:sync` (§3a bm).
-4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
-5. P6 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae, ac, av, az, bf.
+1. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
+2. Admin panel runs `contracts:sync` (§3a bm).
+3. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
+4. P6 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae, ac, av, az, bf.
 
 ## 8. Change log
 | Date | Change |
@@ -325,6 +326,7 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | 2026-11-06 | P4 API foundation built, tested and debugged on `phase/p4`; not on `main`, not pushed; awaiting owner approval. Final gates in §2; open items §3a bn, bo. Evidence: `docs/evidence/P4/SUMMARY.md`. Docs updated by `haiku-docs` (P4-DOC1). |
 | 2026-11-06 | Owner approved merging P4; `phase/p4` merged to `main`. Recorded by Opus. |
 | 2026-11-07 | P5 visitor sessions and abuse controls built, tested and debugged on `phase/p5`; not on `main`; awaiting owner approval. Migration 011 local only, not on the hosted project. Final gates in §2; race suite not re-run on the final tree. Open: §3a ae, am, av, az, bp, bq. Evidence: `docs/evidence/P5/SUMMARY.md`. Docs updated by `haiku-docs` (P5-DOC1). |
+| 2026-11-07 | P5 closed: migration 011 applied to the hosted dev project; `phase/p5` merged to `main`. Recorded by Opus. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.

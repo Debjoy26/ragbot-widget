@@ -1,0 +1,10 @@
+Target project: rbejeqwxyxtklehuzibv
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'supabase' db push --remote=rbejeqwxyxtklehuzibv --dry-run
+Target: project RagBot (rbejeqwxyxtklehuzibv) · production
+Initialising login role...
+DRY RUN: migrations will *not* be pushed to the database.
+Skipping migration .gitkeep... (file name must match pattern "<timestamp>_name.sql")
+Would push these migrations:
+ • 011_visitor_sessions_runs.sql
+{"upToDate":false,"dryRun":true,"migrations":["011_visitor_sessions_runs.sql"],"seeds":[],"roles":[],"message":"Finished supabase db push.","target":{"kind":"linked","project_ref":"rbejeqwxyxtklehuzibv","project_name":"RagBot","environment":"production"}}

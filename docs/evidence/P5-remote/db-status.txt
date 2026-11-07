@@ -1,0 +1,7 @@
+Target project: rbejeqwxyxtklehuzibv
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'supabase' migration list --remote=rbejeqwxyxtklehuzibv
+Target: project RagBot (rbejeqwxyxtklehuzibv) · production
+Initialising login role...
+Skipping migration .gitkeep... (file name must match pattern "<timestamp>_name.sql")
+{"migrations":[{"local":"001","remote":"001","time":"001"},{"local":"002","remote":"002","time":"002"},{"local":"003","remote":"003","time":"003"},{"local":"004","remote":"004","time":"004"},{"local":"005","remote":"005","time":"005"},{"local":"006","remote":"006","time":"006"},{"local":"007","remote":"007","time":"007"},{"local":"008","remote":"008","time":"008"},{"local":"009","remote":"009","time":"009"},{"local":"010","remote":"010","time":"010"},{"local":"011","remote":"011","time":"011"}],"message":"Migrations listed","target":{"kind":"linked","project_ref":"rbejeqwxyxtklehuzibv","project_name":"RagBot","environment":"production"}}

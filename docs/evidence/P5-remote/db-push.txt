@@ -1,0 +1,8 @@
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'supabase' db push --remote=rbejeqwxyxtklehuzibv --yes
+Target: project RagBot (rbejeqwxyxtklehuzibv) · production
+Initialising login role...
+Skipping migration .gitkeep... (file name must match pattern "<timestamp>_name.sql")
+Confirmed by --yes: Apply 1 migration on project RagBot (rbejeqwxyxtklehuzibv) · production
+Applying migration 011_visitor_sessions_runs.sql...
+{"upToDate":false,"dryRun":false,"migrations":["011_visitor_sessions_runs.sql"],"seeds":[],"roles":[],"message":"Finished supabase db push.","target":{"kind":"linked","project_ref":"rbejeqwxyxtklehuzibv","project_name":"RagBot","environment":"production"}}
