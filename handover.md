@@ -185,3 +185,4 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-06 | Owner | Opus (P5 on owner go-ahead) | P4 merge approved; `phase/p4` merged to `main`. |
 | 2026-11-07 | Opus (P5) | Owner (P5 review; approve merge of `phase/p5` to `main`; migration 011 decision, `status.md §3a` bq) | P5 visitor sessions and abuse controls built, tested and debugged on `phase/p5`; not on `main`; awaiting owner approval. Final gates in `status.md §2`; race suite not re-run on the final tree. Evidence: `docs/evidence/P5/SUMMARY.md`. Open: `status.md §3a` ae, am, av, az, bp, bq. Docs updated by `haiku-docs` (P5-DOC1). |
 | 2026-11-07 | Owner | Opus (P6 on owner go-ahead) | P5 closed: migration 011 applied to the hosted dev project; `phase/p5` merged to `main`. |
+| 2026-11-07 | Owner | Opus (P6 on owner go-ahead) | P5 open items closed; follow-ups now sit in the P6, P8, P10, P11 and P12 sections of `plan.md`. |

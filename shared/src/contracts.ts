@@ -165,6 +165,12 @@ export interface PublicBotConfig extends ContactBlock {
 // ---------------------------------------------------------------------------
 
 /** Claims bound into the signed visitor token (seconds since epoch for iat/exp). */
+/**
+ * Turnstile action the widget must render on the session challenge. The API refuses a token whose
+ * siteverify response carries a different action (ADR 0010).
+ */
+export const TURNSTILE_SESSION_ACTION = 'session_create';
+
 export interface VisitorTokenClaims {
   readonly bot_id: string;
   readonly session_id: string;

@@ -6,7 +6,11 @@
 // timeout, network error, redirect, non-200, oversized or malformed body, or anything else is `false`. The token and the secret are never logged and never placed in
 // an error: this module does not log at all.
 
+import { TURNSTILE_SESSION_ACTION } from '@ragbot/shared';
 import { UNKNOWN_IP } from '../lib/client-ip.js';
+
+// Defined in shared so the widget renders the same action; re-exported for callers and tests.
+export { TURNSTILE_SESSION_ACTION };
 
 /** Cloudflare's siteverify endpoint. */
 export const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
@@ -16,7 +20,6 @@ const MAX_RESPONSE_CHARS = 16_384;
 const MAX_TOKEN_CHARS = 4096;
 
 /** The Turnstile action of a session-create challenge. Set by the widget, required back in the response. */
-export const TURNSTILE_SESSION_ACTION = 'session_create';
 
 export interface TurnstileVerifier {
   /** True only for an explicit `success: true`. Never throws. */

@@ -193,7 +193,13 @@ Every browser-callable function follows the rules in ADR 0017: `is_active_member
 
 **Tests:** parallel budget race (N concurrent reservations never exceed cap), duplicate idempotency key cannot spend twice, payload-mismatch rejection, rate-limit window rollover.
 
+**Design notes (P5, closed 2026-11-07):**
+- The plan's `Db` insert, conditional update and list methods were replaced by service-role RPCs (`create_visitor_session`, `set_request_run_state`, `get_request_run` and others in migration 011). One round trip each, no table grants to the API, and conditional updates enforced in SQL.
+- The per-IP preflight limit on `/v1/sessions` is shared across bots, so heavy use from one address can block session creation for others behind it (shared NAT). Accepted: it caps database load before any lookup. Keep `SESSION_PREFLIGHT_PER_IP_LIMIT` well above the per-bot per-IP limit.
+- Turnstile was verified with a fake only. The widget renders it with `TURNSTILE_SESSION_ACTION` from `shared` (P8); the first real verification with live keys is a P12 step.
+
 ### P6 — Ingestion pipeline (`worker/`)
+- From P5: schedule `purge_expired_rate_limit_buckets` in the worker cleanup job, because buckets grow under IPv6 rotation until purged.
 - Jobs arrive from the P3.5 functions; there are no admin document routes (ADR 0017).
 - First step of every `index_document` job: verify the object's size and sniffed MIME against the upload policy, and compute and store the checksum. No API checks the upload first, so this is the authoritative check.
 - B-2: write per-document progress and safe failure codes for the P3.5 status read.
@@ -319,6 +325,7 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 **Tests:** analysis does not delay first `delta`; invalid entry payloads rejected; deleted data audit shows nothing retained beyond policy.
 
 ### P10 — Observability & ops
+- From P4 and P5: measure `X-Forwarded-For` on a real Render deploy and set `TRUSTED_PROXY_HOPS` from it before launch; a wrong value puts every visitor in one rate-limit bucket.
 - Metrics: request latency (first-event and total, split by cache path), cache hit rate per layer (C1–C7), queue age, job failures, rate/budget denials, fallback frequency, indexing failures, provider usage/cost.
 - Alerts: provider auth/billing errors, queue age threshold, dead-letter jobs, budget ≥80%, readiness failures.
 - `render.yaml`: API web service (health `/health/ready`) and worker, workspace build/start commands, env var keys (no values).
@@ -327,6 +334,7 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 - Runbooks in `docs/runbooks/`: provider outage, key rotation, rollback (widget version + API), restore rehearsal, incident response.
 
 ### P11 — Evaluation, security, load
+- From P5: load-test chat starts for contention on the `bot_profiles` row (`FOR SHARE` in `begin_request_run` and `reserve_request_budget`) and for 55P03 under load.
 - Evaluation sets (`tests/evaluation/`): known answers, unanswerable questions, multilingual & cross-language, injection attempts — run against primary **and** fallback providers; calibrate similarity thresholds.
 - Security checklist (TECH_SPECS §9 Security) executed and recorded.
 - Load test to measure p95 first meaningful event (target ≤5s) and full answer (target ≤20s); record actual numbers, size compute from them.

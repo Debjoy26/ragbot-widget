@@ -45,9 +45,12 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != "true" ]; t
   exit 2
 fi
 
-HOLD=2.5      # seconds the first transaction stays open
-DELAY="${RACE_DELAY:-0.8}"     # seconds before the second connection starts
-BLOCKED_MS=1200  # a second statement that waited is at least this slow
+# Timing: functions from migration 011 (and settle, release, record_rate_limit_attempt) set
+# lock_timeout = 2s, so a blocked second statement must finish waiting well before 2 s. Expected wait is
+# about HOLD - DELAY + 0.1 s = 1.5 s: 0.5 s below the lock timeout and 0.7 s above BLOCKED_MS.
+HOLD=2.0      # seconds the first transaction stays open
+DELAY="${RACE_DELAY:-0.6}"     # seconds before the second connection starts
+BLOCKED_MS=800  # a second statement that waited is at least this slow
 
 TMP="$(mktemp -d)"
 BOT=ac100000-0000-4000-8000-000000000001
