@@ -3,6 +3,9 @@
 -- connections inside one pgTAP transaction (P5 integration tests must add that); here sequential
 -- behaviour of every outcome is asserted.
 begin;
+-- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
+-- change is rolled back with the transaction.
+alter table public.bot_profiles alter column enabled set default true;
 select plan(56);
 
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values

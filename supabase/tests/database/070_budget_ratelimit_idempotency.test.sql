@@ -2,6 +2,9 @@
 -- Limitation: true parallel reservation races need concurrent connections (P5 integration test);
 -- here serialisation is by construction (client_settings row lock) and sequential behaviour is asserted.
 begin;
+-- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
+-- change is rolled back with the transaction.
+alter table public.bot_profiles alter column enabled set default true;
 select plan(64);
 
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values

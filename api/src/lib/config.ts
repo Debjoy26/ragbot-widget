@@ -9,7 +9,7 @@ import { loadApiAiConfig, ProviderConfigError, type ApiAiConfig, type Env } from
 export interface AppConfig {
   readonly supabaseUrl: string;
   /**
-   * Secrets (this key, the two token secrets, the Turnstile key) and `ai` are NON-ENUMERABLE:
+   * Secrets (this key, the two token secrets, the Turnstile key, the rate-limit key) and `ai` are NON-ENUMERABLE:
    * `JSON.stringify(config)`, `util.inspect(config)`, spreading the config and logging it show
    * none of them. Inside `ai`, every role's `apiKey` is non-enumerable too, so logging
    * `config.ai` or a role prints no key. Direct property access still works, but spreading a role
@@ -20,6 +20,8 @@ export interface AppConfig {
   /** Optional: a retired signing secret, accepted by verifyToken only, never used to sign. */
   readonly visitorTokenSecretPrevious: string | undefined;
   readonly turnstileSecretKey: string;
+  /** HMAC key for rate-limit bucket keys (lib/rate-key.ts). Non-enumerable like the other secrets. */
+  readonly rateLimitKeySecret: string;
   readonly allowedOrigins: readonly string[];
   readonly port: number;
   readonly logLevel: LogLevel;
@@ -30,6 +32,8 @@ export interface AppConfig {
   readonly readyTimeoutMs: number;
   readonly dbTimeoutMs: number;
   readonly visitorTokenTtlSeconds: number;
+  /** Bound on one Turnstile siteverify call; a timeout counts as a failed challenge. */
+  readonly turnstileTimeoutMs: number;
   readonly chatDeadlineMs: number;
   readonly providerMaxAttempts: number;
   readonly ai: ApiAiConfig;
@@ -116,6 +120,7 @@ const envSchema = z.object({
   VISITOR_TOKEN_SECRET: secret(MIN_SECRET_BYTES),
   VISITOR_TOKEN_SECRET_PREVIOUS: optionalSecret(MIN_SECRET_BYTES),
   TURNSTILE_SECRET_KEY: secret(1),
+  RATE_LIMIT_KEY_SECRET: secret(MIN_SECRET_BYTES),
   ALLOWED_ORIGINS: allowedOrigins,
   PORT: integer(1, 65_535),
   LOG_LEVEL: z.enum(LOG_LEVELS),
@@ -126,6 +131,7 @@ const envSchema = z.object({
   READY_TIMEOUT_MS: integer(1, MAX_INT32),
   DB_TIMEOUT_MS: integer(1, MAX_INT32),
   VISITOR_TOKEN_TTL_SECONDS: integer(1, MAX_INT32),
+  TURNSTILE_TIMEOUT_MS: integer(1, MAX_INT32),
   CHAT_DEADLINE_MS: integer(1, MAX_INT32),
   PROVIDER_MAX_ATTEMPTS: integer(1, 10),
 });
@@ -148,6 +154,7 @@ const SECRET_VARIABLES = [
   'VISITOR_TOKEN_SECRET_PREVIOUS',
   'TURNSTILE_SECRET_KEY',
   'SUPABASE_SECRET_KEY',
+  'RATE_LIMIT_KEY_SECRET',
 ] as const;
 
 /** Names of secret variables that share a value with another one. Values are never returned. */
@@ -244,6 +251,7 @@ export function loadConfig(env: Env): AppConfig {
     VISITOR_TOKEN_SECRET_PREVIOUS: v.VISITOR_TOKEN_SECRET_PREVIOUS,
     TURNSTILE_SECRET_KEY: v.TURNSTILE_SECRET_KEY,
     SUPABASE_SECRET_KEY: v.SUPABASE_SECRET_KEY,
+    RATE_LIMIT_KEY_SECRET: v.RATE_LIMIT_KEY_SECRET,
   });
   if (reused.length > 0) {
     throw new ConfigError(reused, `Invalid configuration: ${reused.join(', ')} must all differ`);
@@ -261,6 +269,7 @@ export function loadConfig(env: Env): AppConfig {
     readyTimeoutMs: v.READY_TIMEOUT_MS,
     dbTimeoutMs: v.DB_TIMEOUT_MS,
     visitorTokenTtlSeconds: v.VISITOR_TOKEN_TTL_SECONDS,
+    turnstileTimeoutMs: v.TURNSTILE_TIMEOUT_MS,
     chatDeadlineMs: v.CHAT_DEADLINE_MS,
     providerMaxAttempts: v.PROVIDER_MAX_ATTEMPTS,
   };
@@ -271,6 +280,7 @@ export function loadConfig(env: Env): AppConfig {
     visitorTokenSecret: v.VISITOR_TOKEN_SECRET,
     visitorTokenSecretPrevious: v.VISITOR_TOKEN_SECRET_PREVIOUS,
     turnstileSecretKey: v.TURNSTILE_SECRET_KEY,
+    rateLimitKeySecret: v.RATE_LIMIT_KEY_SECRET,
     ai: hideAiKeys(ai),
   };
   for (const [name, value] of Object.entries(hidden)) {

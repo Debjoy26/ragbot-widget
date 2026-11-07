@@ -6,6 +6,9 @@
 -- Id scheme: bots b1..b5 = 'bN000000-0000-4000-8000-0000000000d4', sessions aN likewise,
 -- run nn = 'f00000nn-0000-4000-8000-0000000000d4'.
 begin;
+-- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
+-- change is rolled back with the transaction.
+alter table public.bot_profiles alter column enabled set default true;
 select plan(116);
 
 insert into auth.users (id, aud, role, email) values
@@ -118,7 +121,7 @@ select ok(not has_function_privilege('anon', 'public.reserve_request_budget(uuid
       and not has_function_privilege('authenticated', 'public.reserve_request_budget(uuid,uuid,numeric,integer)', 'execute')
       and has_function_privilege('service_role', 'public.reserve_request_budget(uuid,uuid,numeric,integer)', 'execute'),
   'R4-8: EXECUTE on reserve_request_budget is service_role only');
-select is((select proconfig::text from pg_proc where oid = 'public.reserve_request_budget(uuid,uuid,numeric,integer)'::regprocedure), '{"search_path=\"\""}',
+select is((select proconfig::text from pg_proc where oid = 'public.reserve_request_budget(uuid,uuid,numeric,integer)'::regprocedure), '{"search_path=\"\"",lock_timeout=2s}',
   'R4-8: reserve_request_budget keeps the empty search_path');
 select ok((select not prosecdef from pg_proc where oid = 'public.reserve_request_budget(uuid,uuid,numeric,integer)'::regprocedure),
   'R4-8: reserve_request_budget stays SECURITY INVOKER');

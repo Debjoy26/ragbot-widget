@@ -5,6 +5,9 @@
 --
 -- Ids end in 000000000210: bots bN, users aN, documents dN, versions eN, jobs cN.
 begin;
+-- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
+-- change is rolled back with the transaction.
+alter table public.bot_profiles alter column enabled set default true;
 select plan(364);
 
 insert into auth.users (id, aud, role, email) values

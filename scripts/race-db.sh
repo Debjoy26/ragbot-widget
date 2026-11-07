@@ -88,16 +88,16 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=26
+EXPECTED=30
 
-# Fresh fixture: one bot with settings and a session, two conversations, two questions in C1.
+# Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
   pq -c "delete from public.bot_profiles where id = '$BOT';
     delete from public.jobs where id in ('$J1', '$J2');
     delete from public.rate_limit_buckets where key_hash = '$BUCKET';
     $CLEAN_P35
-    insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions)
-      values ('$BOT', 'race-db', 'x', array['en'], 'm', 1536);
+    insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled)
+      values ('$BOT', 'race-db', 'x', array['en'], 'm', 1536, true);
     insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy)
       values ('$BOT', array['https://e.test'], '{}', '{\"daily_cap_usd\": 100}', '{}', '{}', '{}', '{}');
     insert into public.visitor_sessions (id, bot_id, expires_at) values ('$SESS', '$BOT', now() + interval '1 hour');
@@ -331,7 +331,9 @@ run_order "job reserve in flight, second (cap)"    "$CAP15 $JOBS_RUN"       "$RE
 # settings: two admin_update_settings calls with the same expected version. The bot has no public config yet, so
 # both patches bring display_name and supported_languages. The second waits for the bot row lock, then sees the
 # version the first moved: one wins, the other gets RB030 (a lost update would leave version 2 with the second name).
-UPD_FIX="update public.bot_profiles set settings_version = 1 where id = '$BOT';"  # the fixture's own updates moved it
+# The fixture bot is enabled (migration 011), so a settings patch is checked against the publish rules; disable it first,
+# as this ordering predates that. The fixture's own updates moved settings_version.
+UPD_FIX="update public.bot_profiles set enabled = false where id = '$BOT'; update public.bot_profiles set settings_version = 1 where id = '$BOT';"
 UPD_O="$AS_OWNER select public.admin_update_settings('$BOT', 1, '{\"display_name\": \"Owner Name\", \"supported_languages\": [\"en\"]}');"
 UPD_A="$AS_ADMIN select public.admin_update_settings('$BOT', 1, '{\"display_name\": \"Admin Name\", \"supported_languages\": [\"en\"]}');"
 V_UPD="select case
@@ -383,6 +385,48 @@ run_order "register in flight, second (quota 1)"   "$ADMIN_FIX $QUOTA1"     "$RE
 run_order "retry in flight, second retry"          "$ADMIN_FIX $FAILED_VER" "$RETRY_O"    "$RETRY_A"  "$V_RETRY" ""    "RB030" yes
 run_order "delete in flight, complete"             "$ADMIN_FIX"             "$DEL_O"      "$COMPLETE_A" "$V_DELCOMP" "" "RB037" yes
 run_order "complete in flight, delete"             "$ADMIN_FIX"             "$COMPLETE_O" "$DEL_A"    "$V_DELCOMP" ""    ""      yes
+
+# ---- P5 (migration 011): visitor sessions and run state ----
+# create_visitor_session: two sessions for one bot. Both read the bot row FOR SHARE, so neither waits; both rows
+# exist with distinct ids.
+SESS_NEW="select * from public.create_visitor_session('$BOT', 900);"
+V_SESS="select case
+  when (select count(*) from public.visitor_sessions where bot_id = '$BOT' and id <> '$SESS') <> 2
+    then 'VIOLATION: expected 2 new sessions, found ' || (select count(*) from public.visitor_sessions where bot_id = '$BOT' and id <> '$SESS')
+  when (select count(distinct id) from public.visitor_sessions where bot_id = '$BOT' and id <> '$SESS') <> 2
+    then 'VIOLATION: the two sessions share an id'
+  else 'CONSISTENT: two sessions, distinct ids' end"
+
+# begin_request_run against a bot disable. The disable updates bot_profiles.enabled, which conflicts with the
+# FOR SHARE lock a start takes on the bot row. Disable first (still open): the start waits, then sees the bot
+# disabled (RB039) and no run exists. Start first (still open): the disable waits for the start, which created
+# its run before the disable committed; no start can run after the disable.
+DISABLE="update public.bot_profiles set enabled = false where id = '$BOT';"
+V_DISABLE_FIRST="select case
+  when (select enabled from public.bot_profiles where id = '$BOT') then 'VIOLATION: the bot is still enabled'
+  when (select count(*) from public.request_runs where bot_id = '$BOT') <> 0
+    then 'VIOLATION: ' || (select count(*) from public.request_runs where bot_id = '$BOT') || ' run(s) started after the disable'
+  else 'CONSISTENT: disabled, no run started after the disable' end"
+V_START_FIRST="select case
+  when (select enabled from public.bot_profiles where id = '$BOT') then 'VIOLATION: the bot is still enabled'
+  when (select count(*) from public.request_runs where bot_id = '$BOT') <> 1
+    then 'VIOLATION: expected the one run that started before the disable, found ' || (select count(*) from public.request_runs where bot_id = '$BOT')
+  else 'CONSISTENT: the run started before the disable committed, the bot is disabled' end"
+
+# set_request_run_state: two callers move one live run to the same terminal state. The second waits for the row
+# lock, re-reads the run as terminal and returns false: exactly one true. A DO block turns a wrong answer
+# into an error the ordering does not expect (XX901 first lost, XX902 second also moved).
+SET_FIRST="do \$set\$ begin if not public.set_request_run_state('$BOT', '$RUN', 'succeeded') then raise exception 'first lost' using errcode = 'XX901'; end if; end \$set\$;"
+SET_SECOND="do \$set\$ begin if public.set_request_run_state('$BOT', '$RUN', 'succeeded') then raise exception 'second also moved' using errcode = 'XX902'; end if; end \$set\$;"
+V_SETSTATE="select case
+  when (select state from public.request_runs where id = '$RUN') <> 'succeeded' then 'VIOLATION: run is ' || (select state from public.request_runs where id = '$RUN')
+  when (select finished_at from public.request_runs where id = '$RUN') is null then 'VIOLATION: finished_at not set'
+  else 'CONSISTENT: run succeeded, one mover' end"
+
+run_order "session create in flight, second create" ""                      "$SESS_NEW"   "$SESS_NEW" "$V_SESS"  ""    ""      fast
+run_order "disable in flight, start"               "$CAP1"                  "$DISABLE"    "$BEGIN1"   "$V_DISABLE_FIRST" "" "RB039" yes
+run_order "start in flight, disable"               "$CAP1"                  "$BEGIN1"     "$DISABLE"  "$V_START_FIRST" ""  ""      yes
+run_order "run state in flight, second move"       "$RUN_ROW"               "$SET_FIRST"  "$SET_SECOND" "$V_SETSTATE" "" ""      yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

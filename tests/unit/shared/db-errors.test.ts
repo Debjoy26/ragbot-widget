@@ -26,6 +26,7 @@ const CONTRACT: ReadonlyArray<readonly [string, string]> = [
   ['RB036', 'policy_missing'],
   ['RB037', 'not_found'],
   ['RB038', 'upload_missing'],
+  ['RB039', 'bot_disabled'],
 ];
 
 describe('dbErrorFor (G-14)', () => {

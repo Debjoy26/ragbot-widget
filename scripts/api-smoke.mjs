@@ -7,6 +7,8 @@
 // stack's service key (read from `supabase status -o json`), then checks: bad and missing
 // configuration exit 1 naming the variable without its value; /health/live and /health/ready;
 // the error envelope on an unknown route; CORS for an allowed and a refused origin; and that
+// POST /v1/sessions for the seeded dev bot (200, token shape and HMAC, session row exists), an
+// unknown slug (403) and a strict-body violation (400); and that
 // SIGTERM flips /health/ready to 503 while draining and exits 0. Nothing it prints contains the
 // key or any smoke secret. Any failed check makes the script exit non-zero.
 //
@@ -15,7 +17,7 @@
 // No network access other than loopback.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +32,7 @@ const REFUSED_ORIGIN = 'https://smoke-refused.example.com';
 const SMOKE_SECRETS = {
   VISITOR_TOKEN_SECRET: randomBytes(32).toString('hex'),
   TURNSTILE_SECRET_KEY: 'SMOKE-ONLY-turnstile-secret',
+  RATE_LIMIT_KEY_SECRET: randomBytes(32).toString('hex'),
   GEMINI_API_KEY: 'SMOKE-ONLY-gemini-api-key',
 };
 
@@ -117,13 +120,16 @@ function baseEnv(url, key, port) {
     ALLOWED_ORIGINS: ALLOWED_ORIGIN,
     PORT: String(port),
     LOG_LEVEL: 'info',
-    TRUSTED_PROXY_HOPS: '0',
+    // One trusted hop: the sessions checks send a random X-Forwarded-For so each run has its own
+    // rate-limit bucket and repeated runs never exhaust the dev bot's session-create limit.
+    TRUSTED_PROXY_HOPS: '1',
     BODY_LIMIT_BYTES: '65536',
     REQUEST_TIMEOUT_MS: '10000',
     CONNECTION_TIMEOUT_MS: '10000',
     READY_TIMEOUT_MS: '3000',
     DB_TIMEOUT_MS: '3000',
     VISITOR_TOKEN_TTL_SECONDS: '900',
+    TURNSTILE_TIMEOUT_MS: '3000',
     CHAT_DEADLINE_MS: '30000',
     PROVIDER_MAX_ATTEMPTS: '2',
     CHAT_PRIMARY_PROVIDER: 'gemini',
@@ -183,6 +189,69 @@ async function get(port, path, headers = {}) {
   return { status: res.status, headers: res.headers, text, json };
 }
 
+async function post(port, path, body, headers = {}) {
+  const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000),
+  });
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = undefined;
+  }
+  return { status: res.status, headers: res.headers, text, json };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A random documentation-range IPv6 address: its own /64, so its own rate-limit bucket. */
+function randomClientAddress() {
+  const g = () => randomBytes(2).toString('hex');
+  return `2001:db8:${g()}:${g()}::1`;
+}
+
+/** Service-key call to the LOCAL stack, for reading and removing the smoke session row. */
+async function serviceCall(url, key, method, path) {
+  const headers = { apikey: key };
+  if (key.split('.').length === 3) headers.authorization = `Bearer ${key}`;
+  const res = await fetch(`${url}${path}`, { method, headers, signal: AbortSignal.timeout(5000) });
+  const text = await res.text();
+  return { status: res.status, json: text === '' ? null : JSON.parse(text) };
+}
+
+/** Checks the issued token's shape and signature without printing it. Returns the session id. */
+function checkToken(token) {
+  const parts = typeof token === 'string' ? token.split('.') : [];
+  const shaped = parts.length === 3 && parts[0] === 'v1';
+  check('sessions: the token has the v1.<payload>.<signature> shape', shaped);
+  if (!shaped) return undefined;
+  const expected = createHmac('sha256', SMOKE_SECRETS.VISITOR_TOKEN_SECRET)
+    .update(`${parts[0]}.${parts[1]}`)
+    .digest('base64url');
+  check('sessions: the token signature verifies with the signing secret', parts[2] === expected);
+  let claims;
+  try {
+    claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    claims = undefined;
+  }
+  const nowS = Math.floor(Date.now() / 1000);
+  check(
+    'sessions: the claims name a bot, a session and a token version, and expire in the future',
+    claims !== undefined &&
+      UUID.test(claims.bot_id) &&
+      UUID.test(claims.session_id) &&
+      claims.token_version === 1 &&
+      claims.exp > nowS &&
+      claims.exp - claims.iat === 900,
+  );
+  return claims?.session_id;
+}
+
 async function refuses(name, env, mustName, mustNotContain) {
   const run = start(env);
   const exit = await Promise.race([run.done, sleep(15_000).then(() => undefined)]);
@@ -199,12 +268,12 @@ function drainProbe(port, afterHold) {
   return new Promise((resolve) => {
     let received = '';
     const socket = connect({ port, host: '127.0.0.1' }, () => {
-      // An unfinished request keeps the connection busy, so it survives server.close().
-      socket.write(
-        'POST /nope HTTP/1.1\r\nHost: smoke\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n',
-      );
+      // The readiness request is held unfinished (headers not yet ended), which keeps the connection
+      // busy through server.close(). It is completed after SIGTERM, so the one response on this
+      // connection is always the readiness answer given while draining.
+      socket.write('GET /health/ready HTTP/1.1\r\nHost: smoke\r\n');
       afterHold().then(() => {
-        socket.write('{}GET /health/ready HTTP/1.1\r\nHost: smoke\r\n\r\n');
+        socket.write('\r\n');
       });
     });
     socket.on('data', (d) => (received += d.toString('latin1')));
@@ -292,6 +361,58 @@ async function main() {
     'a bad URL gets the envelope, not a default body',
     bad.status === 400 && bad.json?.code === 'INVALID_REQUEST' && !bad.text.includes('%zz'),
     bad.text,
+  );
+
+  // 3b. POST /v1/sessions against the seeded dev bot (turnstile_required is false in the dev seed).
+  const client = { 'x-forwarded-for': randomClientAddress() };
+  const made = await post(port, '/v1/sessions', { bot_slug: 'dev-bot' }, client);
+  check(
+    'sessions: dev-bot gets 200 with exactly { token, expires_at }',
+    made.status === 200 &&
+      made.json !== undefined &&
+      Object.keys(made.json).sort().join(',') === 'expires_at,token' &&
+      Number.isFinite(Date.parse(made.json.expires_at)),
+    made.text.replace(/"token":"[^"]*"/, '"token":"[redacted]"'),
+  );
+  if (made.status === 200 && made.json !== undefined) {
+    secretValues.add(made.json.token);
+    const sessionId = checkToken(made.json.token);
+    if (sessionId !== undefined) {
+      const row = await serviceCall(
+        url,
+        key,
+        'GET',
+        `/rest/v1/visitor_sessions?id=eq.${sessionId}&select=bot_id,token_version,revoked_at`,
+      );
+      check(
+        'sessions: the session row exists, is not revoked and has token_version 1',
+        row.status === 200 &&
+          row.json?.length === 1 &&
+          row.json[0].token_version === 1 &&
+          row.json[0].revoked_at === null,
+      );
+      const gone = await serviceCall(
+        url,
+        key,
+        'DELETE',
+        `/rest/v1/visitor_sessions?id=eq.${sessionId}`,
+      );
+      check('sessions: the smoke session row was removed', gone.status < 300);
+    }
+  }
+  const unknown = await post(port, '/v1/sessions', { bot_slug: 'smoke-no-such-bot' }, client);
+  check(
+    'sessions: an unknown slug is 403 FORBIDDEN with the bare envelope',
+    unknown.status === 403 &&
+      unknown.json?.code === 'FORBIDDEN' &&
+      Object.keys(unknown.json).sort().join(',') === 'code,request_id',
+    unknown.text,
+  );
+  const strict = await post(port, '/v1/sessions', { bot_slug: 'dev-bot', extra: 1 }, client);
+  check(
+    'sessions: a strict-body violation is 400 INVALID_REQUEST',
+    strict.status === 400 && strict.json?.code === 'INVALID_REQUEST',
+    strict.text,
   );
 
   // 4. SIGTERM: hold a connection open, signal, then ask for readiness on that same connection.

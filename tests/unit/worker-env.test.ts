@@ -18,20 +18,22 @@ describe('worker environment guard', () => {
     expect(WORKER_FORBIDDEN_ENV_PREFIXES).toContain('VISITOR_TOKEN_SECRET_');
   });
 
-  it.each(['TURNSTILE_SECRET_KEY', 'VISITOR_TOKEN_SECRET_PREVIOUS', 'VISITOR_TOKEN_SECRET_2'])(
-    'refuses %s by name, without echoing the value',
-    (name) => {
-      const fakeValue = 'fake-test-value-not-a-secret';
-      let message = '';
-      try {
-        assertWorkerEnv({ LOG_LEVEL: 'info', [name]: fakeValue });
-      } catch (err) {
-        message = (err as Error).message;
-      }
-      expect(message).toContain(name);
-      expect(message).not.toContain(fakeValue);
-    },
-  );
+  it.each([
+    'TURNSTILE_SECRET_KEY',
+    'RATE_LIMIT_KEY_SECRET',
+    'VISITOR_TOKEN_SECRET_PREVIOUS',
+    'VISITOR_TOKEN_SECRET_2',
+  ])('refuses %s by name, without echoing the value', (name) => {
+    const fakeValue = 'fake-test-value-not-a-secret';
+    let message = '';
+    try {
+      assertWorkerEnv({ LOG_LEVEL: 'info', [name]: fakeValue });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(name);
+    expect(message).not.toContain(fakeValue);
+  });
 
   it('does not refuse near-miss names', () => {
     expect(() =>

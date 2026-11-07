@@ -5,6 +5,7 @@ import { buildLoggerOptions } from '../../../api/src/lib/logger.ts';
 import Fastify from 'fastify';
 import {
   FAKE_AI_KEY,
+  FAKE_RATE_KEY,
   FAKE_SUPABASE_KEY,
   FAKE_TURNSTILE_KEY,
   FAKE_VISITOR_SECRET,
@@ -32,6 +33,7 @@ const SECRET_VALUES = [
   FAKE_VISITOR_SECRET,
   FAKE_TURNSTILE_KEY,
   FAKE_AI_KEY,
+  FAKE_RATE_KEY,
   PREVIOUS,
 ];
 
@@ -41,7 +43,9 @@ describe('secrets are non-enumerable on the config (A-1)', () => {
   it('JSON.stringify shows none of them', () => {
     const text = JSON.stringify(config);
     for (const s of SECRET_VALUES) expect(text).not.toContain(s);
-    expect(text).not.toMatch(/supabaseSecretKey|visitorTokenSecret|turnstileSecretKey|"ai"/);
+    expect(text).not.toMatch(
+      /supabaseSecretKey|visitorTokenSecret|turnstileSecretKey|rateLimitKeySecret|"ai"/,
+    );
     expect(JSON.parse(text)).toMatchObject({ port: 8080 });
   });
 
@@ -62,6 +66,7 @@ describe('secrets are non-enumerable on the config (A-1)', () => {
       'visitorTokenSecret',
       'visitorTokenSecretPrevious',
       'turnstileSecretKey',
+      'rateLimitKeySecret',
       'ai',
     ]) {
       expect(keys).not.toContain(hidden);
@@ -83,6 +88,7 @@ describe('secrets are non-enumerable on the config (A-1)', () => {
     expect(config.visitorTokenSecret).toBe(FAKE_VISITOR_SECRET);
     expect(config.visitorTokenSecretPrevious).toBe(PREVIOUS);
     expect(config.turnstileSecretKey).toBe(FAKE_TURNSTILE_KEY);
+    expect(config.rateLimitKeySecret).toBe(FAKE_RATE_KEY);
     expect(config.ai.chatPrimary.apiKey).toBe(FAKE_AI_KEY);
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.ai)).toBe(true);
@@ -134,6 +140,26 @@ describe('one value per secret (A-6)', () => {
       'supabase key equals turnstile',
       { SUPABASE_SECRET_KEY: FAKE_TURNSTILE_KEY },
       ['TURNSTILE_SECRET_KEY', 'SUPABASE_SECRET_KEY'],
+    ],
+    [
+      'the rate-limit key equals the token secret',
+      { RATE_LIMIT_KEY_SECRET: FAKE_VISITOR_SECRET },
+      ['VISITOR_TOKEN_SECRET', 'RATE_LIMIT_KEY_SECRET'],
+    ],
+    [
+      'the rate-limit key equals turnstile',
+      { RATE_LIMIT_KEY_SECRET: FAKE_TURNSTILE_KEY },
+      ['TURNSTILE_SECRET_KEY', 'RATE_LIMIT_KEY_SECRET'],
+    ],
+    [
+      'the rate-limit key equals the supabase key',
+      { RATE_LIMIT_KEY_SECRET: FAKE_SUPABASE_KEY },
+      ['SUPABASE_SECRET_KEY', 'RATE_LIMIT_KEY_SECRET'],
+    ],
+    [
+      'the rate-limit key equals the previous token secret',
+      { RATE_LIMIT_KEY_SECRET: PREVIOUS, VISITOR_TOKEN_SECRET_PREVIOUS: PREVIOUS },
+      ['VISITOR_TOKEN_SECRET_PREVIOUS', 'RATE_LIMIT_KEY_SECRET'],
     ],
     [
       'previous equals the supabase key',
@@ -305,6 +331,7 @@ describe('provider keys are non-enumerable inside config.ai (P4-D3 R-9, R-10)', 
       'visitorTokenSecret',
       'visitorTokenSecretPrevious',
       'turnstileSecretKey',
+      'rateLimitKeySecret',
       'ai',
     ]) {
       expect(Object.keys(spread)).not.toContain(hidden);

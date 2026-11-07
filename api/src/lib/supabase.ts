@@ -48,8 +48,27 @@ export interface Db extends DbPing {
     columns: readonly string[],
     signal?: AbortSignal,
   ): Promise<T | null>;
-  /** Calls a database function with a JSON argument object. Throws DbError. */
-  rpc<T>(name: string, args: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<T>;
+  /**
+   * Calls a database function with a JSON argument object. Throws DbError.
+   * `options.retryOnContention` is opt-in: see RpcOptions.
+   */
+  rpc<T>(
+    name: string,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+    options?: RpcOptions,
+  ): Promise<T>;
+}
+
+export interface RpcOptions {
+  /**
+   * Retry ONCE, after a short jittered delay, when the database rolled the call back for lock
+   * contention: SQLSTATE 40P01 (deadlock detected) or 55P03 (lock not available, i.e. lock_timeout).
+   * Both mean the statement did not run, so repeating it is safe. Never any other error, and never
+   * on by default: a caller opts in per call, only for a function that is safe to repeat (P5, status
+   * section 3a az and bf).
+   */
+  readonly retryOnContention?: boolean;
 }
 
 export interface CreateDbOptions {
@@ -58,7 +77,22 @@ export interface CreateDbOptions {
   timeoutMs: number;
   /** Injected for tests only. */
   fetchImpl?: typeof fetch;
+  /** Injected for tests only: waits between a contention failure and its one retry. */
+  sleepImpl?: (ms: number) => Promise<void>;
+  /** Injected for tests only: uniform random number in [0, 1) for the retry jitter. */
+  randomImpl?: () => number;
 }
+
+/** SQLSTATEs that mean "rolled back for lock contention, safe to repeat once". */
+export const CONTENTION_SQLSTATES: ReadonlySet<string> = new Set(['40P01', '55P03']);
+/** Jittered delay before the one contention retry: between these bounds (milliseconds). */
+export const CONTENTION_RETRY_MIN_MS = 20;
+export const CONTENTION_RETRY_MAX_MS = 80;
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const IDENTIFIER = /^[a-z_]+$/;
 const SQLSTATE = /^[0-9A-Z]{5}$/;
@@ -79,6 +113,8 @@ function checkIdentifier(kind: string, value: string): void {
 export function createDb(options: CreateDbOptions): Db {
   const { url, secretKey, timeoutMs } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const sleep = options.sleepImpl ?? defaultSleep;
+  const random = options.randomImpl ?? Math.random;
 
   // Fail closed on missing or malformed configuration. Messages never include the values.
   if (typeof secretKey !== 'string' || secretKey.length === 0) {
@@ -195,6 +231,7 @@ export function createDb(options: CreateDbOptions): Db {
       name: string,
       args: Readonly<Record<string, unknown>>,
       signal?: AbortSignal,
+      rpcOptions?: RpcOptions,
     ): Promise<T> {
       checkIdentifier('function', name);
       let payload: string;
@@ -203,7 +240,25 @@ export function createDb(options: CreateDbOptions): Db {
       } catch {
         throw new TypeError('rpc arguments are not serialisable');
       }
-      return (await send(`/rpc/${name}`, { method: 'POST', body: payload }, signal, true)) as T;
+      const call = (): Promise<unknown> =>
+        send(`/rpc/${name}`, { method: 'POST', body: payload }, signal, true);
+      if (rpcOptions?.retryOnContention !== true) return (await call()) as T;
+      try {
+        return (await call()) as T;
+      } catch (err) {
+        if (
+          !(err instanceof DbError) ||
+          err.sqlstate === undefined ||
+          !CONTENTION_SQLSTATES.has(err.sqlstate) ||
+          signal?.aborted === true
+        ) {
+          throw err;
+        }
+        const span = CONTENTION_RETRY_MAX_MS - CONTENTION_RETRY_MIN_MS;
+        await sleep(CONTENTION_RETRY_MIN_MS + Math.floor(random() * span));
+        // One retry only: whatever this attempt throws is final.
+        return (await call()) as T;
+      }
     },
   };
 }

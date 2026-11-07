@@ -1,0 +1,31 @@
+npx --no-install supabase test db
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'supabase' test db
+Target: local stack (127.0.0.1:54322) · default; pass --remote for RagBot (rbejeqwxyxtklehuzibv)
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/010_grants_rls_matrix.test.sql .............. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/020_membership.test.sql ..................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/030_rpc_grants_catalog.test.sql ............. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/040_vectors_match.test.sql .................. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/050_activation_deletion.test.sql ............ ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/060_jobs.test.sql ........................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/070_budget_ratelimit_idempotency.test.sql ... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/080_check_constraints.test.sql .............. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/090_admin_rpc_summaries.test.sql ............ ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/100_storage.test.sql ........................ ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/110_retention.test.sql ...................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/120_mfa_aal2.test.sql ....................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/130_begin_request_run.test.sql .............. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/140_job_lifecycle.test.sql .................. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/150_knowledge_gaps_pairing.test.sql ......... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/160_new_rpc_audit_publish_storage.test.sql .. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/170_p3d2_fixes.test.sql ..................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/180_p3d3_fixes.test.sql ..................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/190_p3d4_fixes.test.sql ..................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/200_p3d5_fixes.test.sql ..................... ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/210_admin_documents.test.sql ................ ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/220_admin_settings.test.sql ................. ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/230_p35_final_fixes.test.sql ................ ok
+/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/240_p5_sessions_runs.test.sql ............... ok
+All tests successful.
+Files=24, Tests=2614,  2 wallclock secs ( 0.23 usr  0.05 sys +  0.21 cusr  0.24 csys =  0.73 CPU)
+Result: PASS

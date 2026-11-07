@@ -15,12 +15,27 @@ import {
 } from './lib/errors.js';
 import { addVary, applySecurityHeaders } from './lib/headers.js';
 import { buildLoggerOptions, generateRequestId } from './lib/logger.js';
-import type { DbPing } from './lib/supabase.js';
+import type { Db } from './lib/supabase.js';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerSessionRoutes } from './routes/sessions.js';
+import type { VisitorAuth } from './services/auth.js';
+import type { Limits } from './services/limits.js';
+import type { Runs } from './services/runs.js';
+import type { TurnstileVerifier } from './services/turnstile.js';
 
 export interface ServerDeps {
   readonly config: AppConfig;
-  readonly db: DbPing;
+  readonly db: Db;
+  /**
+   * The visitor-facing services (P5). `createApp` always passes all four. They are optional in the
+   * type only so a test that exercises just the server shell (health, headers, CORS) need not
+   * build them; `POST /v1/sessions` is registered only when `auth`, `limits` and `turnstile` are
+   * all present, and is a plain 404 otherwise. `runs` is held for the chat route (P7).
+   */
+  readonly auth?: VisitorAuth;
+  readonly limits?: Limits;
+  readonly runs?: Runs;
+  readonly turnstile?: TurnstileVerifier;
   readonly logger?: FastifyServerOptions['logger'];
   /** Monotonic clock in milliseconds for the readiness cache. Injected for tests only. */
   readonly now?: () => number;
@@ -148,5 +163,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     isDraining: () => draining,
     ...(deps.now === undefined ? {} : { now: deps.now }),
   });
+  if (deps.auth !== undefined && deps.limits !== undefined && deps.turnstile !== undefined) {
+    registerSessionRoutes(app, {
+      db,
+      auth: deps.auth,
+      limits: deps.limits,
+      turnstile: deps.turnstile,
+      ttlSeconds: config.visitorTokenTtlSeconds,
+    });
+  }
   return app;
 }

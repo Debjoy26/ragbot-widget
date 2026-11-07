@@ -545,7 +545,7 @@ describe('every browser-callable RPC over /rest/v1/rpc, for every principal', ()
             if (c.name === 'admin_list_members')
               expectSchema(adminListMembersResponseSchema, r.body);
             if (c.name === 'schema_version')
-              expect(expectSchema(schemaVersionResponseSchema, r.body)).toBe(10);
+              expect(expectSchema(schemaVersionResponseSchema, r.body)).toBe(11);
           } else {
             expectCode(r, want);
           }

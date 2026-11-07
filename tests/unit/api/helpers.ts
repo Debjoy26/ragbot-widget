@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { loadConfig, type AppConfig } from '../../../api/src/lib/config.ts';
 import { buildLoggerOptions } from '../../../api/src/lib/logger.ts';
-import type { DbPing } from '../../../api/src/lib/supabase.ts';
+import type { Db } from '../../../api/src/lib/supabase.ts';
 import { buildServer } from '../../../api/src/server.ts';
 
 // FAKE values for tests only, random per run. None of these is a real credential.
@@ -14,6 +14,7 @@ export const FAKE_SUPABASE_KEY = hex32();
 export const FAKE_VISITOR_SECRET = hex32();
 export const FAKE_TURNSTILE_KEY = hex32();
 export const FAKE_AI_KEY = hex32();
+export const FAKE_RATE_KEY = hex32();
 
 export function validEnv(overrides: Record<string, string | undefined> = {}) {
   const env: Record<string, string | undefined> = {
@@ -21,6 +22,7 @@ export function validEnv(overrides: Record<string, string | undefined> = {}) {
     SUPABASE_SECRET_KEY: FAKE_SUPABASE_KEY,
     VISITOR_TOKEN_SECRET: FAKE_VISITOR_SECRET,
     TURNSTILE_SECRET_KEY: FAKE_TURNSTILE_KEY,
+    RATE_LIMIT_KEY_SECRET: FAKE_RATE_KEY,
     ALLOWED_ORIGINS: 'https://client.example.com,https://other.example.com',
     PORT: '8080',
     LOG_LEVEL: 'info',
@@ -31,6 +33,7 @@ export function validEnv(overrides: Record<string, string | undefined> = {}) {
     READY_TIMEOUT_MS: '200',
     DB_TIMEOUT_MS: '1000',
     VISITOR_TOKEN_TTL_SECONDS: '900',
+    TURNSTILE_TIMEOUT_MS: '2000',
     CHAT_DEADLINE_MS: '30000',
     PROVIDER_MAX_ATTEMPTS: '2',
     GEMINI_API_KEY: FAKE_AI_KEY,
@@ -52,9 +55,20 @@ export function testConfig(overrides: Record<string, string | undefined> = {}): 
   return loadConfig(validEnv(overrides));
 }
 
-/** FAKE database probe, labelled as such: it never satisfies a real DB gate. */
-export function fakeDb(ping: DbPing['ping'] = async () => true): DbPing {
-  return { ping };
+/**
+ * FAKE database, labelled as such: it never satisfies a real DB gate. Only `ping` works; any other
+ * call fails loudly so a test that reaches the database by accident does not pass quietly.
+ */
+export function fakeDb(ping: Db['ping'] = async () => true): Db {
+  return {
+    ping,
+    selectOne: async () => {
+      throw new Error('fakeDb: selectOne is not available');
+    },
+    rpc: async () => {
+      throw new Error('fakeDb: rpc is not available');
+    },
+  };
 }
 
 export class LogCapture {
@@ -75,7 +89,7 @@ export class LogCapture {
 
 export function appWithCapture(
   config: AppConfig,
-  db: DbPing = fakeDb(),
+  db: Db = fakeDb(),
   level: 'info' | 'debug' = 'info',
 ) {
   const capture = new LogCapture();

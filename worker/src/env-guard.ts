@@ -1,12 +1,13 @@
 // Worker start-up guard (P3-D5 G-20). No provider logic here.
 // The visitor-token secret (including rotated copies such as VISITOR_TOKEN_SECRET_PREVIOUS) and the
-// Turnstile secret belong to the API only. If one reaches the worker's environment (for example
+// Turnstile and rate-limit key secrets belong to the API only. If one reaches the worker's environment (for example
 // through a shared .env), the worker refuses to start rather than carry it.
 
 /** Variables the worker must never receive. Names only; values are never read or printed. */
 export const WORKER_FORBIDDEN_ENV: readonly string[] = [
   'VISITOR_TOKEN_SECRET',
   'TURNSTILE_SECRET_KEY',
+  'RATE_LIMIT_KEY_SECRET',
 ];
 
 /** Any variable whose name starts with one of these is also forbidden. */

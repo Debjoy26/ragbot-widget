@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../../../api/src/lib/config.ts';
 import {
   FAKE_AI_KEY,
+  FAKE_RATE_KEY,
   FAKE_SUPABASE_KEY,
   FAKE_TURNSTILE_KEY,
   FAKE_VISITOR_SECRET,
@@ -50,6 +51,12 @@ describe('loadConfig', () => {
     expect(config.allowedOrigins).toEqual(['http://localhost:3000']);
   });
 
+  it('reads RATE_LIMIT_KEY_SECRET and TURNSTILE_TIMEOUT_MS', () => {
+    const config = loadConfig(validEnv({ TURNSTILE_TIMEOUT_MS: '1500' }));
+    expect(config.turnstileTimeoutMs).toBe(1500);
+    expect(config.rateLimitKeySecret).toBe(FAKE_RATE_KEY);
+  });
+
   it('accepts TRUSTED_PROXY_HOPS = 0', () => {
     expect(loadConfig(validEnv({ TRUSTED_PROXY_HOPS: '0' })).trustedProxyHops).toBe(0);
   });
@@ -59,6 +66,7 @@ describe('loadConfig', () => {
     'SUPABASE_SECRET_KEY',
     'VISITOR_TOKEN_SECRET',
     'TURNSTILE_SECRET_KEY',
+    'RATE_LIMIT_KEY_SECRET',
     'ALLOWED_ORIGINS',
     'PORT',
     'LOG_LEVEL',
@@ -69,6 +77,7 @@ describe('loadConfig', () => {
     'READY_TIMEOUT_MS',
     'DB_TIMEOUT_MS',
     'VISITOR_TOKEN_TTL_SECONDS',
+    'TURNSTILE_TIMEOUT_MS',
     'CHAT_DEADLINE_MS',
     'PROVIDER_MAX_ATTEMPTS',
   ];
@@ -97,6 +106,11 @@ describe('loadConfig', () => {
     ['VISITOR_TOKEN_SECRET', 'x'.repeat(31)],
     ['VISITOR_TOKEN_SECRET', '<random-32+-byte-secret-placeholder>'],
     ['TURNSTILE_SECRET_KEY', '<turnstile-secret>'],
+    ['RATE_LIMIT_KEY_SECRET', 'x'.repeat(31)],
+    ['RATE_LIMIT_KEY_SECRET', '<random-32+-byte-secret-placeholder>'],
+    ['TURNSTILE_TIMEOUT_MS', '0'],
+    ['TURNSTILE_TIMEOUT_MS', 'soon'],
+    ['TURNSTILE_TIMEOUT_MS', '1.5'],
     ['ALLOWED_ORIGINS', '*'],
     ['ALLOWED_ORIGINS', 'https://*.example.com'],
     ['ALLOWED_ORIGINS', 'https://ok.example.com,*'],
@@ -132,7 +146,13 @@ describe('loadConfig', () => {
   });
 
   it('never includes any secret or rejected value in the error message', () => {
-    const secrets = [FAKE_SUPABASE_KEY, FAKE_VISITOR_SECRET, FAKE_TURNSTILE_KEY, FAKE_AI_KEY];
+    const secrets = [
+      FAKE_SUPABASE_KEY,
+      FAKE_VISITOR_SECRET,
+      FAKE_TURNSTILE_KEY,
+      FAKE_AI_KEY,
+      FAKE_RATE_KEY,
+    ];
     const bad = 'bad-value-marker-should-not-appear';
     const cases: Record<string, string>[] = [
       { PORT: bad },
@@ -140,6 +160,7 @@ describe('loadConfig', () => {
       { SUPABASE_URL: bad },
       { ALLOWED_ORIGINS: `https://client.example.com,${bad}` },
       { VISITOR_TOKEN_SECRET: 'short-secret-marker' },
+      { RATE_LIMIT_KEY_SECRET: 'short-secret-marker' },
       { SUPABASE_SECRET_KEY: '<placeholder-marker>' },
       { CHAT_PRIMARY_PROVIDER: bad },
       { CHAT_PRIMARY_MODEL: `bad model ${bad}` },

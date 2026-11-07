@@ -3,12 +3,18 @@ import { loadConfig, type AppConfig } from './lib/config.js';
 import { createDb, type Db } from './lib/supabase.js';
 import { buildServer } from './server.js';
 import { createVisitorAuth, type VisitorAuth } from './services/auth.js';
+import { createLimits, type Limits } from './services/limits.js';
+import { createRuns, type Runs } from './services/runs.js';
+import { createTurnstileVerifier, type TurnstileVerifier } from './services/turnstile.js';
 
 export interface App {
   readonly app: FastifyInstance;
   readonly config: AppConfig;
   readonly db: Db;
   readonly auth: VisitorAuth;
+  readonly limits: Limits;
+  readonly runs: Runs;
+  readonly turnstile: TurnstileVerifier;
 }
 
 /** Wires the real dependencies. Throws on invalid configuration; never listens. */
@@ -28,6 +34,13 @@ export function createApp(
     ttlSeconds: config.visitorTokenTtlSeconds,
     db,
   });
-  const app = buildServer(logger === undefined ? { config, db } : { config, db, logger });
-  return { app, config, db, auth };
+  const limits = createLimits({ db, rateKeySecret: config.rateLimitKeySecret });
+  const runs = createRuns({ db });
+  const turnstile = createTurnstileVerifier({
+    secret: config.turnstileSecretKey,
+    timeoutMs: config.turnstileTimeoutMs,
+  });
+  const deps = { config, db, auth, limits, runs, turnstile };
+  const app = buildServer(logger === undefined ? deps : { ...deps, logger });
+  return { app, config, db, auth, limits, runs, turnstile };
 }

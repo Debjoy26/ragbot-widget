@@ -78,5 +78,5 @@ insert into public.client_settings (
     "triggers": ["no_knowledge", "out_of_scope", "human_requested", "blocked", "unavailable", "repeated_no_knowledge"]
   }'::jsonb,
   '{"answer_cache_enabled": false, "answer_cache_ttl_seconds": 86400, "kill_switch": false}'::jsonb,
-  '{}'::jsonb
+  '{"turnstile_required": false}'::jsonb  -- ADR 0010: off in dev only; a missing key means required
 );

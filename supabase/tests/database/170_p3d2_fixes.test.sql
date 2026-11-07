@@ -3,6 +3,9 @@
 -- (N7a is in 130_begin_request_run, N7c in 030.) All fixtures are synthetic. Sequential behaviour only:
 -- true concurrent races need two connections (P5 integration tests).
 begin;
+-- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
+-- change is rolled back with the transaction.
+alter table public.bot_profiles alter column enabled set default true;
 select plan(80);
 
 insert into auth.users (id, aud, role, email) values
