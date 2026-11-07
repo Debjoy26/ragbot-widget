@@ -2,8 +2,8 @@
 //
 // Fail closed: the answer is `true` only when Cloudflare replied 200 with a JSON object whose
 // `success` is exactly `true`, whose `hostname` is one of the allowed hosts and whose `action` is
-// the one the widget requests (a token minted for another site or another action is refused). A timeout, network error, redirect, non-200, oversized or malformed
-// body, or anything else is `false`. The token and the secret are never logged and never placed in
+// the one the widget requests (a token minted for another site or another action is refused). A
+// timeout, network error, redirect, non-200, oversized or malformed body, or anything else is `false`. The token and the secret are never logged and never placed in
 // an error: this module does not log at all.
 
 import { UNKNOWN_IP } from '../lib/client-ip.js';
@@ -15,7 +15,7 @@ export const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turns
 const MAX_RESPONSE_CHARS = 16_384;
 const MAX_TOKEN_CHARS = 4096;
 
-/** The Turnstile action of a session-create challenge. Sent on verification and required back. */
+/** The Turnstile action of a session-create challenge. Set by the widget, required back in the response. */
 export const TURNSTILE_SESSION_ACTION = 'session_create';
 
 export interface TurnstileVerifier {
@@ -65,11 +65,10 @@ export function createTurnstileVerifier(
         return false;
       }
       try {
-        const form = new URLSearchParams({
-          secret,
-          response: token,
-          action: TURNSTILE_SESSION_ACTION,
-        });
+        // No `action` in the request: siteverify ignores it. The widget must render Turnstile with
+        // action `session_create` (TURNSTILE_SESSION_ACTION); that is enforced only by the check on
+        // the response's `action` below.
+        const form = new URLSearchParams({ secret, response: token });
         // The address is optional for Cloudflare; a hint we could not determine is left out.
         if (typeof clientIp === 'string' && clientIp !== '' && clientIp !== UNKNOWN_IP) {
           form.set('remoteip', clientIp);

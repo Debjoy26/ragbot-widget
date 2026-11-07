@@ -5,10 +5,12 @@
 //   2. bot-independent per-IP preflight limit (before any database policy read, so slugs cannot
 //      be probed without bound)
 //   3. policy by slug; an unknown and a disabled bot get the SAME FORBIDDEN answer
-//   4. session-create limits: this bot and the caller's IP bucket, then the bot's aggregate
-//      (before any challenge call, so the limits also bound how often Cloudflare is asked)
+//   4. session-create limit for this bot and the caller's IP bucket (before any challenge call, so
+//      it also bounds how often Cloudflare is asked)
 //   5. if the bot requires it, a challenge token that verifies; missing or failing is FORBIDDEN
-//   6. create the visitor_sessions row, issue the token, validate the response, send it
+//   6. the bot's aggregate session-create limit, consumed only now: a request that fails the
+//      challenge never uses up the aggregate, so a stream of bad tokens cannot lock real visitors out
+//   7. create the visitor_sessions row, issue the token, validate the response, send it
 //
 // Logs carry ids, counts and codes only: never the slug, the challenge token or the bearer token.
 
@@ -92,15 +94,11 @@ export function registerSessionRoutes(app: FastifyInstance, deps: SessionsDeps):
     if (!head.success) throw internal('session_policy_bad_row');
     const policy = head.data;
 
-    // 4. Limits: per bot and IP bucket, then the bot's aggregate. Over a limit raises RATE_LIMITED
-    // with a retry hint. The limits service validates the values and fails closed.
+    // 4. Limit per bot and IP bucket. Over the limit raises RATE_LIMITED with a retry hint. The
+    // limits service validates the values and fails closed.
     await limits.consumeSessionCreate(policy.bot_id, request.clientIp, {
       session_limit: policy['session_limit'],
       session_window_seconds: policy['session_window_seconds'],
-    });
-    await limits.consumeSessionCreateBot(policy.bot_id, {
-      bot_session_limit: policy['bot_session_limit'],
-      bot_session_window_seconds: policy['bot_session_window_seconds'],
     });
 
     // 5. Challenge. Verified server-side; a missing token, a failure and an outage all refuse.
@@ -110,7 +108,13 @@ export function registerSessionRoutes(app: FastifyInstance, deps: SessionsDeps):
       if (!(await turnstile.verify(challenge, request.clientIp))) throw forbidden();
     }
 
-    // 6. Session row and token.
+    // 6. The bot's aggregate limit, last before the insert (after the challenge when there is one).
+    await limits.consumeSessionCreateBot(policy.bot_id, {
+      bot_session_limit: policy['bot_session_limit'],
+      bot_session_window_seconds: policy['bot_session_window_seconds'],
+    });
+
+    // 7. Session row and token.
     let rawSession: unknown;
     try {
       rawSession = await db.rpc<unknown>('create_visitor_session', {

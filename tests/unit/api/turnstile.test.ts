@@ -61,11 +61,11 @@ describe('createTurnstileVerifier', () => {
     expect(form.get('remoteip')).toBe('203.0.113.9');
   });
 
-  it('sends the named action', async () => {
+  it('does not send an action (siteverify ignores it); the response check enforces it', async () => {
     const { v, calls } = verifier(() => reply(GOOD));
-    await v.verify(TOKEN, '203.0.113.9');
+    expect(await v.verify(TOKEN, '203.0.113.9')).toBe(true);
     expect(TURNSTILE_SESSION_ACTION).toBe('session_create');
-    expect(new URLSearchParams(String(calls[0]?.init.body)).get('action')).toBe('session_create');
+    expect(new URLSearchParams(String(calls[0]?.init.body)).has('action')).toBe(false);
   });
 
   it('accepts any allowed host, compared case-insensitively', async () => {

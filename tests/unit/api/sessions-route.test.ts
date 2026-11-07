@@ -321,7 +321,7 @@ describe('POST /v1/sessions: rate limit', () => {
     expect(s.limits.consumeSessionPreflight).not.toHaveBeenCalled();
   });
 
-  it('the bot aggregate limit refuses with 429 and retry-after, before Turnstile and the insert', async () => {
+  it('the bot aggregate limit refuses with 429 and retry-after, after Turnstile and before the insert', async () => {
     const s = setup({
       policy: [{ ...POLICY, turnstile_required: true }],
       consumeBot: async () => {
@@ -332,8 +332,64 @@ describe('POST /v1/sessions: rate limit', () => {
     expect(res.statusCode).toBe(429);
     expect(res.headers['retry-after']).toBe('90');
     expect(s.limits.consumeSessionCreate).toHaveBeenCalledTimes(1);
-    expect(s.turnstile.verify).not.toHaveBeenCalled();
+    expect(s.turnstile.verify).toHaveBeenCalledTimes(1);
     expect(s.rpcs.map((r) => r.name)).toEqual(['get_session_policy']);
+  });
+
+  it('with Turnstile required the order is preflight, policy, per-IP, Turnstile, aggregate, insert', async () => {
+    const s = setup({ policy: [{ ...POLICY, turnstile_required: true }] });
+    const res = await post(s.app, { bot_slug: 'dev-bot', challenge_token: CHALLENGE });
+    expect(res.statusCode).toBe(200);
+    expect(s.calls).toEqual([
+      'preflight',
+      'rpc:get_session_policy',
+      'create_ip',
+      'turnstile',
+      'create_bot',
+      'rpc:create_visitor_session',
+    ]);
+  });
+
+  it('a request that fails the challenge never consumes the bot aggregate', async () => {
+    const missing = setup({ policy: [{ ...POLICY, turnstile_required: true }] });
+    expect((await post(missing.app, { bot_slug: 'dev-bot' })).statusCode).toBe(403);
+    expect(missing.limits.consumeSessionCreate).toHaveBeenCalledTimes(1);
+    expect(missing.limits.consumeSessionCreateBot).not.toHaveBeenCalled();
+
+    const failing = setup({
+      policy: [{ ...POLICY, turnstile_required: true }],
+      verify: async () => false,
+    });
+    expect(
+      (await post(failing.app, { bot_slug: 'dev-bot', challenge_token: CHALLENGE })).statusCode,
+    ).toBe(403);
+    expect(failing.turnstile.verify).toHaveBeenCalledTimes(1);
+    expect(failing.limits.consumeSessionCreateBot).not.toHaveBeenCalled();
+    expect(failing.rpcs.map((r) => r.name)).toEqual(['get_session_policy']);
+  });
+
+  it('the aggregate still refuses the (limit+1)th successful request, and failures do not count toward it', async () => {
+    let used = 0;
+    let good = true;
+    const s = setup({
+      policy: [{ ...POLICY, turnstile_required: true }],
+      verify: async () => good,
+      consumeBot: async () => {
+        used += 1;
+        if (used > 2) throw new AppError('RATE_LIMITED', { retryAfterSeconds: 60 });
+      },
+    });
+    const send = () => post(s.app, { bot_slug: 'dev-bot', challenge_token: CHALLENGE });
+    expect((await send()).statusCode).toBe(200);
+    good = false;
+    for (let i = 0; i < 5; i += 1) expect((await send()).statusCode).toBe(403);
+    good = true;
+    expect((await send()).statusCode).toBe(200);
+    const refused = await send();
+    expect(refused.statusCode).toBe(429);
+    expect(refused.headers['retry-after']).toBe('60');
+    expect(used).toBe(3);
+    expect(s.rpcs.filter((r) => r.name === 'create_visitor_session')).toHaveLength(2);
   });
 
   it('the per-IP limit refusing means the bot aggregate is not spent', async () => {

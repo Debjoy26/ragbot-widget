@@ -406,6 +406,35 @@ describe('POST /v1/sessions with Turnstile required', () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it('failed challenges never consume the bot aggregate; the (limit+1)th good request is refused', async () => {
+    const bot = await createBot('ts-agg', {
+      flags: { turnstile_required: true },
+      botLimit: 2,
+      botWindowSeconds: 3600,
+    });
+    const tracked = (): string => {
+      const ip = nextIp();
+      track(bot.id, ip);
+      return ip;
+    };
+    expect((await post(app, tracked(), { bot_slug: bot.slug })).statusCode).toBe(403);
+    for (let i = 0; i < 4; i += 1) {
+      const res = await post(app, tracked(), { bot_slug: bot.slug, challenge_token: 'nope' });
+      expect(res.statusCode).toBe(403);
+    }
+    for (let i = 0; i < 2; i += 1) {
+      const res = await post(app, tracked(), { bot_slug: bot.slug, challenge_token: GOOD });
+      expect(res.statusCode).toBe(200);
+    }
+    const refused = await post(app, tracked(), { bot_slug: bot.slug, challenge_token: GOOD });
+    expect(refused.statusCode).toBe(429);
+    const rows = (await svc(
+      'GET',
+      `/rest/v1/visitor_sessions?bot_id=eq.${bot.id}&select=id`,
+    )) as unknown[];
+    expect(rows).toHaveLength(2);
+  });
+
   it('a bot with the flag off does not ask for it', async () => {
     const bot = await createBot('ts-off', { flags: { turnstile_required: false } });
     verify.mockClear();

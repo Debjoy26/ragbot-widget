@@ -88,7 +88,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=35
+EXPECTED=36
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -115,8 +115,8 @@ classify() { # rc errfile allowed-sqlstates
   case " $3 " in *" $st "*) echo "err:$st" ;; *) echo "err:$st(unexpected)" ;; esac
 }
 
-run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allowed, second-allowed, expect-block (yes|no|fast)
-  local name="$1" setup="$2" first="$3" second="$4" verdict="$5" fa="$6" sa="$7" eb="$8"
+run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allowed, second-allowed, expect-block (yes|no|fast) [, exactly-one-error]
+  local name="$1" setup="$2" first="$3" second="$4" verdict="$5" fa="$6" sa="$7" eb="$8" one="${9:-}"
   n=$((n + 1))
   fixture "$setup"
   ( pq -c "begin; set local role service_role; $first select pg_sleep($HOLD); commit;" >/dev/null 2>"$TMP/a.err"
@@ -133,10 +133,21 @@ run_order() { # name, setup SQL, first SQL, second SQL, verdict SQL, first-allow
   ares="$(classify "$(cat "$TMP/a.rc")" "$TMP/a.err" "$fa")"
   bres="$(classify "$brc" "$TMP/b.err" "$sa")"
   case "$ares$bres" in *"(unexpected)"*) bad=1 ;; esac
+  local note=""
+  # exactly-one-error: one side must have been rolled back (an allowed SQLSTATE) and the other must have
+  # succeeded. Neither erroring means the deadlock did not happen; both erroring means nothing won.
+  if [ "$one" = "one" ]; then
+    local nerr=0
+    case "$ares" in err:*) nerr=$((nerr + 1)) ;; esac
+    case "$bres" in err:*) nerr=$((nerr + 1)) ;; esac
+    if [ "$nerr" -ne 1 ]; then
+      note=" EXPECTED EXACTLY ONE ERROR"; bad=1
+    fi
+  fi
   local v
   v="$(pq -c "$verdict" 2>"$TMP/v.err")" || { v="VIOLATION: verdict query failed"; bad=1; }
-  local note="" noov=0
-  if [ "$bad" -eq 1 ]; then note=" UNEXPECTED ERROR"; fail=$((fail + 1)); fi
+  local noov=0
+  if [ "$bad" -eq 1 ]; then note="$note UNEXPECTED ERROR"; fail=$((fail + 1)); fi
   case "$v" in
     NOOVERLAP*) noov=1 ;;
     CONSISTENT*) ;;
@@ -432,7 +443,7 @@ run_order "run state in flight, second move"       "$RUN_ROW"               "$SE
 # An operator edits client_settings directly (as the postgres role, not through an admin function). The AFTER UPDATE
 # trigger of 008 then updates bot_profiles, so the edit takes the settings lock and then the bot lock, while
 # reserve_request_budget takes the bot lock (FOR SHARE) and then the settings lock. Each ordering must end consistent,
-# and either side may lose cleanly with a deadlock (40P01) or a lock timeout (55P03); nothing may hang.
+# and a start and an edit that do not follow the rule may lose cleanly with a deadlock (40P01) or a lock timeout (55P03); nothing may hang.
 OPERATOR="reset role;"
 OP_SETTINGS="$OPERATOR update public.client_settings set budget_policy = '{\"daily_cap_usd\": 50}' where bot_id = '$BOT';"
 V_OPSET="select case
@@ -456,6 +467,7 @@ V_OPWRONG="select case
     then 'CONSISTENT: the start won, the operator edit was rolled back'
   else 'VIOLATION: corpus_version=' || (select corpus_version from public.bot_profiles where id = '$BOT') || ' reservations=' ||
        (select count(*) from public.budget_reservations where bot_id = '$BOT') end"
+OP_RULE="$OPERATOR select 1 from public.bot_profiles where id = '$BOT' for no key update; update public.client_settings set budget_policy = '{\"daily_cap_usd\": 50}' where bot_id = '$BOT';"
 # A corpus_version bump (what activate_document_version does last) against begin_request_run. Both need the bot row
 # (the start FOR SHARE, the bump FOR NO KEY UPDATE), so they take turns; the bump is never lost and at most one run exists.
 BUMP="$OPERATOR update public.bot_profiles set corpus_version = corpus_version + 1 where id = '$BOT';"
@@ -466,7 +478,10 @@ V_BUMP="select case
 
 run_order "settings edit in flight, reserve"       "$RUN_ROW"               "$OP_SETTINGS" "$RESERVE"  "$V_OPSET" ""    "55P03 40P01" yes
 run_order "reserve in flight, settings edit"       "$RUN_ROW"               "$RESERVE"    "$OP_SETTINGS" "$V_OPSET" ""  "55P03 40P01" yes
-run_order "settings locked, reserve, bot edit"     "$RUN_ROW"               "$OP_WRONG"   "$RESERVE"  "$V_OPWRONG" "40P01 55P03" "40P01 55P03" no
+run_order "settings locked, reserve, bot edit"     "$RUN_ROW"               "$OP_WRONG"   "$RESERVE"  "$V_OPWRONG" "40P01 55P03" "40P01 55P03" no one
+# The operator follows the rule: locks the bot row first, then edits settings, in one transaction. The start waits for the
+# bot row (its FOR SHARE conflicts with FOR NO KEY UPDATE) and runs after the edit commits: both succeed, no deadlock.
+run_order "settings edit by the rule, reserve"      "$RUN_ROW"               "$OP_RULE"    "$RESERVE"  "$V_OPSET" ""    ""            yes
 run_order "corpus bump in flight, start"           "$CAP1"                  "$BUMP"       "$BEGIN1"   "$V_BUMP"  ""    "55P03 40P01" yes
 run_order "start in flight, corpus bump"           "$CAP1"                  "$BEGIN1"     "$BUMP"     "$V_BUMP"  ""    "55P03 40P01" yes
 

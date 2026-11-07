@@ -84,7 +84,7 @@ function post(app: App, payload: unknown) {
 }
 
 describe('createApp wiring (POST /v1/sessions)', () => {
-  it('spends preflight, per-IP, per-bot, then asks Cloudflare, then creates the session', async () => {
+  it('spends preflight, per-IP, then asks Cloudflare, then per-bot, then creates the session', async () => {
     const calls = install({
       policy: POLICY,
       siteverify: {
@@ -100,8 +100,8 @@ describe('createApp wiring (POST /v1/sessions)', () => {
       'record_rate_limit_attempt',
       'get_session_policy',
       'record_rate_limit_attempt',
-      'record_rate_limit_attempt',
       'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+      'record_rate_limit_attempt',
       'create_visitor_session',
     ]);
     // Preflight uses the configured limit and window; the aggregate uses the policy columns.
@@ -113,11 +113,12 @@ describe('createApp wiring (POST /v1/sessions)', () => {
       p_limit: 10,
       p_window_seconds: 3600,
     });
-    expect(JSON.parse(calls[3]?.body ?? '{}')).toMatchObject({
+    expect(JSON.parse(calls[4]?.body ?? '{}')).toMatchObject({
       p_limit: 500,
       p_window_seconds: 86_400,
     });
-    expect(new URLSearchParams(calls[4]?.body).get('action')).toBe('session_create');
+    // The action is not sent (siteverify ignores it); the response's action is what is checked.
+    expect(new URLSearchParams(calls[3]?.body).has('action')).toBe(false);
   });
 
   it('a preflight refusal is 429 and nothing else is called', async () => {
