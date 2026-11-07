@@ -34,11 +34,20 @@ export function createApp(
     ttlSeconds: config.visitorTokenTtlSeconds,
     db,
   });
-  const limits = createLimits({ db, rateKeySecret: config.rateLimitKeySecret });
+  const limits = createLimits({
+    db,
+    rateKeySecret: config.rateLimitKeySecret,
+    sessionPreflight: {
+      limit: config.sessionPreflightPerIpLimit,
+      window_seconds: config.sessionPreflightWindowSeconds,
+    },
+  });
   const runs = createRuns({ db });
   const turnstile = createTurnstileVerifier({
     secret: config.turnstileSecretKey,
     timeoutMs: config.turnstileTimeoutMs,
+    // The widget runs on an allowed origin, so Cloudflare must report one of these hosts.
+    allowedHostnames: config.allowedOrigins.map((origin) => new URL(origin).hostname),
   });
   const deps = { config, db, auth, limits, runs, turnstile };
   const app = buildServer(logger === undefined ? deps : { ...deps, logger });

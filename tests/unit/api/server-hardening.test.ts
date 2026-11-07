@@ -10,8 +10,7 @@ import {
 import { DbError } from '../../../api/src/lib/supabase.ts';
 import { REDACT_PATHS } from '../../../api/src/lib/logger.ts';
 import { READY_CACHE_MS } from '../../../api/src/routes/health.ts';
-import { buildServer } from '../../../api/src/server.ts';
-import { appWithCapture, fakeDb, testConfig } from './helpers.ts';
+import { appWithCapture, fakeDb, testConfig, buildTestServer } from './helpers.ts';
 
 // P4-D1: framework errors, error handler fallbacks, DB error classes, headers, client IP,
 // readiness and redaction. The database probe is a labelled FAKE.
@@ -26,7 +25,10 @@ afterEach(async () => {
 });
 
 function server(overrides: Record<string, string | undefined> = {}) {
-  app = buildServer({ config: testConfig({ LOG_LEVEL: 'silent', ...overrides }), db: fakeDb() });
+  app = buildTestServer({
+    config: testConfig({ LOG_LEVEL: 'silent', ...overrides }),
+    db: fakeDb(),
+  });
   return app;
 }
 
@@ -257,6 +259,7 @@ describe('database error classes (B-2, B-12)', () => {
   it.each([
     ['RB001', 'BUDGET_EXCEEDED', 'db:budget_exceeded'],
     ['RB004', 'INVALID_REQUEST', 'db:request_conflict'],
+    ['RB039', 'FORBIDDEN', 'db:bot_disabled'],
     ['42501', 'INTERNAL_ERROR', 'db:permission_denied'],
     ['22023', 'INTERNAL_ERROR', 'db:invalid_argument'],
     ['RB030', 'INTERNAL_ERROR', 'db:conflict'],
@@ -271,6 +274,7 @@ describe('database error classes (B-2, B-12)', () => {
   it.each([
     ['RB001', 'BUDGET_EXCEEDED'],
     ['RB004', 'INVALID_REQUEST'],
+    ['RB039', 'FORBIDDEN'],
     ['42501', 'INTERNAL_ERROR'],
     ['22023', 'INTERNAL_ERROR'],
     ['RB030', 'INTERNAL_ERROR'],
@@ -412,7 +416,7 @@ describe('readiness: single flight, short cache, draining (A-8, B-7)', () => {
     return { state, db };
   }
   function ready(db: ReturnType<typeof fakeDb>, clock: { t: number }) {
-    app = buildServer({
+    app = buildTestServer({
       config: testConfig({ LOG_LEVEL: 'silent', READY_TIMEOUT_MS: '500' }),
       db,
       now: () => clock.t,
@@ -459,7 +463,7 @@ describe('readiness: single flight, short cache, draining (A-8, B-7)', () => {
       vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
       const { state, db } = counted(1);
       // No injected clock: the default is the one under test.
-      app = buildServer({
+      app = buildTestServer({
         config: testConfig({ LOG_LEVEL: 'silent', READY_TIMEOUT_MS: '500' }),
         db,
       });

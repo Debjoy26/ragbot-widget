@@ -7,11 +7,10 @@ import { loadConfig } from '../../api/src/lib/config.ts';
 import { buildLoggerOptions } from '../../api/src/lib/logger.ts';
 import { rateKey } from '../../api/src/lib/rate-key.ts';
 import { createDb } from '../../api/src/lib/supabase.ts';
-import { buildServer } from '../../api/src/server.ts';
 import { createVisitorAuth } from '../../api/src/services/auth.ts';
 import { createLimits } from '../../api/src/services/limits.ts';
 import { createRuns } from '../../api/src/services/runs.ts';
-import { FAKE_RATE_KEY, validEnv } from '../unit/api/helpers.ts';
+import { FAKE_RATE_KEY, buildTestServer, validEnv } from '../unit/api/helpers.ts';
 import { getLocalPrivilegedKey, getLocalStack, keyHeaders } from './helpers/local-stack.ts';
 
 // P5-B: POST /v1/sessions over the real app against the LOCAL stack (needs migration 011, which adds
@@ -53,6 +52,9 @@ interface BotOptions {
   enabled?: boolean;
   limit?: number;
   windowSeconds?: number;
+  /** Per-bot aggregate (rate_policy.session_create_per_bot). */
+  botLimit?: number;
+  botWindowSeconds?: number;
   flags?: Record<string, unknown>;
 }
 
@@ -77,6 +79,10 @@ async function createBot(
     allowed_origins: ['http://localhost:3000'],
     rate_policy: {
       session_create_per_ip: { limit: o.limit ?? 100, window_seconds: o.windowSeconds ?? 3600 },
+      session_create_per_bot: {
+        limit: o.botLimit ?? 10_000,
+        window_seconds: o.botWindowSeconds ?? 3600,
+      },
       message_per_session: { limit: 20, window_seconds: 600 },
       message_per_ip: { limit: 60, window_seconds: 3600 },
       concurrent_requests_per_session: 1,
@@ -110,11 +116,14 @@ const post = (app: FastifyInstance, ip: string, payload: unknown) =>
     payload: JSON.stringify(payload),
   });
 
-function baseEnv() {
+function baseEnv(extra: Record<string, string | undefined> = {}) {
   return validEnv({
     SUPABASE_URL: apiUrl,
     SUPABASE_SECRET_KEY: key,
     TRUSTED_PROXY_HOPS: '1',
+    // Every test uses its own address, so the preflight (30 per 600 s per address) never trips here
+    // except in the test that exercises it on purpose.
+    ...extra,
     READY_TIMEOUT_MS: '3000',
     DB_TIMEOUT_MS: '5000',
   });
@@ -146,7 +155,15 @@ afterAll(async () => {
 
 /** Remember the bucket a session-create call used, so afterAll can remove it. */
 function track(botId: string, ip: string): void {
-  usedKeys.push(rateKey(FAKE_RATE_KEY, 'session_create_ip', [botId, ip]));
+  usedKeys.push(
+    rateKey(FAKE_RATE_KEY, 'session_create_ip', [botId, ip]),
+    rateKey(FAKE_RATE_KEY, 'session_create_bot', [botId]),
+  );
+}
+
+/** The preflight bucket of an address, for cleanup. */
+function trackPreflight(ip: string): void {
+  usedKeys.push(rateKey(FAKE_RATE_KEY, 'session_preflight', [ip]));
 }
 
 describe('POST /v1/sessions against the local stack', () => {
@@ -261,6 +278,56 @@ describe('POST /v1/sessions against the local stack', () => {
     ).toBe(429);
   });
 
+  it('the per-bot aggregate limit refuses across addresses, with retry-after', async () => {
+    const bot = await createBot('botagg', { botLimit: 2, botWindowSeconds: 3600 });
+    for (let i = 0; i < 2; i += 1) {
+      const ip = nextIp();
+      track(bot.id, ip);
+      expect((await post(real.app, ip, { bot_slug: bot.slug })).statusCode).toBe(200);
+    }
+    const refused = await post(real.app, nextIp(), { bot_slug: bot.slug });
+    expect(refused.statusCode).toBe(429);
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+    const rows = (await svc(
+      'GET',
+      `/rest/v1/visitor_sessions?bot_id=eq.${bot.id}&select=id`,
+    )) as unknown[];
+    expect(rows).toHaveLength(2);
+  });
+
+  it('the preflight is per address across bots and refuses before any bot is looked up', async () => {
+    const small = createApp(
+      baseEnv({ SESSION_PREFLIGHT_PER_IP_LIMIT: '2', SESSION_PREFLIGHT_WINDOW_SECONDS: '3600' }),
+      false,
+    );
+    try {
+      const a = await createBot('pf-a');
+      const b = await createBot('pf-b');
+      const ip = nextIp();
+      trackPreflight(ip);
+      track(a.id, ip);
+      track(b.id, ip);
+      expect((await post(small.app, ip, { bot_slug: a.slug })).statusCode).toBe(200);
+      // An unknown slug still spends the preflight: probing slugs is bounded.
+      expect((await post(small.app, ip, { bot_slug: `t5s-${RUN}-nope` })).statusCode).toBe(403);
+      const refused = await post(small.app, ip, { bot_slug: b.slug });
+      expect(refused.statusCode).toBe(429);
+      expect(Number(refused.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+      const rows = (await svc(
+        'GET',
+        `/rest/v1/visitor_sessions?bot_id=eq.${b.id}&select=id`,
+      )) as unknown[];
+      expect(rows).toHaveLength(0);
+      // Another address is unaffected.
+      const other = nextIp();
+      trackPreflight(other);
+      track(b.id, other);
+      expect((await post(small.app, other, { bot_slug: b.slug })).statusCode).toBe(200);
+    } finally {
+      await small.app.close();
+    }
+  });
+
   it('never logs the bearer token, the challenge token or the slug', async () => {
     const bot = await createBot('logs');
     const res = await post(real.app, nextIp(), {
@@ -292,11 +359,18 @@ describe('POST /v1/sessions with Turnstile required', () => {
       ttlSeconds: config.visitorTokenTtlSeconds,
       db,
     });
-    app = buildServer({
+    app = buildTestServer({
       config,
       db,
       auth,
-      limits: createLimits({ db, rateKeySecret: config.rateLimitKeySecret }),
+      limits: createLimits({
+        db,
+        rateKeySecret: config.rateLimitKeySecret,
+        sessionPreflight: {
+          limit: config.sessionPreflightPerIpLimit,
+          window_seconds: config.sessionPreflightWindowSeconds,
+        },
+      }),
       runs: createRuns({ db }),
       turnstile: { verify },
       logger: false,

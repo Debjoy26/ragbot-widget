@@ -18,11 +18,20 @@ describe('worker environment guard', () => {
     expect(WORKER_FORBIDDEN_ENV_PREFIXES).toContain('VISITOR_TOKEN_SECRET_');
   });
 
+  it('forbids the RATE_LIMIT_KEY_SECRET_ and TURNSTILE_SECRET_KEY_ prefixes (rotated copies)', () => {
+    expect(WORKER_FORBIDDEN_ENV_PREFIXES).toContain('RATE_LIMIT_KEY_SECRET_');
+    expect(WORKER_FORBIDDEN_ENV_PREFIXES).toContain('TURNSTILE_SECRET_KEY_');
+  });
+
   it.each([
     'TURNSTILE_SECRET_KEY',
     'RATE_LIMIT_KEY_SECRET',
     'VISITOR_TOKEN_SECRET_PREVIOUS',
     'VISITOR_TOKEN_SECRET_2',
+    'RATE_LIMIT_KEY_SECRET_PREVIOUS',
+    'RATE_LIMIT_KEY_SECRET_2',
+    'TURNSTILE_SECRET_KEY_PREVIOUS',
+    'TURNSTILE_SECRET_KEY_2',
   ])('refuses %s by name, without echoing the value', (name) => {
     const fakeValue = 'fake-test-value-not-a-secret';
     let message = '';
@@ -43,6 +52,9 @@ describe('worker environment guard', () => {
         VISITOR_TOKEN: 'x',
         TURNSTILE_SITE_KEY: 'x',
         TURNSTILE_SECRET: 'x',
+        RATE_LIMIT_KEY: 'x',
+        RATE_LIMIT_KEY_SECRETX: 'x',
+        TURNSTILE_SECRET_KEYX: 'x',
       }),
     ).not.toThrow();
   });

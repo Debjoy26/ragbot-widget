@@ -32,6 +32,9 @@ export interface AppConfig {
   readonly readyTimeoutMs: number;
   readonly dbTimeoutMs: number;
   readonly visitorTokenTtlSeconds: number;
+  /** Bot-independent per-IP limit on POST /v1/sessions, counted before any policy read. */
+  readonly sessionPreflightPerIpLimit: number;
+  readonly sessionPreflightWindowSeconds: number;
   /** Bound on one Turnstile siteverify call; a timeout counts as a failed challenge. */
   readonly turnstileTimeoutMs: number;
   readonly chatDeadlineMs: number;
@@ -57,6 +60,15 @@ const MIN_SECRET_BYTES = 32;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const nonEmpty = z.string().trim().min(1);
+
+/**
+ * Cloudflare's published Turnstile test secrets (always passes, always fails, token already spent).
+ * They make every challenge pass or fail regardless of the visitor, so they must never run a real
+ * API. Assembled from parts so the secret scanner does not flag the source.
+ */
+const CLOUDFLARE_TEST_SECRETS: ReadonlySet<string> = new Set(
+  ['1x', '2x', '3x'].map((prefix) => [prefix, '0'.repeat(31), 'AA'].join('')),
+);
 
 const integer = (min: number, max: number) =>
   nonEmpty
@@ -119,7 +131,7 @@ const envSchema = z.object({
   SUPABASE_SECRET_KEY: secret(1),
   VISITOR_TOKEN_SECRET: secret(MIN_SECRET_BYTES),
   VISITOR_TOKEN_SECRET_PREVIOUS: optionalSecret(MIN_SECRET_BYTES),
-  TURNSTILE_SECRET_KEY: secret(1),
+  TURNSTILE_SECRET_KEY: secret(1).refine((v) => !CLOUDFLARE_TEST_SECRETS.has(v)),
   RATE_LIMIT_KEY_SECRET: secret(MIN_SECRET_BYTES),
   ALLOWED_ORIGINS: allowedOrigins,
   PORT: integer(1, 65_535),
@@ -130,7 +142,10 @@ const envSchema = z.object({
   CONNECTION_TIMEOUT_MS: integer(1, MAX_INT32),
   READY_TIMEOUT_MS: integer(1, MAX_INT32),
   DB_TIMEOUT_MS: integer(1, MAX_INT32),
-  VISITOR_TOKEN_TTL_SECONDS: integer(1, MAX_INT32),
+  // 60..86400 matches create_visitor_session (a value outside it is refused by the database).
+  VISITOR_TOKEN_TTL_SECONDS: integer(60, 86_400),
+  SESSION_PREFLIGHT_PER_IP_LIMIT: integer(1, 1_000_000),
+  SESSION_PREFLIGHT_WINDOW_SECONDS: integer(1, 86_400),
   TURNSTILE_TIMEOUT_MS: integer(1, MAX_INT32),
   CHAT_DEADLINE_MS: integer(1, MAX_INT32),
   PROVIDER_MAX_ATTEMPTS: integer(1, 10),
@@ -269,6 +284,8 @@ export function loadConfig(env: Env): AppConfig {
     readyTimeoutMs: v.READY_TIMEOUT_MS,
     dbTimeoutMs: v.DB_TIMEOUT_MS,
     visitorTokenTtlSeconds: v.VISITOR_TOKEN_TTL_SECONDS,
+    sessionPreflightPerIpLimit: v.SESSION_PREFLIGHT_PER_IP_LIMIT,
+    sessionPreflightWindowSeconds: v.SESSION_PREFLIGHT_WINDOW_SECONDS,
     turnstileTimeoutMs: v.TURNSTILE_TIMEOUT_MS,
     chatDeadlineMs: v.CHAT_DEADLINE_MS,
     providerMaxAttempts: v.PROVIDER_MAX_ATTEMPTS,

@@ -179,7 +179,7 @@ select is((select count(*)::int from public.audit_logs) - current_setting('t.aud
 
 -- schema_version equals the number of applied migrations
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the migration history');
-select is(public.schema_version(), 11, 'schema_version: this database is at 10');
+select is(public.schema_version(), 11, 'schema_version: this database is at 11');
 
 -- ===========================================================================
 -- 3. Update settings: refusals change nothing

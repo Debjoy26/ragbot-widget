@@ -3,7 +3,11 @@ import { Writable } from 'node:stream';
 import { loadConfig, type AppConfig } from '../../../api/src/lib/config.ts';
 import { buildLoggerOptions } from '../../../api/src/lib/logger.ts';
 import type { Db } from '../../../api/src/lib/supabase.ts';
-import { buildServer } from '../../../api/src/server.ts';
+import { buildServer, type ServerDeps } from '../../../api/src/server.ts';
+import type { VisitorAuth } from '../../../api/src/services/auth.ts';
+import type { Limits } from '../../../api/src/services/limits.ts';
+import type { Runs } from '../../../api/src/services/runs.ts';
+import type { TurnstileVerifier } from '../../../api/src/services/turnstile.ts';
 
 // FAKE values for tests only, random per run. None of these is a real credential.
 function hex32(): string {
@@ -33,6 +37,8 @@ export function validEnv(overrides: Record<string, string | undefined> = {}) {
     READY_TIMEOUT_MS: '200',
     DB_TIMEOUT_MS: '1000',
     VISITOR_TOKEN_TTL_SECONDS: '900',
+    SESSION_PREFLIGHT_PER_IP_LIMIT: '30',
+    SESSION_PREFLIGHT_WINDOW_SECONDS: '600',
     TURNSTILE_TIMEOUT_MS: '2000',
     CHAT_DEADLINE_MS: '30000',
     PROVIDER_MAX_ATTEMPTS: '2',
@@ -71,6 +77,47 @@ export function fakeDb(ping: Db['ping'] = async () => true): Db {
   };
 }
 
+function unavailable(name: string): never {
+  throw new Error(`fake service: ${name} is not available in this test`);
+}
+
+/**
+ * FAKE visitor-facing services, labelled as such. Each method fails loudly, so a test that
+ * reaches one by accident does not pass quietly. Tests that exercise a service override it:
+ * `buildTestServer({ config, db, limits: myLimits })`.
+ */
+export function fakeServices(): Pick<ServerDeps, 'auth' | 'limits' | 'runs' | 'turnstile'> {
+  const auth: VisitorAuth = {
+    issueToken: () => unavailable('auth.issueToken'),
+    verifyToken: () => unavailable('auth.verifyToken'),
+    authenticate: () => unavailable('auth.authenticate'),
+  };
+  const limits: Limits = {
+    consumeSessionPreflight: () => unavailable('limits.consumeSessionPreflight'),
+    consumeSessionCreate: () => unavailable('limits.consumeSessionCreate'),
+    consumeSessionCreateBot: () => unavailable('limits.consumeSessionCreateBot'),
+    loadMessagePolicy: () => unavailable('limits.loadMessagePolicy'),
+    consumeMessage: () => unavailable('limits.consumeMessage'),
+    reserve: () => unavailable('limits.reserve'),
+    settle: () => unavailable('limits.settle'),
+    release: () => unavailable('limits.release'),
+  };
+  const runs: Runs = {
+    beginRun: () => unavailable('runs.beginRun'),
+    markRunning: () => unavailable('runs.markRunning'),
+    finishRun: () => unavailable('runs.finishRun'),
+  };
+  const turnstile: TurnstileVerifier = { verify: () => unavailable('turnstile.verify') };
+  return { auth, limits, runs, turnstile };
+}
+
+/** `buildServer` with labelled fake services; any of them can be overridden. */
+export function buildTestServer(
+  deps: Pick<ServerDeps, 'config'> & Partial<Omit<ServerDeps, 'config'>>,
+) {
+  return buildServer({ db: fakeDb(), ...fakeServices(), ...deps });
+}
+
 export class LogCapture {
   readonly lines: string[] = [];
   readonly stream = new Writable({
@@ -93,7 +140,7 @@ export function appWithCapture(
   level: 'info' | 'debug' = 'info',
 ) {
   const capture = new LogCapture();
-  const app = buildServer({
+  const app = buildTestServer({
     config,
     db,
     logger: { ...buildLoggerOptions(level), stream: capture.stream },

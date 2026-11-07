@@ -27,15 +27,14 @@ export interface ServerDeps {
   readonly config: AppConfig;
   readonly db: Db;
   /**
-   * The visitor-facing services (P5). `createApp` always passes all four. They are optional in the
-   * type only so a test that exercises just the server shell (health, headers, CORS) need not
-   * build them; `POST /v1/sessions` is registered only when `auth`, `limits` and `turnstile` are
-   * all present, and is a plain 404 otherwise. `runs` is held for the chat route (P7).
+   * The visitor-facing services (P5). All four are required: a server without them could not
+   * answer `POST /v1/sessions` and must not start quietly without it. `runs` is held for the chat
+   * route (P7). Tests that only exercise the server shell pass labelled fakes.
    */
-  readonly auth?: VisitorAuth;
-  readonly limits?: Limits;
-  readonly runs?: Runs;
-  readonly turnstile?: TurnstileVerifier;
+  readonly auth: VisitorAuth;
+  readonly limits: Limits;
+  readonly runs: Runs;
+  readonly turnstile: TurnstileVerifier;
   readonly logger?: FastifyServerOptions['logger'];
   /** Monotonic clock in milliseconds for the readiness cache. Injected for tests only. */
   readonly now?: () => number;
@@ -163,14 +162,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     isDraining: () => draining,
     ...(deps.now === undefined ? {} : { now: deps.now }),
   });
-  if (deps.auth !== undefined && deps.limits !== undefined && deps.turnstile !== undefined) {
-    registerSessionRoutes(app, {
-      db,
-      auth: deps.auth,
-      limits: deps.limits,
-      turnstile: deps.turnstile,
-      ttlSeconds: config.visitorTokenTtlSeconds,
-    });
-  }
+  registerSessionRoutes(app, {
+    db,
+    auth: deps.auth,
+    limits: deps.limits,
+    turnstile: deps.turnstile,
+    ttlSeconds: config.visitorTokenTtlSeconds,
+  });
   return app;
 }

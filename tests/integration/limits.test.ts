@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AppError } from '../../api/src/lib/errors.ts';
+import { AppError, toAppError } from '../../api/src/lib/errors.ts';
 import { rateKey } from '../../api/src/lib/rate-key.ts';
 import { createDb, DbError, type Db } from '../../api/src/lib/supabase.ts';
 import { createLimits, type Limits } from '../../api/src/services/limits.ts';
@@ -68,6 +68,7 @@ async function createBot(suffix: string, o: BotOptions = {}): Promise<string> {
     allowed_origins: ['http://localhost:3000'],
     rate_policy: {
       session_create_per_ip: { limit: 100, window_seconds: 3600 },
+      session_create_per_bot: { limit: 1000, window_seconds: 3600 },
       message_per_session: { limit: o.messagePerSession ?? 20, window_seconds: 3600 },
       message_per_ip: { limit: o.messagePerIp ?? 60, window_seconds: 3600 },
       concurrent_requests_per_session: o.concurrent ?? 1,
@@ -141,7 +142,11 @@ beforeAll(async () => {
   ({ apiUrl } = getLocalStack());
   key = getLocalPrivilegedKey();
   db = createDb({ url: apiUrl, secretKey: key, timeoutMs: 8000 });
-  limits = createLimits({ db, rateKeySecret: rateKeyMaterial });
+  limits = createLimits({
+    db,
+    rateKeySecret: rateKeyMaterial,
+    sessionPreflight: { limit: 2, window_seconds: 3600 },
+  });
   runs = createRuns({ db });
 }, 60_000);
 
@@ -191,6 +196,36 @@ describe('rate-limit window rollover', () => {
     await expect(limits.consumeSessionCreate(botA, ip, policy)).rejects.toMatchObject({
       code: 'RATE_LIMITED',
     });
+  });
+});
+
+describe('session preflight and per-bot aggregate', () => {
+  it('the preflight counts per address across bots and refuses past its limit', async () => {
+    const ip = nextIp();
+    bucketKeys.push(rateKey(rateKeyMaterial, 'session_preflight', [ip]));
+    await limits.consumeSessionPreflight(ip);
+    await limits.consumeSessionPreflight(ip);
+    const err = (await failure(limits.consumeSessionPreflight(ip))) as AppError;
+    expect(err.code).toBe('RATE_LIMITED');
+    expect(err.retryAfterSeconds).toBeGreaterThanOrEqual(1);
+    const other = nextIp();
+    bucketKeys.push(rateKey(rateKeyMaterial, 'session_preflight', [other]));
+    await limits.consumeSessionPreflight(other);
+  });
+
+  it('the aggregate is one counter per bot, whatever the address', async () => {
+    const botA = await createBot('agg-a');
+    const botB = await createBot('agg-b');
+    bucketKeys.push(
+      rateKey(rateKeyMaterial, 'session_create_bot', [botA]),
+      rateKey(rateKeyMaterial, 'session_create_bot', [botB]),
+    );
+    const policy = { bot_session_limit: 2, bot_session_window_seconds: 3600 };
+    await limits.consumeSessionCreateBot(botA, policy);
+    await limits.consumeSessionCreateBot(botA, policy);
+    const err = (await failure(limits.consumeSessionCreateBot(botA, policy))) as AppError;
+    expect(err.code).toBe('RATE_LIMITED');
+    await limits.consumeSessionCreateBot(botB, policy);
   });
 });
 
@@ -357,6 +392,16 @@ describe('budget reservations', () => {
     await svc('PATCH', `/rest/v1/bot_profiles?id=eq.${bot}`, { enabled: false });
     const err = await failure(limits.reserve(bot, runId, 0.1, 60));
     expect((err as DbError).sqlstate).toBe('RB039');
+    // The error handler answers a disabled bot as FORBIDDEN (403).
+    expect(toAppError(err)).toMatchObject({ code: 'FORBIDDEN', httpStatus: 403 });
+  });
+
+  it('reserving for a run that does not exist (RB004) is INTERNAL_ERROR, not a visitor error', async () => {
+    const bot = await createBot('reserve-norun', { capUsd: 5 });
+    const err = (await failure(limits.reserve(bot, randomUUID(), 0.1, 60))) as AppError;
+    expect(err).toBeInstanceOf(AppError);
+    expect(err.code).toBe('INTERNAL_ERROR');
+    expect(err.httpStatus).toBe(500);
   });
 });
 
@@ -438,5 +483,6 @@ describe('request runs', () => {
     await svc('PATCH', `/rest/v1/bot_profiles?id=eq.${bot}`, { enabled: false });
     const err = await failure(runs.beginRun(visitor, randomUUID(), requestHash({ n: 1 })));
     expect((err as DbError).sqlstate).toBe('RB039');
+    expect(toAppError(err)).toMatchObject({ code: 'FORBIDDEN', httpStatus: 403 });
   });
 });

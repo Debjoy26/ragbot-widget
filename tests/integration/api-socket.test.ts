@@ -3,8 +3,7 @@ import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { buildServer } from '../../api/src/server.ts';
-import { fakeDb, testConfig } from '../unit/api/helpers.ts';
+import { fakeDb, testConfig, buildTestServer } from '../unit/api/helpers.ts';
 
 /**
  * Raw `node:net` sockets against a really listening server on loopback (P4-D1, A-3 and B-3).
@@ -68,7 +67,7 @@ describe('API over raw sockets (loopback, fake DbPing)', () => {
   let port: number;
 
   beforeAll(async () => {
-    app = buildServer({
+    app = buildTestServer({
       config: testConfig({
         LOG_LEVEL: 'silent',
         BODY_LIMIT_BYTES: '64',

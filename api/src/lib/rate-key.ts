@@ -12,7 +12,12 @@ const MIN_SECRET_BYTES = 32;
 const KIND_PATTERN = /^[a-z][a-z_]{0,39}$/;
 
 /** Kinds of counter. Part of the HMAC input, so two kinds never share a bucket. */
-export type RateKeyKind = 'session_create_ip' | 'message_session' | 'message_ip';
+export type RateKeyKind =
+  | 'session_preflight'
+  | 'session_create_ip'
+  | 'session_create_bot'
+  | 'message_session'
+  | 'message_ip';
 
 /**
  * 64-char lowercase hex HMAC-SHA256 of `kind` and `parts` under `secret`. The input is encoded

@@ -55,6 +55,7 @@ insert into public.client_settings (
     "message_per_session": {"limit": 20, "window_seconds": 600},
     "message_per_ip": {"limit": 60, "window_seconds": 3600},
     "session_create_per_ip": {"limit": 10, "window_seconds": 3600},
+    "session_create_per_bot": {"limit": 200, "window_seconds": 3600},
     "concurrent_requests_per_session": 1,
     "max_message_chars": 2000,
     "max_output_tokens": 800

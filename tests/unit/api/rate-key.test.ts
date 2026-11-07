@@ -25,6 +25,13 @@ describe('rateKey', () => {
     expect(rateKey(SECRET, 'message_ip', ['bot2', '1.2.3.4'])).not.toBe(base);
   });
 
+  it('has a distinct bucket for each session kind, with the same parts', () => {
+    const kinds = ['session_preflight', 'session_create_ip', 'session_create_bot'] as const;
+    const keys = kinds.map((k) => rateKey(SECRET, k, ['203.0.113.9']));
+    expect(new Set(keys).size).toBe(kinds.length);
+    for (const k of keys) expect(k).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it('cannot be made to collide by moving a boundary between parts', () => {
     expect(rateKey(SECRET, 'message_ip', ['ab', 'c'])).not.toBe(
       rateKey(SECRET, 'message_ip', ['a', 'bc']),

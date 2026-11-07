@@ -2,8 +2,7 @@ import { connect } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { buildServer } from '../../api/src/server.ts';
-import { fakeDb, testConfig } from '../unit/api/helpers.ts';
+import { fakeDb, testConfig, buildTestServer } from '../unit/api/helpers.ts';
 
 /**
  * Real HTTP against a really listening server on loopback.
@@ -15,7 +14,7 @@ describe('API over real HTTP (loopback, fake DbPing)', () => {
   const base = () => `http://127.0.0.1:${port}`;
 
   beforeAll(async () => {
-    app = buildServer({
+    app = buildTestServer({
       config: testConfig({
         LOG_LEVEL: 'silent',
         BODY_LIMIT_BYTES: '128',
@@ -54,7 +53,7 @@ describe('API over real HTTP (loopback, fake DbPing)', () => {
   });
 
   it('a draining server answers /health/ready 503 at once, and /health/live stays 200', async () => {
-    const other = buildServer({
+    const other = buildTestServer({
       config: testConfig({ LOG_LEVEL: 'silent' }),
       db: fakeDb(async () => true),
     });

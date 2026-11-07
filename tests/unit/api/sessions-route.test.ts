@@ -5,11 +5,18 @@ import { createSessionResponseSchema } from '@ragbot/shared';
 import { AppError } from '../../../api/src/lib/errors.ts';
 import { DbError, type Db } from '../../../api/src/lib/supabase.ts';
 import { buildLoggerOptions } from '../../../api/src/lib/logger.ts';
-import { buildServer } from '../../../api/src/server.ts';
 import { createVisitorAuth } from '../../../api/src/services/auth.ts';
 import type { Limits } from '../../../api/src/services/limits.ts';
+import type { ServerDeps } from '../../../api/src/server.ts';
 import type { TurnstileVerifier } from '../../../api/src/services/turnstile.ts';
-import { FAKE_VISITOR_SECRET, LogCapture, fakeDb, testConfig } from './helpers.ts';
+import {
+  FAKE_VISITOR_SECRET,
+  LogCapture,
+  buildTestServer,
+  fakeDb,
+  fakeServices,
+  testConfig,
+} from './helpers.ts';
 
 // P5-B unit tests for POST /v1/sessions. Everything behind the route is a labelled FAKE: the
 // database answers from a script, the limits and the Turnstile verifier are stubs. No network.
@@ -23,6 +30,8 @@ const POLICY = {
   turnstile_required: false,
   session_limit: 10,
   session_window_seconds: 3600,
+  bot_session_limit: 500,
+  bot_session_window_seconds: 86_400,
 };
 
 interface Rpc {
@@ -33,7 +42,13 @@ interface Rpc {
 interface Setup {
   app: FastifyInstance;
   rpcs: Rpc[];
-  limits: { consumeSessionCreate: ReturnType<typeof vi.fn> };
+  limits: {
+    consumeSessionPreflight: ReturnType<typeof vi.fn>;
+    consumeSessionCreate: ReturnType<typeof vi.fn>;
+    consumeSessionCreateBot: ReturnType<typeof vi.fn>;
+  };
+  /** Order in which the limits, the database and Turnstile were called. */
+  calls: string[];
   turnstile: { verify: ReturnType<typeof vi.fn> };
   capture: LogCapture;
   auth: ReturnType<typeof createVisitorAuth>;
@@ -49,16 +64,20 @@ function setup(
     policy?: unknown;
     session?: unknown | ((rpcs: Rpc[]) => unknown);
     consume?: () => Promise<void>;
+    preflight?: () => Promise<void>;
+    consumeBot?: () => Promise<void>;
     verify?: () => Promise<boolean>;
     env?: Record<string, string | undefined>;
   } = {},
 ): Setup {
   const rpcs: Rpc[] = [];
+  const calls: string[] = [];
   const base = fakeDb();
   const db: Db = {
     ...base,
     rpc: (async (name: string, args: Record<string, unknown>) => {
       rpcs.push({ name, args });
+      calls.push(`rpc:${name}`);
       const answer =
         name === 'get_session_policy'
           ? 'policy' in over
@@ -85,19 +104,33 @@ function setup(
     ttlSeconds: config.visitorTokenTtlSeconds,
     db: { selectOne: async () => null },
   });
-  const limits = { consumeSessionCreate: vi.fn(over.consume ?? (async () => undefined)) };
-  const turnstile = { verify: vi.fn(over.verify ?? (async () => true)) };
+  const tracked = (name: string, fn: (() => Promise<void>) | undefined) =>
+    vi.fn(async () => {
+      calls.push(name);
+      await (fn ?? (async () => undefined))();
+    });
+  const limits = {
+    consumeSessionPreflight: tracked('preflight', over.preflight),
+    consumeSessionCreate: tracked('create_ip', over.consume),
+    consumeSessionCreateBot: tracked('create_bot', over.consumeBot),
+  };
+  const turnstile = {
+    verify: vi.fn(async () => {
+      calls.push('turnstile');
+      return (over.verify ?? (async () => true))();
+    }),
+  };
   const capture = new LogCapture();
-  const app = buildServer({
+  const app = buildTestServer({
     config,
     db,
     auth,
-    limits: limits as unknown as Limits,
+    limits: { ...fakeServices().limits, ...limits } as Limits,
     turnstile: turnstile as unknown as TurnstileVerifier,
     logger: { ...buildLoggerOptions('info'), stream: capture.stream },
   });
   apps.push(app);
-  return { app, rpcs, limits, turnstile, capture, auth };
+  return { app, rpcs, limits, turnstile, capture, auth, calls };
 }
 
 const post = (app: FastifyInstance, payload: unknown, headers: Record<string, string> = {}) =>
@@ -145,6 +178,29 @@ describe('POST /v1/sessions: success', () => {
     expect(policy).toEqual({ session_limit: 10, session_window_seconds: 3600 });
   });
 
+  it('counts the bot aggregate limit with the bot id and the policy columns', async () => {
+    const s = setup();
+    await post(s.app, { bot_slug: 'dev-bot' });
+    expect(s.limits.consumeSessionCreateBot).toHaveBeenCalledTimes(1);
+    expect(s.limits.consumeSessionCreateBot.mock.calls[0]).toEqual([
+      BOT,
+      { bot_session_limit: 500, bot_session_window_seconds: 86_400 },
+    ]);
+  });
+
+  it('counts the preflight with the client IP only, before the policy and everything else', async () => {
+    const s = setup();
+    await post(s.app, { bot_slug: 'dev-bot' });
+    expect(s.limits.consumeSessionPreflight.mock.calls).toEqual([['127.0.0.1']]);
+    expect(s.calls).toEqual([
+      'preflight',
+      'rpc:get_session_policy',
+      'create_ip',
+      'create_bot',
+      'rpc:create_visitor_session',
+    ]);
+  });
+
   it('returns an expiry that is a valid ISO instant, no later than the database row', async () => {
     const s = setup();
     const out = body(await post(s.app, { bot_slug: 'dev-bot' }));
@@ -182,11 +238,40 @@ describe('POST /v1/sessions: bot refusals', () => {
     });
   });
 
+  it('a disabled bot whose other policy columns are null is the same FORBIDDEN as an unknown slug', async () => {
+    const nulls = {
+      bot_id: null,
+      enabled: false,
+      turnstile_required: null,
+      session_limit: null,
+      session_window_seconds: null,
+      bot_session_limit: null,
+      bot_session_window_seconds: null,
+    };
+    const disabled = await post(setup({ policy: [nulls] }).app, { bot_slug: 'nope' });
+    const unknown = await post(setup({ policy: [] }).app, { bot_slug: 'nope' });
+    expect(disabled.statusCode).toBe(403);
+    const a = body(disabled);
+    const b = body(unknown);
+    delete a['request_id'];
+    delete b['request_id'];
+    expect(a).toEqual(b);
+  });
+
+  it('a database that raises RB039 for a disabled bot at the policy read is the same FORBIDDEN', async () => {
+    const res = await post(setup({ policy: new DbError('http', 400, 'RB039') }).app, {
+      bot_slug: 'nope',
+    });
+    expect(res.statusCode).toBe(403);
+    expect(body(res)['code']).toBe('FORBIDDEN');
+  });
+
   it('refuses before counting a limit, creating a session or calling Turnstile', async () => {
     for (const policy of [[], [{ ...POLICY, enabled: false, turnstile_required: true }]]) {
       const s = setup({ policy });
       await post(s.app, { bot_slug: 'x', challenge_token: CHALLENGE });
       expect(s.limits.consumeSessionCreate).not.toHaveBeenCalled();
+      expect(s.limits.consumeSessionCreateBot).not.toHaveBeenCalled();
       expect(s.turnstile.verify).not.toHaveBeenCalled();
       expect(s.rpcs.map((r) => r.name)).toEqual(['get_session_policy']);
     }
@@ -212,6 +297,53 @@ describe('POST /v1/sessions: rate limit', () => {
     expect(res.headers['retry-after']).toBe('42');
     expect(body(res)).toMatchObject({ code: 'RATE_LIMITED', retry_after_seconds: 42 });
     expect(s.rpcs.map((r) => r.name)).toEqual(['get_session_policy']);
+  });
+
+  it('the preflight refuses before any policy read: no database call, no later limit', async () => {
+    const s = setup({
+      preflight: async () => {
+        throw new AppError('RATE_LIMITED', { retryAfterSeconds: 7 });
+      },
+    });
+    const res = await post(s.app, { bot_slug: 'dev-bot', challenge_token: CHALLENGE });
+    expect(res.statusCode).toBe(429);
+    expect(res.headers['retry-after']).toBe('7');
+    expect(body(res)).toMatchObject({ code: 'RATE_LIMITED', retry_after_seconds: 7 });
+    expect(s.rpcs).toHaveLength(0);
+    expect(s.limits.consumeSessionCreate).not.toHaveBeenCalled();
+    expect(s.limits.consumeSessionCreateBot).not.toHaveBeenCalled();
+    expect(s.turnstile.verify).not.toHaveBeenCalled();
+  });
+
+  it('an invalid body is refused before the preflight is spent', async () => {
+    const s = setup();
+    await post(s.app, { bot_slug: 'Bad Slug!' });
+    expect(s.limits.consumeSessionPreflight).not.toHaveBeenCalled();
+  });
+
+  it('the bot aggregate limit refuses with 429 and retry-after, before Turnstile and the insert', async () => {
+    const s = setup({
+      policy: [{ ...POLICY, turnstile_required: true }],
+      consumeBot: async () => {
+        throw new AppError('RATE_LIMITED', { retryAfterSeconds: 90 });
+      },
+    });
+    const res = await post(s.app, { bot_slug: 'dev-bot', challenge_token: CHALLENGE });
+    expect(res.statusCode).toBe(429);
+    expect(res.headers['retry-after']).toBe('90');
+    expect(s.limits.consumeSessionCreate).toHaveBeenCalledTimes(1);
+    expect(s.turnstile.verify).not.toHaveBeenCalled();
+    expect(s.rpcs.map((r) => r.name)).toEqual(['get_session_policy']);
+  });
+
+  it('the per-IP limit refusing means the bot aggregate is not spent', async () => {
+    const s = setup({
+      consume: async () => {
+        throw new AppError('RATE_LIMITED', { retryAfterSeconds: 5 });
+      },
+    });
+    await post(s.app, { bot_slug: 'dev-bot' });
+    expect(s.limits.consumeSessionCreateBot).not.toHaveBeenCalled();
   });
 
   it('counts before the challenge: a refused caller never reaches Turnstile', async () => {
@@ -284,6 +416,7 @@ describe('POST /v1/sessions: body validation', () => {
     expect(res.statusCode).toBe(400);
     expect(body(res)['code']).toBe('INVALID_REQUEST');
     expect(s.rpcs).toHaveLength(0);
+    expect(s.limits.consumeSessionPreflight).not.toHaveBeenCalled();
     expect(s.limits.consumeSessionCreate).not.toHaveBeenCalled();
   });
 
@@ -387,10 +520,53 @@ describe('POST /v1/sessions: logging', () => {
 });
 
 describe('route registration', () => {
-  it('is absent (404) unless auth, limits and turnstile are all provided', async () => {
-    const app = buildServer({ config: testConfig({ LOG_LEVEL: 'silent' }), db: fakeDb() });
+  it('is always registered: a server built with labelled fakes routes POST /v1/sessions', async () => {
+    const app = buildTestServer({ config: testConfig({ LOG_LEVEL: 'silent' }), db: fakeDb() });
     apps.push(app);
+    // The fake preflight throws, which is a 500, not a 404: the route exists.
     const res = await post(app, { bot_slug: 'dev-bot' });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(500);
+    expect(body(res)['code']).toBe('INTERNAL_ERROR');
+  });
+
+  it('auth, limits, runs and turnstile are required in ServerDeps (compile-time check)', () => {
+    const deps: ServerDeps = {
+      config: testConfig({ LOG_LEVEL: 'silent' }),
+      db: fakeDb(),
+      ...fakeServices(),
+    };
+    // @ts-expect-error runs is required
+    const noRuns: ServerDeps = {
+      config: deps.config,
+      db: deps.db,
+      auth: deps.auth,
+      limits: deps.limits,
+      turnstile: deps.turnstile,
+    };
+    // @ts-expect-error auth is required
+    const noAuth: ServerDeps = {
+      config: deps.config,
+      db: deps.db,
+      limits: deps.limits,
+      runs: deps.runs,
+      turnstile: deps.turnstile,
+    };
+    // @ts-expect-error limits is required
+    const noLimits: ServerDeps = {
+      config: deps.config,
+      db: deps.db,
+      auth: deps.auth,
+      runs: deps.runs,
+      turnstile: deps.turnstile,
+    };
+    // @ts-expect-error turnstile is required
+    const noTurnstile: ServerDeps = {
+      config: deps.config,
+      db: deps.db,
+      auth: deps.auth,
+      limits: deps.limits,
+      runs: deps.runs,
+    };
+    expect([noRuns, noAuth, noLimits, noTurnstile]).toHaveLength(4);
   });
 });

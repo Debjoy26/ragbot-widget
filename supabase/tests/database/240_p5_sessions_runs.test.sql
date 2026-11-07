@@ -3,17 +3,18 @@
 -- default; the run-state helper; the run read; lock_timeout and grants. All fixtures are synthetic.
 -- Ids end in 000000000240: bots bN, sessions aN, runs dN, conversations cN, messages eN.
 begin;
-select plan(126);
+select plan(151);
 
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
   ('b1000000-0000-4000-8000-000000000240', 'p5-main',       'x', array['en'], 'm', 1536, true),
   ('b2000000-0000-4000-8000-000000000240', 'p5-off',        'x', array['en'], 'm', 1536, false),
   ('b3000000-0000-4000-8000-000000000240', 'p5-nosettings', 'x', array['en'], 'm', 1536, true),
   ('b4000000-0000-4000-8000-000000000240', 'p5-nolimit',    'x', array['en'], 'm', 1536, true),
-  ('b5000000-0000-4000-8000-000000000240', 'p5-other',      'x', array['en'], 'm', 1536, true);
+  ('b5000000-0000-4000-8000-000000000240', 'p5-other',      'x', array['en'], 'm', 1536, true),
+  ('b6000000-0000-4000-8000-000000000240', 'p5-off-nopolicy', 'x', array['en'], 'm', 1536, false);
 insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
   ('b1000000-0000-4000-8000-000000000240', array['https://e.test'],
-   '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "concurrent_requests_per_session": 2, "marker": "RATE-240"}', '{"daily_cap_usd": 5}', '{}', '{}', '{}', '{}'),
+   '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 200, "window_seconds": 3600}, "concurrent_requests_per_session": 2, "marker": "RATE-240"}', '{"daily_cap_usd": 5}', '{}', '{}', '{}', '{}'),
   ('b2000000-0000-4000-8000-000000000240', array['https://e.test'],
    '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "concurrent_requests_per_session": 2}', '{"daily_cap_usd": 5}', '{}', '{}', '{}', '{}'),
   ('b4000000-0000-4000-8000-000000000240', array['https://e.test'], '{"concurrent_requests_per_session": 2}', '{"daily_cap_usd": 5}', '{}', '{}', '{}', '{}'),
@@ -56,17 +57,30 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
 -- ===== get_session_policy =====
 select results_eq(
-  $q$select bot_id, enabled, turnstile_required, session_limit, session_window_seconds from public.get_session_policy('p5-main')$q$,
-  $q$values ('b1000000-0000-4000-8000-000000000240'::uuid, true, true, 10, 3600)$q$,
-  'get_session_policy: returns the bot, enabled, turnstile default true and the per-IP session limit');
+  $q$select bot_id, enabled, turnstile_required, session_limit, session_window_seconds, bot_session_limit, bot_session_window_seconds from public.get_session_policy('p5-main')$q$,
+  $q$values ('b1000000-0000-4000-8000-000000000240'::uuid, true, true, 10, 3600, 200, 3600)$q$,
+  'get_session_policy: returns the bot, enabled, turnstile default true, the per-IP and the per-bot session limits');
 select is_empty($q$select * from public.get_session_policy('p5-no-such-bot')$q$, 'get_session_policy: unknown slug returns no rows');
 select is_empty($q$select * from public.get_session_policy('P5-MAIN')$q$, 'get_session_policy: the slug match is exact (case-sensitive)');
 select throws_ok($q$select * from public.get_session_policy(null)$q$, '22023', null, 'get_session_policy: null slug -> 22023');
 select throws_ok($q$select * from public.get_session_policy('')$q$, '22023', null, 'get_session_policy: empty slug -> 22023');
 select results_eq(
-  $q$select bot_id, enabled, turnstile_required from public.get_session_policy('p5-off')$q$,
-  $q$values ('b2000000-0000-4000-8000-000000000240'::uuid, false, true)$q$,
-  'get_session_policy: a disabled bot still returns its row, with enabled = false');
+  $q$select bot_id, enabled, turnstile_required, session_limit, session_window_seconds, bot_session_limit, bot_session_window_seconds from public.get_session_policy('p5-off')$q$,
+  $q$values ('b2000000-0000-4000-8000-000000000240'::uuid, false, null::boolean, null::integer, null::integer, null::integer, null::integer)$q$,
+  'get_session_policy: a disabled bot returns its row at once, enabled = false and every other column null');
+select results_eq(
+  $q$select bot_id, enabled, turnstile_required, session_limit, session_window_seconds, bot_session_limit, bot_session_window_seconds from public.get_session_policy('p5-off-nopolicy')$q$,
+  $q$values ('b6000000-0000-4000-8000-000000000240'::uuid, false, null::boolean, null::integer, null::integer, null::integer, null::integer)$q$,
+  'get_session_policy: a disabled bot with no client_settings row returns enabled = false, never RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 0, "window_seconds": 0}, "session_create_per_bot": "junk"}' where bot_id = 'b2000000-0000-4000-8000-000000000240';
+select results_eq($q$select bot_id, enabled from public.get_session_policy('p5-off')$q$, $q$values ('b2000000-0000-4000-8000-000000000240'::uuid, false)$q$,
+  'get_session_policy: a disabled bot with an invalid policy returns enabled = false, never RB036');
+update public.client_settings set rate_policy = '{}' where bot_id = 'b2000000-0000-4000-8000-000000000240';
+select lives_ok($q$select * from public.get_session_policy('p5-off')$q$, 'get_session_policy: a disabled bot with an empty rate_policy does not raise');
+update public.bot_profiles set enabled = true where id = 'b2000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-off')$q$, 'RB036', null, 'get_session_policy: the same bot, enabled with an empty rate_policy -> RB036');
+update public.bot_profiles set enabled = false where id = 'b2000000-0000-4000-8000-000000000240';
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 200, "window_seconds": 3600}, "concurrent_requests_per_session": 2}' where bot_id = 'b2000000-0000-4000-8000-000000000240';
 select throws_ok($q$select * from public.get_session_policy('p5-nosettings')$q$, 'RB036', null, 'get_session_policy: no client_settings row -> RB036');
 select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'get_session_policy: no session_create_per_ip -> RB036');
 
@@ -88,9 +102,9 @@ select is((select turnstile_required from public.get_session_policy('p5-main')),
 update public.client_settings set feature_flags = '{}' where bot_id = 'b1000000-0000-4000-8000-000000000240';
 
 -- session_create_per_ip: complete and valid, or RB036.
-update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 999999999, "window_seconds": 86400}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 999999999, "window_seconds": 86400}, "session_create_per_bot": {"limit": 200, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
 select results_eq($q$select session_limit, session_window_seconds from public.get_session_policy('p5-nolimit')$q$, $q$values (999999999, 86400)$q$, 'session policy: the upper bounds are accepted');
-update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 1, "window_seconds": 1}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 1, "window_seconds": 1}, "session_create_per_bot": {"limit": 200, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
 select results_eq($q$select session_limit, session_window_seconds from public.get_session_policy('p5-nolimit')$q$, $q$values (1, 1)$q$, 'session policy: the lower bounds are accepted');
 update public.client_settings set rate_policy = '{"session_create_per_ip": {"window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
 select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'session policy: missing limit -> RB036');
@@ -116,6 +130,40 @@ update public.client_settings set rate_policy = '{"session_create_per_ip": [10, 
 select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'session policy: an array instead of an object -> RB036');
 update public.client_settings set rate_policy = '{"session_create_per_ip": null}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
 select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'session policy: JSON null -> RB036');
+
+-- session_create_per_bot: same validation as the per-IP policy; missing or invalid on an enabled bot is RB036.
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 999999999, "window_seconds": 86400}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select results_eq($q$select session_limit, session_window_seconds, bot_session_limit, bot_session_window_seconds from public.get_session_policy('p5-nolimit')$q$, $q$values (10, 3600, 999999999, 86400)$q$, 'bot session policy: the upper bounds are accepted');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 1, "window_seconds": 1}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select results_eq($q$select bot_session_limit, bot_session_window_seconds from public.get_session_policy('p5-nolimit')$q$, $q$values (1, 1)$q$, 'bot session policy: the lower bounds are accepted');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: session_create_per_bot missing -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: missing limit -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 10}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: missing window -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 0, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: limit 0 -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": -3, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: negative limit -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 1.5, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: fractional limit -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": "10", "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: limit as a string -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 1000000000, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: limit above 999999999 -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 10, "window_seconds": 0}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: window 0 -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 10, "window_seconds": 86401}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: window above 86400 -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": {"limit": 10, "window_seconds": 99999999999}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: a huge window -> RB036 (no overflow error)');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": [10, 3600]}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: an array instead of an object -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_ip": {"limit": 10, "window_seconds": 3600}, "session_create_per_bot": null}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: JSON null -> RB036');
+update public.client_settings set rate_policy = '{"session_create_per_bot": {"limit": 200, "window_seconds": 3600}}' where bot_id = 'b4000000-0000-4000-8000-000000000240';
+select throws_ok($q$select * from public.get_session_policy('p5-nolimit')$q$, 'RB036', null, 'bot session policy: a valid per-bot policy does not stand in for a missing per-IP policy -> RB036');
 
 -- ===== create_visitor_session =====
 create temp table s1 as select * from public.create_visitor_session('b1000000-0000-4000-8000-000000000240', 900);
@@ -252,6 +300,24 @@ select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = '
 select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.set_request_run_state(uuid,uuid,text)'::regprocedure), 'proconfig: set_request_run_state has lock_timeout');
 select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.get_request_run(uuid,uuid)'::regprocedure), 'proconfig: get_request_run has lock_timeout');
 select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.schema_version()'::regprocedure), 'proconfig: schema_version has lock_timeout');
+
+-- The three 004 functions the API calls get lock_timeout from 011 (ALTER FUNCTION); their search_path, owner and grants are kept.
+select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.settle_budget_reservation(uuid,uuid,numeric)'::regprocedure), 'proconfig: settle_budget_reservation has lock_timeout');
+select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.release_budget_reservation(uuid,uuid)'::regprocedure), 'proconfig: release_budget_reservation has lock_timeout');
+select ok((select 'lock_timeout=2s' = any (proconfig) from pg_proc where oid = 'public.record_rate_limit_attempt(text,integer,integer)'::regprocedure), 'proconfig: record_rate_limit_attempt has lock_timeout');
+select is(
+  (select count(*)::int from pg_proc p
+    where p.oid in ('public.settle_budget_reservation(uuid,uuid,numeric)'::regprocedure, 'public.release_budget_reservation(uuid,uuid)'::regprocedure, 'public.record_rate_limit_attempt(text,integer,integer)'::regprocedure)
+      and 'lock_timeout=2s' = any (p.proconfig) and 'search_path=""' = any (p.proconfig) and not p.prosecdef
+      and p.proowner = (select proowner from pg_proc where oid = 'public.reserve_request_budget(uuid,uuid,numeric,integer)'::regprocedure)),
+  3, 'proconfig: the three altered 004 functions keep an empty search_path, SECURITY INVOKER and their owner');
+select is(
+  (select count(*)::int from pg_proc p
+    where p.oid in ('public.settle_budget_reservation(uuid,uuid,numeric)'::regprocedure, 'public.release_budget_reservation(uuid,uuid)'::regprocedure, 'public.record_rate_limit_attempt(text,integer,integer)'::regprocedure)
+      and has_function_privilege('service_role', p.oid, 'EXECUTE')
+      and not has_function_privilege('anon', p.oid, 'EXECUTE') and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      and not exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee = 0)),
+  3, 'grants: the three altered 004 functions are still executable by service_role only');
 
 -- ===== grants: service_role only =====
 select ok(has_function_privilege('service_role', 'public.get_session_policy(text)', 'EXECUTE') and has_function_privilege('service_role', 'public.create_visitor_session(uuid,integer)', 'EXECUTE')

@@ -21,6 +21,9 @@ import type { VisitorContext } from './auth.js';
 const IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
 
+/** Retry hint (seconds) on the 409 sent while the first request with the same key is still running. */
+export const RUN_IN_PROGRESS_RETRY_AFTER_SECONDS = 2;
+
 /** States a run can move to through finishRun. Anything else is refused before the database. */
 export type TerminalRunState = 'succeeded' | 'failed' | 'partial';
 const TERMINAL_STATES: ReadonlySet<string> = new Set(['succeeded', 'failed', 'partial']);
@@ -73,7 +76,8 @@ const runRowSchema = z.object({
 export interface Runs {
   /**
    * Starts a run for this visitor. Throws AppError: INVALID_REQUEST (400) for a bad key or a hash
-   * mismatch, INVALID_REQUEST (409) while the first request with this key is still running,
+   * mismatch, INVALID_REQUEST (409, with a retry hint) while the first request with this key is
+   * still running, FORBIDDEN (403) when the bot is disabled (RB039),
    * RATE_LIMITED (429) when the session is at its concurrency cap, INTERNAL_ERROR for a malformed
    * database answer.
    */
@@ -116,7 +120,11 @@ export function createRuns(options: CreateRunsOptions): Runs {
     const row = parsed.data;
     if (!TERMINAL_STATES.has(row.run_state)) {
       // The first request is still being answered: the client must wait, not retry blindly.
-      throw new AppError('INVALID_REQUEST', { httpStatus: 409, internalName: 'run_in_progress' });
+      throw new AppError('INVALID_REQUEST', {
+        httpStatus: 409,
+        retryAfterSeconds: RUN_IN_PROGRESS_RETRY_AFTER_SECONDS,
+        internalName: 'run_in_progress',
+      });
     }
     const response = idempotentReplayResponseSchema.safeParse({
       request_id: runId,

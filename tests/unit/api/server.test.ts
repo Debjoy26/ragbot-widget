@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { AppError } from '../../../api/src/lib/errors.ts';
-import { buildServer } from '../../../api/src/server.ts';
-import { appWithCapture, fakeDb, testConfig } from './helpers.ts';
+import { appWithCapture, fakeDb, testConfig, buildTestServer } from './helpers.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ORIGIN = 'https://client.example.com';
@@ -14,7 +13,10 @@ afterEach(async () => {
 });
 
 function server(overrides: Record<string, string | undefined> = {}) {
-  app = buildServer({ config: testConfig({ LOG_LEVEL: 'silent', ...overrides }), db: fakeDb() });
+  app = buildTestServer({
+    config: testConfig({ LOG_LEVEL: 'silent', ...overrides }),
+    db: fakeDb(),
+  });
   return app;
 }
 
@@ -261,9 +263,10 @@ describe('error handler', () => {
   });
 
   it.each([
-    // P4-D1: only these two are visitor-facing; every other state is a server fault here.
+    // P4-D1, P5-D1: only these three are visitor-facing; every other state is a server fault here.
     ['RB001', 'BUDGET_EXCEEDED', 429, 'budget_exceeded'],
     ['RB004', 'INVALID_REQUEST', 400, 'request_conflict'],
+    ['RB039', 'FORBIDDEN', 403, 'bot_disabled'],
     ['RB034', 'INTERNAL_ERROR', 500, 'quota_exceeded'],
     ['RB033', 'INTERNAL_ERROR', 500, 'forbidden'],
     ['42501', 'INTERNAL_ERROR', 500, 'permission_denied'],
@@ -415,7 +418,7 @@ describe('health', () => {
   });
 
   function ready(ping: (s: AbortSignal) => Promise<boolean>) {
-    app = buildServer({
+    app = buildTestServer({
       config: testConfig({ LOG_LEVEL: 'silent', READY_TIMEOUT_MS: '100' }),
       db: fakeDb(ping),
     });

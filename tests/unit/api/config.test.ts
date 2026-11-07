@@ -57,6 +57,53 @@ describe('loadConfig', () => {
     expect(config.rateLimitKeySecret).toBe(FAKE_RATE_KEY);
   });
 
+  it('reads the session preflight limit and window', () => {
+    const config = loadConfig(
+      validEnv({ SESSION_PREFLIGHT_PER_IP_LIMIT: '7', SESSION_PREFLIGHT_WINDOW_SECONDS: '120' }),
+    );
+    expect(config.sessionPreflightPerIpLimit).toBe(7);
+    expect(config.sessionPreflightWindowSeconds).toBe(120);
+  });
+
+  it('accepts the edges of VISITOR_TOKEN_TTL_SECONDS (60 and 86400, as the database requires)', () => {
+    expect(loadConfig(validEnv({ VISITOR_TOKEN_TTL_SECONDS: '60' })).visitorTokenTtlSeconds).toBe(
+      60,
+    );
+    expect(
+      loadConfig(validEnv({ VISITOR_TOKEN_TTL_SECONDS: '86400' })).visitorTokenTtlSeconds,
+    ).toBe(86_400);
+  });
+
+  it('accepts the edges of the preflight bounds', () => {
+    const config = loadConfig(
+      validEnv({
+        SESSION_PREFLIGHT_PER_IP_LIMIT: '1000000',
+        SESSION_PREFLIGHT_WINDOW_SECONDS: '86400',
+      }),
+    );
+    expect(config.sessionPreflightPerIpLimit).toBe(1_000_000);
+    expect(config.sessionPreflightWindowSeconds).toBe(86_400);
+  });
+
+  describe("Cloudflare's published Turnstile test secrets (S-4)", () => {
+    // Assembled from parts so the secret scanner does not flag this file.
+    const testSecrets = ['1x', '2x', '3x'].map((p) => [p, '0'.repeat(31), 'AA'].join(''));
+
+    it.each(testSecrets.map((s, i) => [`variant ${String(i + 1)}`, s] as const))(
+      'refuses %s, naming the variable only',
+      (_label, value) => {
+        const err = failure({ TURNSTILE_SECRET_KEY: value });
+        expect(err.variables).toEqual(['TURNSTILE_SECRET_KEY']);
+        expect(`${err.message} ${String(err.stack)}`).not.toContain(value);
+      },
+    );
+
+    it('accepts a value that only looks similar', () => {
+      const near = ['1x', '0'.repeat(31), 'AB'].join('');
+      expect(loadConfig(validEnv({ TURNSTILE_SECRET_KEY: near })).turnstileSecretKey).toBe(near);
+    });
+  });
+
   it('accepts TRUSTED_PROXY_HOPS = 0', () => {
     expect(loadConfig(validEnv({ TRUSTED_PROXY_HOPS: '0' })).trustedProxyHops).toBe(0);
   });
@@ -77,6 +124,8 @@ describe('loadConfig', () => {
     'READY_TIMEOUT_MS',
     'DB_TIMEOUT_MS',
     'VISITOR_TOKEN_TTL_SECONDS',
+    'SESSION_PREFLIGHT_PER_IP_LIMIT',
+    'SESSION_PREFLIGHT_WINDOW_SECONDS',
     'TURNSTILE_TIMEOUT_MS',
     'CHAT_DEADLINE_MS',
     'PROVIDER_MAX_ATTEMPTS',
@@ -135,6 +184,17 @@ describe('loadConfig', () => {
     ['READY_TIMEOUT_MS', 'soon'],
     ['DB_TIMEOUT_MS', 'soon'],
     ['VISITOR_TOKEN_TTL_SECONDS', '0'],
+    ['VISITOR_TOKEN_TTL_SECONDS', '59'],
+    ['VISITOR_TOKEN_TTL_SECONDS', '86401'],
+    ['SESSION_PREFLIGHT_PER_IP_LIMIT', '0'],
+    ['SESSION_PREFLIGHT_PER_IP_LIMIT', '1000001'],
+    ['SESSION_PREFLIGHT_PER_IP_LIMIT', 'lots'],
+    ['SESSION_PREFLIGHT_PER_IP_LIMIT', '1.5'],
+    ['SESSION_PREFLIGHT_PER_IP_LIMIT', '<attempts>'],
+    ['SESSION_PREFLIGHT_WINDOW_SECONDS', '0'],
+    ['SESSION_PREFLIGHT_WINDOW_SECONDS', '86401'],
+    ['SESSION_PREFLIGHT_WINDOW_SECONDS', 'soon'],
+    ['SESSION_PREFLIGHT_WINDOW_SECONDS', '<seconds-1-to-86400>'],
     ['CHAT_DEADLINE_MS', '99999999999'],
     ['PROVIDER_MAX_ATTEMPTS', '0'],
     ['PROVIDER_MAX_ATTEMPTS', '11'],

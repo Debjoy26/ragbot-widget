@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { AppError } from '../../../api/src/lib/errors.ts';
+import { AppError, toAppError } from '../../../api/src/lib/errors.ts';
 import { DbError } from '../../../api/src/lib/supabase.ts';
 import {
   createRuns,
   isCanonicalIdempotencyKey,
   requestHash,
+  RUN_IN_PROGRESS_RETRY_AFTER_SECONDS,
 } from '../../../api/src/services/runs.ts';
 
 // FAKE db: answers from a script. No network, no database.
@@ -168,6 +169,7 @@ describe('beginRun outcomes', () => {
       const err = await appError(runs.beginRun(visitor, KEY, HASH));
       expect(err.code).toBe('INVALID_REQUEST');
       expect(err.httpStatus).toBe(409);
+      expect(err.retryAfterSeconds).toBe(RUN_IN_PROGRESS_RETRY_AFTER_SECONDS);
     },
   );
 
@@ -177,6 +179,24 @@ describe('beginRun outcomes', () => {
     expect(err.code).toBe('UNAUTHORIZED');
     const other = fake(() => new DbError('http', 400, 'RB002'));
     await expect(other.runs.beginRun(visitor, KEY, HASH)).rejects.toBeInstanceOf(DbError);
+  });
+
+  it('the in-progress retry hint is a small positive named constant', () => {
+    expect(RUN_IN_PROGRESS_RETRY_AFTER_SECONDS).toBeGreaterThanOrEqual(1);
+    expect(RUN_IN_PROGRESS_RETRY_AFTER_SECONDS).toBeLessThanOrEqual(10);
+  });
+
+  it('a disabled bot (RB039) from begin_request_run reaches a 403 FORBIDDEN, not a 500', async () => {
+    const { runs } = fake(() => new DbError('http', 400, 'RB039'));
+    const err = await runs.beginRun(visitor, KEY, HASH).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DbError);
+    expect(toAppError(err)).toMatchObject({ code: 'FORBIDDEN', httpStatus: 403 });
+  });
+
+  it('RB004 from begin_request_run stays UNAUTHORIZED (the visitor session is not valid)', async () => {
+    const { runs } = fake(() => new DbError('http', 400, 'RB004'));
+    const err = await appError(runs.beginRun(visitor, KEY, HASH));
+    expect(err).toMatchObject({ code: 'UNAUTHORIZED', httpStatus: 401 });
   });
 
   it('hash_mismatch is INVALID_REQUEST with HTTP 400', async () => {

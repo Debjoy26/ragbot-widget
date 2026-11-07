@@ -1,7 +1,8 @@
 // Cloudflare Turnstile server-side verification (ADR 0010, TECH_SPECS section 8). P5-B.
 //
 // Fail closed: the answer is `true` only when Cloudflare replied 200 with a JSON object whose
-// `success` is exactly `true`. A timeout, network error, redirect, non-200, oversized or malformed
+// `success` is exactly `true`, whose `hostname` is one of the allowed hosts and whose `action` is
+// the one the widget requests (a token minted for another site or another action is refused). A timeout, network error, redirect, non-200, oversized or malformed
 // body, or anything else is `false`. The token and the secret are never logged and never placed in
 // an error: this module does not log at all.
 
@@ -14,6 +15,9 @@ export const TURNSTILE_SITEVERIFY_URL = 'https://challenges.cloudflare.com/turns
 const MAX_RESPONSE_CHARS = 16_384;
 const MAX_TOKEN_CHARS = 4096;
 
+/** The Turnstile action of a session-create challenge. Sent on verification and required back. */
+export const TURNSTILE_SESSION_ACTION = 'session_create';
+
 export interface TurnstileVerifier {
   /** True only for an explicit `success: true`. Never throws. */
   verify(token: string, clientIp: string): Promise<boolean>;
@@ -22,16 +26,31 @@ export interface TurnstileVerifier {
 export interface CreateTurnstileVerifierOptions {
   /** Turnstile secret key. Required. */
   secret: string;
+  /**
+   * Hostnames (no scheme or port) a valid challenge may report, derived from ALLOWED_ORIGINS.
+   * Required and non-empty: with none, every challenge would be refused.
+   */
+  allowedHostnames: readonly string[];
   /** Bound on the whole call, in milliseconds. A positive integer; required, no default. */
   timeoutMs: number;
   /** Injected for tests only (a labelled fake). Defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 }
 
+const lower = (s: string): string => s.toLowerCase();
+
 export function createTurnstileVerifier(
   options: CreateTurnstileVerifierOptions,
 ): TurnstileVerifier {
   const { secret, timeoutMs } = options;
+  const hostnames = new Set(
+    Array.isArray(options.allowedHostnames)
+      ? options.allowedHostnames.filter((h) => typeof h === 'string' && h !== '').map(lower)
+      : [],
+  );
+  if (hostnames.size === 0) {
+    throw new TypeError('turnstile allowed hostnames are required');
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
   if (typeof secret !== 'string' || secret.length === 0) {
     throw new TypeError('turnstile secret is required');
@@ -46,7 +65,11 @@ export function createTurnstileVerifier(
         return false;
       }
       try {
-        const form = new URLSearchParams({ secret, response: token });
+        const form = new URLSearchParams({
+          secret,
+          response: token,
+          action: TURNSTILE_SESSION_ACTION,
+        });
         // The address is optional for Cloudflare; a hint we could not determine is left out.
         if (typeof clientIp === 'string' && clientIp !== '' && clientIp !== UNKNOWN_IP) {
           form.set('remoteip', clientIp);
@@ -68,11 +91,13 @@ export function createTurnstileVerifier(
         const text = await res.text();
         if (text.length === 0 || text.length > MAX_RESPONSE_CHARS) return false;
         const body: unknown = JSON.parse(text);
+        if (typeof body !== 'object' || body === null || Array.isArray(body)) return false;
+        const { success, hostname, action } = body as Record<string, unknown>;
         return (
-          typeof body === 'object' &&
-          body !== null &&
-          !Array.isArray(body) &&
-          (body as { success?: unknown }).success === true
+          success === true &&
+          typeof hostname === 'string' &&
+          hostnames.has(lower(hostname)) &&
+          action === TURNSTILE_SESSION_ACTION
         );
       } catch {
         return false;

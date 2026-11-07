@@ -1,14 +1,15 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { AppError } from '../../../api/src/lib/errors.ts';
+import { AppError, toAppError } from '../../../api/src/lib/errors.ts';
 import { DbError } from '../../../api/src/lib/supabase.ts';
-import { createLimits, type Limits } from '../../../api/src/services/limits.ts';
+import { createLimits, rateRuleSchema, type Limits } from '../../../api/src/services/limits.ts';
 
 // FAKE db: records rpc calls and answers from a script. No network, no database.
 const SECRET = randomBytes(32).toString('hex');
 const BOT = randomUUID();
 const SESSION = randomUUID();
 const NOW = Date.parse('2026-11-07T12:00:10.000Z');
+const PREFLIGHT = { limit: 30, window_seconds: 600 };
 
 interface Rpc {
   name: string;
@@ -34,7 +35,12 @@ function fake(answer: (rpc: Rpc) => unknown) {
       },
     ),
   };
-  const limits: Limits = createLimits({ db: db as never, rateKeySecret: SECRET, now: () => NOW });
+  const limits: Limits = createLimits({
+    db: db as never,
+    rateKeySecret: SECRET,
+    sessionPreflight: PREFLIGHT,
+    now: () => NOW,
+  });
   return { limits, calls };
 }
 
@@ -133,6 +139,112 @@ describe('consumeSessionCreate', () => {
   });
 });
 
+describe('consumeSessionPreflight', () => {
+  it('counts one hashed attempt with the configured limit and window, IP bucket only', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeSessionPreflight('203.0.113.9');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('record_rate_limit_attempt');
+    expect(calls[0]?.args).toMatchObject({ p_window_seconds: 600, p_limit: 30 });
+    expect(String(calls[0]?.args['p_key_hash'])).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(calls[0]?.args)).not.toContain('203.0.113.9');
+  });
+
+  it('is bot-independent: the key does not change with a bot, and differs from the per-bot keys', async () => {
+    const { limits, calls } = fake(() => row(true));
+    const policy = { session_limit: 10, session_window_seconds: 3600 };
+    await limits.consumeSessionPreflight('203.0.113.9');
+    await limits.consumeSessionPreflight('203.0.113.9');
+    await limits.consumeSessionCreate(BOT, '203.0.113.9', policy);
+    await limits.consumeSessionPreflight('203.0.113.10');
+    const keys = calls.map((c) => c.args['p_key_hash']);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).not.toBe(keys[0]);
+  });
+
+  it('shares one key for one IPv6 /64', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeSessionPreflight('2001:db8:1:2::1');
+    await limits.consumeSessionPreflight('2001:db8:1:2:ffff::9');
+    expect(calls[0]?.args['p_key_hash']).toBe(calls[1]?.args['p_key_hash']);
+  });
+
+  it('refuses with RATE_LIMITED and a retry hint when over the limit', async () => {
+    const { limits } = fake(() => row(false, '2026-11-07T12:00:40.000Z'));
+    const err = await appError(limits.consumeSessionPreflight('203.0.113.9'));
+    expect(err.code).toBe('RATE_LIMITED');
+    expect(err.retryAfterSeconds).toBe(30);
+  });
+
+  it('a malformed counter answer is INTERNAL_ERROR, never a pass', async () => {
+    const { limits } = fake(() => [{}]);
+    expect((await appError(limits.consumeSessionPreflight('1.2.3.4'))).code).toBe('INTERNAL_ERROR');
+  });
+});
+
+describe('consumeSessionCreateBot', () => {
+  const policy = { bot_session_limit: 500, bot_session_window_seconds: 86_400 };
+
+  it('counts one hashed attempt per bot with the aggregate policy', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeSessionCreateBot(BOT, policy);
+    expect(calls[0]?.args).toMatchObject({ p_window_seconds: 86_400, p_limit: 500 });
+    expect(String(calls[0]?.args['p_key_hash'])).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls[0]?.opts).toEqual({ retryOnContention: true });
+  });
+
+  it('is one key per bot, whatever the caller, and distinct from the per-IP key of the bot', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeSessionCreateBot(BOT, policy);
+    await limits.consumeSessionCreateBot(BOT, policy);
+    await limits.consumeSessionCreateBot(randomUUID(), policy);
+    await limits.consumeSessionCreate(BOT, '203.0.113.9', {
+      session_limit: 10,
+      session_window_seconds: 3600,
+    });
+    const keys = calls.map((c) => c.args['p_key_hash']);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).not.toBe(keys[0]);
+  });
+
+  it('refuses with RATE_LIMITED and a retry hint', async () => {
+    const { limits } = fake(() => row(false, '2026-11-07T12:00:40.000Z'));
+    const err = await appError(limits.consumeSessionCreateBot(BOT, policy));
+    expect(err.code).toBe('RATE_LIMITED');
+    expect(err.retryAfterSeconds).toBe(30);
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { bot_session_limit: 0, bot_session_window_seconds: 60 },
+    { bot_session_limit: 5 },
+    { bot_session_window_seconds: 60 },
+    { bot_session_limit: null, bot_session_window_seconds: null },
+    { bot_session_limit: 5, bot_session_window_seconds: 100000 },
+    { bot_session_limit: 1_000_000_000, bot_session_window_seconds: 60 },
+    { bot_session_limit: '5', bot_session_window_seconds: 60 },
+    { session_limit: 5, session_window_seconds: 60 },
+  ])('fails closed as INTERNAL_ERROR, without counting, for policy %j', async (bad) => {
+    const { limits, calls } = fake(() => row(true));
+    const err = await appError(limits.consumeSessionCreateBot(BOT, bad));
+    expect(err.code).toBe('INTERNAL_ERROR');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('accepts the SQL upper bound for a limit', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeSessionCreateBot(BOT, {
+      bot_session_limit: 999_999_999,
+      bot_session_window_seconds: 60,
+    });
+    expect(calls[0]?.args['p_limit']).toBe(999_999_999);
+  });
+});
+
 describe('consumeMessage', () => {
   it('checks the session first, then the IP bucket', async () => {
     const { limits, calls } = fake(() => row(true));
@@ -217,6 +329,27 @@ describe('reserve, settle, release', () => {
     });
   });
 
+  it('a disabled bot (RB039) reaches the caller as the DbError the handler maps to FORBIDDEN', async () => {
+    const { limits } = fake(() => new DbError('http', 400, 'RB039'));
+    const err = await limits.reserve(BOT, RUN, 1, 60).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DbError);
+    expect(toAppError(err)).toMatchObject({ code: 'FORBIDDEN', httpStatus: 403 });
+  });
+
+  it('RB004 (run not found, not live or reservation not reusable) is INTERNAL_ERROR, not a caller fault', async () => {
+    const { limits } = fake(() => new DbError('http', 400, 'RB004'));
+    const err = await appError(limits.reserve(BOT, RUN, 1, 60));
+    expect(err.code).toBe('INTERNAL_ERROR');
+    expect(err.httpStatus).toBe(500);
+    expect(err.internalName).toBe('reserve_run_not_active');
+  });
+
+  it('other database errors still reach the caller unchanged', async () => {
+    const { limits } = fake(() => new DbError('http', 400, 'RB002'));
+    const err = await limits.reserve(BOT, RUN, 1, 60).catch((e: unknown) => e);
+    expect((err as DbError).sqlstate).toBe('RB002');
+  });
+
   it('a budget refusal (RB001) reaches the caller as the DbError the handler maps', async () => {
     const { limits } = fake(() => new DbError('http', 400, 'RB001'));
     const err = await limits.reserve(BOT, RUN, 1, 60).catch((e: unknown) => e);
@@ -259,7 +392,32 @@ describe('reserve, settle, release', () => {
 describe('createLimits', () => {
   it('refuses an unusable secret at construction', () => {
     const db = { rpc: vi.fn() } as never;
-    expect(() => createLimits({ db, rateKeySecret: '' })).toThrow(TypeError);
-    expect(() => createLimits({ db, rateKeySecret: 'short' })).toThrow(TypeError);
+    expect(() => createLimits({ db, rateKeySecret: '', sessionPreflight: PREFLIGHT })).toThrow(
+      TypeError,
+    );
+    expect(() => createLimits({ db, rateKeySecret: 'short', sessionPreflight: PREFLIGHT })).toThrow(
+      TypeError,
+    );
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['zero limit', { limit: 0, window_seconds: 60 }],
+    ['no window', { limit: 5 }],
+    ['window too long', { limit: 5, window_seconds: 86_401 }],
+    ['limit past the SQL bound', { limit: 1_000_000_000, window_seconds: 60 }],
+    ['string limit', { limit: '5', window_seconds: 60 }],
+  ])('refuses a preflight rule that is %s at construction (no default)', (_label, rule) => {
+    const db = { rpc: vi.fn() } as never;
+    expect(() =>
+      createLimits({ db, rateKeySecret: SECRET, sessionPreflight: rule as never }),
+    ).toThrow(TypeError);
+  });
+
+  it('rateRuleSchema accepts a limit of 999999999 and refuses 1000000000', () => {
+    expect(rateRuleSchema.safeParse({ limit: 999_999_999, window_seconds: 1 }).success).toBe(true);
+    expect(rateRuleSchema.safeParse({ limit: 1_000_000_000, window_seconds: 1 }).success).toBe(
+      false,
+    );
   });
 });

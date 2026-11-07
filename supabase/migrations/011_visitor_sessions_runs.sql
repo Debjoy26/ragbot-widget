@@ -1,28 +1,50 @@
 -- 011: P5 data layer for the visitor API (ADR 0007, 0010; status 3a items ae, am, az, bf).
 -- Forward-only: 001-010 are never edited. Everything here is SECURITY INVOKER with an empty search_path,
--- EXECUTE for service_role only (the API role). Every function sets lock_timeout = '2s', so a stuck
--- lock fails the request with 55P03 instead of holding a pooled connection (bf, az).
+-- EXECUTE for service_role only (the API role). Every function created or replaced here sets
+-- lock_timeout = '2s', and so do the three 004 functions the API also calls (settle_budget_reservation,
+-- release_budget_reservation, record_rate_limit_attempt; altered at the end, owner, grants and search_path
+-- unchanged), so a stuck lock fails the request with 55P03 instead of holding a pooled connection (bf, az).
 -- New SQLSTATE (contract): RB039 bot_disabled. Existing: RB036 policy_missing (session policy absent or
 -- invalid), 22023 bad argument, 23514 forbidden run-state move (007 trigger).
 --
 -- Disabled-bot rule: a bot that is disabled or switched off during a request must not start new work.
 -- The functions that start work (create_visitor_session, begin_request_run, reserve_request_budget) read
 -- bot_profiles.enabled with FOR SHARE, which conflicts with the UPDATE that admin_set_bot_enabled runs.
--- So a start either sees the bot disabled, or finishes before the disable commits. Lock order is always
--- bot_profiles, then visitor_sessions or client_settings, then request_runs (the order admin writers use).
+-- So a start either sees the bot disabled, or finishes before the disable commits.
 -- A bot that does not exist keeps each function's earlier outcome (RB004 or RB002); only a disabled bot
 -- raises RB039. Finishing work already started (set_request_run_state, settle, release) is not blocked.
+--
+-- LOCK ORDER (every writer, in this order, never the reverse):
+--   1. bot_profiles row  (FOR SHARE for starts; UPDATE or FOR NO KEY UPDATE for corpus_version, enabled, settings_version)
+--   2. visitor_sessions row (begin_request_run) or client_settings row (reserve, settle, release)
+--   3. request_runs row
+-- The AFTER UPDATE trigger on client_settings (008) updates bot_profiles, so a direct client_settings
+-- UPDATE takes lock 2 and then lock 1. OPERATOR RULE: when editing client_settings by hand, lock the bot row
+-- first (select 1 from public.bot_profiles where id = ... for no key update;) in the same transaction, or a
+-- start running at the same moment can deadlock with the edit (40P01, one side is rolled back) or time out
+-- (55P03). scripts/race-db.sh exercises both outcomes; neither hangs.
 
 -- ---------------------------------------------------------------------------
 -- get_session_policy: what POST /session needs before it creates anything. Unknown slug: no rows.
--- A disabled bot still returns its row (enabled = false), the API decides the answer.
+-- A DISABLED bot returns its row at once with enabled = false and every other column null, before any policy
+-- is read or validated: the API answers a disabled bot without caring whether its policy is complete, so a
+-- disabled bot never raises RB036. Only an enabled bot is validated:
 -- turnstile_required fails closed: only a JSON boolean false in feature_flags turns the check off (ADR 0010).
--- The per-IP session limit comes from rate_policy.session_create_per_ip and must be complete:
--- {"limit": positive integer, "window_seconds": 1..86400}. Anything else is RB036, and so is a bot with
--- no client_settings row.
+-- The per-IP and per-bot session limits come from rate_policy.session_create_per_ip and
+-- rate_policy.session_create_per_bot; each must be complete: {"limit": positive integer up to 999999999,
+-- "window_seconds": 1..86400}. Anything else (and a bot with no client_settings row) is RB036.
+-- Columns: session_limit/session_window_seconds = per IP; bot_session_limit/bot_session_window_seconds = per bot.
 -- ---------------------------------------------------------------------------
 create function public.get_session_policy(p_bot_slug text)
-returns table (bot_id uuid, enabled boolean, turnstile_required boolean, session_limit integer, session_window_seconds integer)
+returns table (
+  bot_id                   uuid,
+  enabled                  boolean,
+  turnstile_required       boolean,
+  session_limit            integer,
+  session_window_seconds   integer,
+  bot_session_limit        integer,
+  bot_session_window_seconds integer
+)
 language plpgsql
 stable
 set search_path = ''
@@ -30,13 +52,16 @@ set lock_timeout = '2s'
 as $$
 #variable_conflict use_column
 declare
-  v_bot_id  uuid;
-  v_enabled boolean;
-  v_rate    jsonb;
-  v_flags   jsonb;
-  v_pol     jsonb;
-  v_limit   text;
-  v_window  text;
+  v_bot_id   uuid;
+  v_enabled  boolean;
+  v_rate     jsonb;
+  v_flags    jsonb;
+  v_pol      jsonb;
+  v_limit    text;
+  v_window   text;
+  v_bot_pol  jsonb;
+  v_bot_limit  text;
+  v_bot_window text;
 begin
   if p_bot_slug is null or p_bot_slug = '' then
     raise exception 'get_session_policy: bot slug is required' using errcode = '22023';
@@ -44,6 +69,10 @@ begin
 
   select b.id, b.enabled into v_bot_id, v_enabled from public.bot_profiles b where b.slug = p_bot_slug;
   if not found then
+    return;
+  end if;
+  if not v_enabled then
+    return query select v_bot_id, false, null::boolean, null::integer, null::integer, null::integer, null::integer;
     return;
   end if;
 
@@ -65,10 +94,22 @@ begin
     raise exception 'get_session_policy: session_create_per_ip is missing or invalid' using errcode = 'RB036';
   end if;
 
+  v_bot_pol := v_rate -> 'session_create_per_bot';
+  if v_bot_pol is null or jsonb_typeof(v_bot_pol) <> 'object'
+     or jsonb_typeof(v_bot_pol -> 'limit') is distinct from 'number'
+     or jsonb_typeof(v_bot_pol -> 'window_seconds') is distinct from 'number' then
+    raise exception 'get_session_policy: session_create_per_bot is missing or invalid' using errcode = 'RB036';
+  end if;
+  v_bot_limit  := v_bot_pol ->> 'limit';
+  v_bot_window := v_bot_pol ->> 'window_seconds';
+  if v_bot_limit !~ '^[1-9][0-9]{0,8}$' or v_bot_window !~ '^[1-9][0-9]{0,5}$' or v_bot_window::integer > 86400 then
+    raise exception 'get_session_policy: session_create_per_bot is missing or invalid' using errcode = 'RB036';
+  end if;
+
   return query select v_bot_id, v_enabled,
     case when jsonb_typeof(v_flags -> 'turnstile_required') = 'boolean'
          then (v_flags ->> 'turnstile_required')::boolean else true end,
-    v_limit::integer, v_window::integer;
+    v_limit::integer, v_window::integer, v_bot_limit::integer, v_bot_window::integer;
 end;
 $$;
 
@@ -381,6 +422,14 @@ set lock_timeout = '2s'
 as $$
   select 11;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- lock_timeout for the three 004 functions the API calls. ALTER FUNCTION ... SET changes only this setting:
+-- the body, owner, grants and search_path = '' stay as 004 made them.
+-- ---------------------------------------------------------------------------
+alter function public.settle_budget_reservation(uuid, uuid, numeric) set lock_timeout = '2s';
+alter function public.release_budget_reservation(uuid, uuid) set lock_timeout = '2s';
+alter function public.record_rate_limit_attempt(text, integer, integer) set lock_timeout = '2s';
 
 -- ---------------------------------------------------------------------------
 -- EXECUTE: service_role only. Postgres grants EXECUTE to PUBLIC on new functions by default; revoke it.

@@ -27,5 +27,5 @@ Target: local stack (127.0.0.1:54322) · default; pass --remote for RagBot (rbej
 /home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/230_p35_final_fixes.test.sql ................ ok
 /home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/240_p5_sessions_runs.test.sql ............... ok
 All tests successful.
-Files=24, Tests=2614,  2 wallclock secs ( 0.23 usr  0.05 sys +  0.21 cusr  0.24 csys =  0.73 CPU)
+Files=24, Tests=2639,  3 wallclock secs ( 0.24 usr  0.04 sys +  0.18 cusr  0.27 csys =  0.73 CPU)
 Result: PASS

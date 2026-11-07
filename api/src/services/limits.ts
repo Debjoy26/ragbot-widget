@@ -10,14 +10,18 @@
 // committed (status section 3a bf), which is what separate RPC calls give.
 
 import { z } from 'zod';
-import type { Db } from '../lib/supabase.js';
+import { DbError, type Db } from '../lib/supabase.js';
 import { AppError } from '../lib/errors.js';
 import { ipBucket, rateKey } from '../lib/rate-key.js';
 import type { VisitorContext } from './auth.js';
 
-/** One counter rule: `limit` attempts per fixed window of `window_seconds`. Mirrors the SQL ranges. */
+/**
+ * One counter rule: `limit` attempts per fixed window of `window_seconds`. Ranges: the SQL
+ * policy checks accept a limit of 1..999999999, and `record_rate_limit_attempt` a window of
+ * 1..86400 seconds.
+ */
 export const rateRuleSchema = z.strictObject({
-  limit: z.int().min(1).max(999_999),
+  limit: z.int().min(1).max(999_999_999),
   window_seconds: z.int().min(1).max(86_400),
 });
 export type RateRule = z.output<typeof rateRuleSchema>;
@@ -29,12 +33,19 @@ export const messageRatePolicySchema = z.looseObject({
 });
 export type MessageRatePolicy = z.output<typeof messageRatePolicySchema>;
 
-/** Session-create limit from `get_session_policy`. */
+/** Per bot and IP bucket session-create limit from `get_session_policy`. */
 export const sessionCreatePolicySchema = z.object({
-  session_limit: z.int().min(1).max(999_999),
+  session_limit: z.int().min(1).max(999_999_999),
   session_window_seconds: z.int().min(1).max(86_400),
 });
 export type SessionCreatePolicy = z.output<typeof sessionCreatePolicySchema>;
+
+/** Per-bot aggregate session-create limit from `get_session_policy` (`rate_policy.session_create_per_bot`). */
+export const botSessionCreatePolicySchema = z.object({
+  bot_session_limit: z.int().min(1).max(999_999_999),
+  bot_session_window_seconds: z.int().min(1).max(86_400),
+});
+export type BotSessionCreatePolicy = z.output<typeof botSessionCreatePolicySchema>;
 
 const attemptRowSchema = z.object({
   request_count: z.int().min(0),
@@ -47,8 +58,16 @@ const uuidSchema = z.uuid();
 const MAX_RESERVATION_TTL_SECONDS = 86_400;
 
 export interface Limits {
+  /**
+   * Bot-independent per-IP-bucket limit on session creation (SESSION_PREFLIGHT_*), counted before
+   * the bot policy is read, so a caller cannot probe slugs or the database without bound. Throws
+   * RATE_LIMITED when over.
+   */
+  consumeSessionPreflight(ip: string): Promise<void>;
   /** Counts one session-create attempt for this bot and IP bucket. Throws RATE_LIMITED when over. */
   consumeSessionCreate(botId: string, ip: string, policy: unknown): Promise<void>;
+  /** Counts one session-create attempt against the bot's aggregate limit. Throws RATE_LIMITED when over. */
+  consumeSessionCreateBot(botId: string, policy: unknown): Promise<void>;
   /** The message rate policy of a bot, validated. Throws INTERNAL_ERROR when missing or invalid. */
   loadMessagePolicy(botId: string): Promise<MessageRatePolicy>;
   /**
@@ -66,6 +85,8 @@ export interface CreateLimitsOptions {
   db: Pick<Db, 'rpc'>;
   /** RATE_LIMIT_KEY_SECRET. */
   rateKeySecret: string;
+  /** SESSION_PREFLIGHT_PER_IP_LIMIT and SESSION_PREFLIGHT_WINDOW_SECONDS. Required, no default. */
+  sessionPreflight: RateRule;
   /** Clock in epoch milliseconds, for the retry-after hint. Injected for tests. */
   now?: () => number;
 }
@@ -75,6 +96,9 @@ const internal = (internalName: string): AppError =>
 
 export function createLimits(options: CreateLimitsOptions): Limits {
   const { db, rateKeySecret } = options;
+  const preflightRule = rateRuleSchema.safeParse(options.sessionPreflight);
+  if (!preflightRule.success) throw new TypeError('session preflight limit is required and valid');
+  const sessionPreflight = preflightRule.data;
   const now = options.now ?? Date.now;
   if (typeof rateKeySecret !== 'string' || rateKeySecret.length === 0) {
     throw new TypeError('rate limit key secret is required');
@@ -116,11 +140,23 @@ export function createLimits(options: CreateLimitsOptions): Limits {
   }
 
   return {
+    async consumeSessionPreflight(ip) {
+      await consume(rateKey(rateKeySecret, 'session_preflight', [ipBucket(ip)]), sessionPreflight);
+    },
+
     async consumeSessionCreate(botId, ip, policy) {
       const p = parsePolicy(sessionCreatePolicySchema, policy, 'session_policy_invalid');
       await consume(rateKey(rateKeySecret, 'session_create_ip', [botId, ipBucket(ip)]), {
         limit: p.session_limit,
         window_seconds: p.session_window_seconds,
+      });
+    },
+
+    async consumeSessionCreateBot(botId, policy) {
+      const p = parsePolicy(botSessionCreatePolicySchema, policy, 'session_policy_invalid');
+      await consume(rateKey(rateKeySecret, 'session_create_bot', [botId]), {
+        limit: p.bot_session_limit,
+        window_seconds: p.bot_session_window_seconds,
       });
     },
 
@@ -154,12 +190,23 @@ export function createLimits(options: CreateLimitsOptions): Limits {
       ) {
         throw new TypeError('ttl must be 1..86400 seconds');
       }
-      const id = await db.rpc<unknown>(
-        'reserve_request_budget',
-        { p_bot_id: botId, p_request_id: runId, p_amount: amount, p_ttl_seconds: ttlSeconds },
-        undefined,
-        { retryOnContention: true },
-      );
+      const id = await db
+        .rpc<unknown>(
+          'reserve_request_budget',
+          { p_bot_id: botId, p_request_id: runId, p_amount: amount, p_ttl_seconds: ttlSeconds },
+          undefined,
+          { retryOnContention: true },
+        )
+        .catch((err: unknown) => {
+          // RB004 here: the run does not exist for this bot, is no longer live, or its reservation
+          // cannot be reused. The caller has just created or held that run, so this is a state
+          // fault in this service, not a visitor error: INTERNAL_ERROR. (RB039, a disabled bot,
+          // and RB001, over budget, keep their own mapping in the error handler.)
+          if (err instanceof DbError && err.sqlstate === 'RB004') {
+            throw internal('reserve_run_not_active');
+          }
+          throw err;
+        });
       if (typeof id !== 'string' || !uuidSchema.safeParse(id).success) {
         throw internal('reservation_bad_id');
       }

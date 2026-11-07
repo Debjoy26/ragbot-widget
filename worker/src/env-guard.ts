@@ -11,7 +11,11 @@ export const WORKER_FORBIDDEN_ENV: readonly string[] = [
 ];
 
 /** Any variable whose name starts with one of these is also forbidden. */
-export const WORKER_FORBIDDEN_ENV_PREFIXES: readonly string[] = ['VISITOR_TOKEN_SECRET_'];
+export const WORKER_FORBIDDEN_ENV_PREFIXES: readonly string[] = [
+  'VISITOR_TOKEN_SECRET_',
+  'RATE_LIMIT_KEY_SECRET_',
+  'TURNSTILE_SECRET_KEY_',
+];
 
 function isForbidden(name: string): boolean {
   return (

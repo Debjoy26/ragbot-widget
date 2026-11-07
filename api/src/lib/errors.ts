@@ -58,7 +58,8 @@ export class AppError extends Error {
 }
 
 /**
- * Database error states that mean something to a visitor on a public route. Every other contract
+ * Database error states that mean something to a visitor on a public route (a budget refusal, a
+ * request conflict, a disabled bot). Every other contract
  * state (permission, policy, argument, activation and similar) is a fault in this service or its
  * database setup, not something the caller did, so it is INTERNAL_ERROR. The internal name is
  * still logged. Later admin routes that need the wider mapping must map it themselves.
@@ -67,6 +68,8 @@ function fromDbName(name: DbErrorName): AppError {
   const internalName = `db:${name}`;
   if (name === 'budget_exceeded') return new AppError('BUDGET_EXCEEDED', { internalName });
   if (name === 'request_conflict') return new AppError('INVALID_REQUEST', { internalName });
+  // A disabled bot is refused to the visitor exactly like an unknown one (ADR 0010).
+  if (name === 'bot_disabled') return new AppError('FORBIDDEN', { internalName });
   return new AppError(UNKNOWN_ERROR_CODE, { internalName });
 }
 

@@ -88,7 +88,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=30
+EXPECTED=35
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -427,6 +427,48 @@ run_order "session create in flight, second create" ""                      "$SE
 run_order "disable in flight, start"               "$CAP1"                  "$DISABLE"    "$BEGIN1"   "$V_DISABLE_FIRST" "" "RB039" yes
 run_order "start in flight, disable"               "$CAP1"                  "$BEGIN1"     "$DISABLE"  "$V_START_FIRST" ""  ""      yes
 run_order "run state in flight, second move"       "$RUN_ROW"               "$SET_FIRST"  "$SET_SECOND" "$V_SETSTATE" "" ""      yes
+
+# ---- P5-D1: starts against operator edits (lock order in the 011 header: bot, then session/settings, then run) ----
+# An operator edits client_settings directly (as the postgres role, not through an admin function). The AFTER UPDATE
+# trigger of 008 then updates bot_profiles, so the edit takes the settings lock and then the bot lock, while
+# reserve_request_budget takes the bot lock (FOR SHARE) and then the settings lock. Each ordering must end consistent,
+# and either side may lose cleanly with a deadlock (40P01) or a lock timeout (55P03); nothing may hang.
+OPERATOR="reset role;"
+OP_SETTINGS="$OPERATOR update public.client_settings set budget_policy = '{\"daily_cap_usd\": 50}' where bot_id = '$BOT';"
+V_OPSET="select case
+  when (select budget_policy ->> 'daily_cap_usd' from public.client_settings where bot_id = '$BOT') <> '50'
+    then 'VIOLATION: the settings edit was lost'
+  when (select count(*) from public.budget_reservations where bot_id = '$BOT' and request_id = '$RUN') > 1
+    then 'VIOLATION: more than one reservation for the run'
+  when exists (select 1 from public.budget_reservations where bot_id = '$BOT' and request_id = '$RUN' and (state <> 'reserved' or amount <> 1.0))
+    then 'VIOLATION: the reservation is not the plain reserved 1.0'
+  else 'CONSISTENT: edit applied, ' || (select count(*) from public.budget_reservations where bot_id = '$BOT') || ' reservation(s)' end"
+# An operator who does NOT follow the rule: locks the settings row, then touches the bot row. The start holds the bot
+# share lock and waits for settings: a true deadlock. One side is rolled back (40P01, found after deadlock_timeout, about 1 s,
+# so this ordering is not held to the 1.2 s overlap rule), or the start times out (55P03).
+OP_WRONG="$OPERATOR select 1 from public.client_settings where bot_id = '$BOT' for update; select pg_sleep(1.5); update public.bot_profiles set corpus_version = corpus_version + 1 where id = '$BOT';"
+V_OPWRONG="select case
+  when (select corpus_version from public.bot_profiles where id = '$BOT') = 1
+       and (select count(*) from public.budget_reservations where bot_id = '$BOT') = 0
+    then 'CONSISTENT: the operator edit won, the start was rolled back'
+  when (select corpus_version from public.bot_profiles where id = '$BOT') = 0
+       and (select count(*) from public.budget_reservations where bot_id = '$BOT') = 1
+    then 'CONSISTENT: the start won, the operator edit was rolled back'
+  else 'VIOLATION: corpus_version=' || (select corpus_version from public.bot_profiles where id = '$BOT') || ' reservations=' ||
+       (select count(*) from public.budget_reservations where bot_id = '$BOT') end"
+# A corpus_version bump (what activate_document_version does last) against begin_request_run. Both need the bot row
+# (the start FOR SHARE, the bump FOR NO KEY UPDATE), so they take turns; the bump is never lost and at most one run exists.
+BUMP="$OPERATOR update public.bot_profiles set corpus_version = corpus_version + 1 where id = '$BOT';"
+V_BUMP="select case
+  when (select corpus_version from public.bot_profiles where id = '$BOT') <> 1 then 'VIOLATION: the corpus_version bump was lost'
+  when (select count(*) from public.request_runs where visitor_session_id = '$SESS') > 1 then 'VIOLATION: more than one run'
+  else 'CONSISTENT: bump applied, ' || (select count(*) from public.request_runs where visitor_session_id = '$SESS') || ' run(s)' end"
+
+run_order "settings edit in flight, reserve"       "$RUN_ROW"               "$OP_SETTINGS" "$RESERVE"  "$V_OPSET" ""    "55P03 40P01" yes
+run_order "reserve in flight, settings edit"       "$RUN_ROW"               "$RESERVE"    "$OP_SETTINGS" "$V_OPSET" ""  "55P03 40P01" yes
+run_order "settings locked, reserve, bot edit"     "$RUN_ROW"               "$OP_WRONG"   "$RESERVE"  "$V_OPWRONG" "40P01 55P03" "40P01 55P03" no
+run_order "corpus bump in flight, start"           "$CAP1"                  "$BUMP"       "$BEGIN1"   "$V_BUMP"  ""    "55P03 40P01" yes
+run_order "start in flight, corpus bump"           "$CAP1"                  "$BEGIN1"     "$BUMP"     "$V_BUMP"  ""    "55P03 40P01" yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

@@ -422,7 +422,7 @@ describe('real sessions carry the right assurance level', () => {
     const forged = `${parts[0]}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${parts[2]}`;
     const r = await rpc(stack, forged, 'schema_version');
     expect(r.status).toBe(401);
-    expect(r.body).not.toBe(10);
+    expect(r.body).not.toBe(11);
   });
 });
 
