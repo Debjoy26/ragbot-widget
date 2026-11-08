@@ -1,7 +1,7 @@
 # Handover — ragbot_widget
 
 > For the engineer (or agent) picking up this project. Read this first, then `status.md` for current progress and `plan.md` for the build order.
-> Last updated: 2026-11-07.
+> Last updated: 2026-11-08.
 
 ---
 
@@ -19,10 +19,11 @@ This repo also owns the **shared backend** — Render API, Render worker, and th
 - **Debug cycle P3-D4 and security review P3-R5 (2026-11-05 to 2026-11-06; static review; Opus integrated and verified):** completes the P3-R4 findings and open R3 notes; outcomes in `status.md §3a` au–bh. **Migration 007 is local only, not applied to the remote dev project** (owner approval needed; §5 bb). P3-D4 committed as `e2a044e` on `main`; CI run 42086386622 success, all steps. Evidence: `docs/evidence/P3-D4/SUMMARY.md`.
 - **P0–P3 audit and live database check (2026-11-06; audits static, read-only and self-reported; live check read-only by Opus):** the remote differs from the repo only by migration 007 (not applied at that check). Docs baseline: ADRs 0001–0017, including ADR 0017 (admin panel direct to Supabase). Evidence: `docs/evidence/P3-AUD/SUMMARY.md`.
 - **P3-D5 and P3.5 built, tested and debugged (2026-11-06; P3.5 accepted by owner):** migrations 008–010 added (007 from P3-D4); migrations 007–010 were later applied to the remote dev project (see below). Admin RPC table in `DATABASE_SCHEMA.md` ("Admin RPCs"). P3.5 not accepted by owner. Final gates and evidence: `docs/evidence/P3-D5/SUMMARY.md`. Backlog outcome and status: `status.md §3b`.
-- **No chat routes, widget behaviour or provider adapters yet.** The P4 API foundation is on `main`, with health routes only; P5 session routes are on `main` too. P2 contracts and P3 migrations are on `main`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
+- **No chat routes, widget behaviour or chat provider adapters yet.** The P4 API foundation is on `main`, with health routes only; P5 session routes are on `main` too. P2 contracts and P3 migrations are on `main`. Shared contracts are in `shared/src`; migrations in `supabase/migrations`. The scaffold has workspaces `shared`/`api`/`worker`/`widget` with placeholder entry files, plus `supabase/config.toml` from `supabase init`. Node 24.22.2 is pinned and `nvm use` is required (§5 l).
 - **P4 API foundation (2026-11-06):** built, tested and debugged; merged to `main` with owner approval. Evidence: `docs/evidence/P4/SUMMARY.md`.
 - **P5 visitor sessions and abuse controls (2026-11-07):** built, tested and debugged; merged to `main` with owner approval; migration 011 applied to the hosted dev project. Evidence: `docs/evidence/P5/SUMMARY.md`, `docs/evidence/P5-remote/SUMMARY.md`.
-- **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **No provider adapters yet** (P6/P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
+- **P6 ingestion pipeline (2026-11-08):** built, tested and debugged on branch `phase/p6` @ `6a805e6`. **Not on `main`, not pushed. Migration 012 is local only; the hosted dev project is still at 011.** Owner has not accepted P6. Next step, pending owner approval: merge `phase/p6` to `main`, push, and apply 012 (`make db-plan PROJECT_REF=rbejeqwxyxtklehuzibv`, then `npx --no-install supabase db push --remote=rbejeqwxyxtklehuzibv --yes`). Then the post-push checks in `rules.md §5`, recorded in `docs/evidence/P6/post-push.md`. Evidence: `docs/evidence/P6/SUMMARY.md`. Open items: `status.md §3a` br.
+- **Provider config (ADR 0014):** each AI role is chosen from env vars (`<ROLE>_PROVIDER`, `<ROLE>_MODEL`, …) through a fail-closed loader and capability matrix in `shared/src/providers.ts`. Default is Gemini: `gemini-2.5-flash-lite` for chat, moderation classifier and analysis; `gemini-embedding-001` at 1536 dims for embeddings. Gemini is the only provider in use for now. **P6 adds embedding adapters in `worker/`** (gemini, openai, openai_compatible; on `phase/p6` only). No real provider calls were made in P6 (fake provider in tests), and **no chat adapters yet** (P7). Real Gemini calls were made 2026-11-04 (model list, and two `hello` embeddings returning 1536 dims). No client data.
 - Documents in the repo root:
 
 | File | What it is authoritative for |
@@ -94,7 +95,7 @@ Remaining open items (not done):
 - **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
 - **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
 - **q)** ~~Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).~~ Superseded by `v`.
-- **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
+- **r)** ~~Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).~~ Embedding adapters built in P6 on `phase/p6` (gemini, openai, openai_compatible; fake provider only, no real call made). Chat adapters, streaming and query embeddings remain for P7.
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
 - **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings PATCH cross-field validation must re-run on the merged config (P3.5, ADR 0017).
 - **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
@@ -107,7 +108,7 @@ Remaining open items (not done):
 - **ab)** Owner decisions resolved: **D-a** via ADR 0015 (MFA aal2 enforced in the DB). **D-b** via ADR 0016 (`data_entries` cascade with the conversation; confirmation open, ag). **D-c** via approved debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`).
 - **ac)** ~~Partly resolved in P3-D4: reaper races are covered in `scripts/race-db.sh` (also in CI). `begin_request_run`, `claim_jobs` and rate limit races remain open. Planned for P5/P6.~~ Resolved in P3-D5: 26 race orderings pass (`make db-race`). Remaining: same-job reserve and retry against a running worker; stale settle under load (`status.md §3a` bk).
 - **ad)** MFA: Supabase Auth TOTP must be enabled per client project, and admins must enrol. ~~Real GoTrue aal2 tokens are not tested (claims are forged in tests).~~ Partly resolved in P3-D5: real `aal2` sessions and TOTP tested locally (integration gate). Remote TOTP open (`status.md §3a` bj, §3b O-4). P9/P12.
-- **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle; schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P5/P6/P9.
+- **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle; ~~schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job.~~ Done in P6 on `phase/p6` (not yet on `main`): worker maintenance schedules these and `purge_expired_rate_limit_buckets`. P5/P6/P9.
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
 - **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P3.5, ADR 0017), management API, audit redaction, signed URLs. Documented for P5/P9.
@@ -144,7 +145,7 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
 2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
 3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. Next actions (summary of `status.md §7`): owner turns off public signup and checks TOTP in the dashboard; admin panel runs `contracts:sync`; ADR 0016 and the Gemini, fallback, cap, jurisdiction and retrieval items stay open; P6 only on owner go-ahead.
+4. Next actions (summary of `status.md §7`): owner approval for P6 (merge `phase/p6` to `main`, push, apply migration 012), then the post-push checks (`rules.md §5`); owner turns off public signup and checks TOTP in the dashboard; admin panel runs `contracts:sync`; ADR 0016 and the Gemini, fallback, cap, jurisdiction and retrieval items stay open; P7 only on owner go-ahead.
 5. Update `status.md` at the end of every working session.
 
 ## 8. Environment & access needed
@@ -186,3 +187,4 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-07 | Opus (P5) | Owner (P5 review; approve merge of `phase/p5` to `main`; migration 011 decision, `status.md §3a` bq) | P5 visitor sessions and abuse controls built, tested and debugged on `phase/p5`; not on `main`; awaiting owner approval. Final gates in `status.md §2`; race suite not re-run on the final tree. Evidence: `docs/evidence/P5/SUMMARY.md`. Open: `status.md §3a` ae, am, av, az, bp, bq. Docs updated by `haiku-docs` (P5-DOC1). |
 | 2026-11-07 | Owner | Opus (P6 on owner go-ahead) | P5 closed: migration 011 applied to the hosted dev project; `phase/p5` merged to `main`. |
 | 2026-11-07 | Owner | Opus (P6 on owner go-ahead) | P5 open items closed; follow-ups now sit in the P6, P8, P10, P11 and P12 sections of `plan.md`. |
+| 2026-11-08 | Opus (P6) | Owner (P6 acceptance; approve merge of `phase/p6` to `main`, push, and apply migration 012; `status.md §3a` br) | P6 ingestion pipeline built, tested and debugged on `phase/p6` @ `6a805e6`; not on `main`, not pushed; 012 local only (hosted at 011). Final gates in `status.md §2`; reviews static and self-reported. Evidence: `docs/evidence/P6/SUMMARY.md`. Docs updated by `haiku-docs`. |

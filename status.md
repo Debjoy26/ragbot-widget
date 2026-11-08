@@ -1,7 +1,7 @@
 # Status — ragbot_widget
 
-> Last updated: **2026-11-07**
-> Overall: **🟡 P0 to P5 approved by owner and on `main`. Migrations 001–011 applied to the hosted dev project (2026-11-07). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
+> Last updated: **2026-11-08**
+> Overall: **🟡 P0 to P5 approved by owner and on `main`. Migrations 001–011 applied to the hosted dev project (2026-11-07). P6 built on `phase/p6` @ `6a805e6`; not owner-accepted, not on `main`, not pushed; migration 012 local only (§3a br). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
 > Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
@@ -19,7 +19,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P3.5 | Admin data layer (ADR 0017) | ✅ | Accepted by owner 2026-11-06. On `main` and on the remote dev project (migrations 009, 010). Evidence: `docs/evidence/P3-D5/SUMMARY.md`, `docs/evidence/P3-D5-remote/SUMMARY.md`. Open: §3a bj to bm |
 | P4 | API foundation | ✅ | Merge approved by owner 2026-11-06; on `main`. Evidence `docs/evidence/P4/SUMMARY.md`. Open: §3a bn, bo |
 | P5 | Visitor sessions & abuse controls | ✅ | Approved by owner and merged to `main` 2026-11-07; migration 011 on the hosted dev project. Evidence `docs/evidence/P5/SUMMARY.md`, `docs/evidence/P5-remote/SUMMARY.md`. Open: §3a bp |
-| P6 | Ingestion pipeline (worker) | ⬜ | OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
+| P6 | Ingestion pipeline (worker) | 🟡 | Built, tested and debugged on `phase/p6` @ `6a805e6` (2026-11-08). Awaiting owner acceptance; merge to `main`, push and apply migration 012 (hosted at 011) need owner approval. Evidence `docs/evidence/P6/SUMMARY.md`. Open: §3a ae (cleanup part done), br. OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
 | P7 | Retrieval & chat | ⬜ | Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c) |
 | P7.5 | Caching & latency | ⬜ | D13 decided (ADR 0012); C7 answer cache off by default; schema additions go into P3 |
 | P8 | Widget | ⬜ | Markdown off (ADR 0008), sessionStorage + history endpoint (ADR 0009), feedback deferred (ADR 0011); UI_SCHEMA §3/§7 edits pending |
@@ -64,6 +64,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] P5 visitor sessions and abuse controls built, tested and debugged (2026-11-07; owner-approved; merged to `main` and pushed; migration 011 applied to the hosted dev project). Final gates (Opus runs on the merged tree; Node 24.22.2, Supabase CLI 3.0.0, local stack at migration 011): `npm run build` 0; `make db-local` and `make db-test` 0 (24 files, 2639 passed); `make db-lint` 0; `make test-make` 0 (116 passed); `npm run test:integration` 0 (612 passed); `npm test` 0 (1515 passed); `node scripts/api-smoke.mjs` 0 (35 passed); lint, format:check, typecheck 0; secret-scan self-test and scan 0, no hits; `make db-race` 0 (35 orderings, 0 problems, at `9847aac`, before P5-D2). The owner stopped the race suite before it finished, so it was **not re-run on the final tree**. Reviews P5-R1, R2, R3 are static and self-reported. Evidence: `docs/evidence/P5/SUMMARY.md`.
 
 - [x] P5 closed 2026-11-07: owner approved; migration 011 applied to the hosted dev project (schema matches local; advisors unchanged); `phase/p5` merged to `main`. Evidence: `docs/evidence/P5-remote/SUMMARY.md`
+- [x] P6 ingestion pipeline (worker) built, tested and debugged on `phase/p6` @ `6a805e6` (2026-11-08; not owner-accepted; not on `main`; not pushed; migration 012 local only). Gates on the final tree (`9790630` plus the working tree that became `6a805e6`; local stack at 012; Node 24.22.2; Opus runs): npm build, lint, format:check, typecheck exit 0; `make db-test` 25 files, 3065 passed; `make db-lint` 0; `make db-race` 47 orderings, 0 problems; `npm test` 47 files, 2155 passed; integration 13 files, 684 passed (fake provider, local stack); api-smoke 35 passed; `make test-make` 116 passed; secret scan no hits; local advisors no issues; compiled PDF child check passed; chunking probe 1–3 ms on 32,000-char inputs. New dependency: `pdfjs-dist` 6.4.299 (owner-approved, worker only). Reviews P6-R1 to R6 are static and self-reported. Evidence: `docs/evidence/P6/SUMMARY.md`. Open: §3a br
 
 ## 3. Open decisions (P0)
 
@@ -104,7 +105,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
 - **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
 - **q)** ~~Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).~~ Superseded by `v`.
-- **r)** Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).
+- **r)** ~~Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).~~ Embedding adapters built in P6 on `phase/p6` (gemini, openai, openai_compatible; fake provider only, no real call made). Chat adapters, streaming and query embeddings remain for P7.
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
 - **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings cross-field validation must re-run on the merged config (P3.5, ADR 0017).
 - **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
@@ -117,7 +118,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **ab)** Owner decisions resolved: **D-a** via ADR 0015 (MFA aal2 enforced in the DB). **D-b** via ADR 0016 (`data_entries` cascade with the conversation; confirmation open, §3a ag). **D-c** via approved debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`).
 - **ac)** ~~Partly resolved in P3-D4: reaper races are covered in `scripts/race-db.sh` (also in CI). `begin_request_run`, `claim_jobs` and rate limit races remain open. Planned for P5/P6.~~ Resolved in P3-D5: 26 race orderings pass (`make db-race`). Remaining: same-job reserve and retry against a running worker; stale settle under load (§3a bk).
 - **ad)** MFA: Supabase Auth TOTP must be enabled per client project, and admins must enrol. ~~Real GoTrue aal2 tokens are not tested (claims are forged in tests).~~ Partly resolved in P3-D5: real `aal2` sessions and TOTP tested locally (integration gate). Remote TOTP open (§3a bj, §3b O-4). P9/P12.
-- **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; ~~pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle~~ Done in P5. Cleanup scheduling stays open: schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P6/P9.
+- **ae)** API obligations from P3: set `messages.reply_to_message_id` on assistant inserts; ~~pass `token_version` to `begin_request_run`; use the 2-arg release and 3-arg settle~~ Done in P5. ~~Cleanup scheduling stays open: schedule `expire_stuck_request_runs`, `expire_visitor_sessions(batch, grace)`, `purge_expired_data_entries` and `purge_expired_caches` in the worker cleanup job. P6/P9.~~ Done in P6 on `phase/p6` (not yet on `main`): worker maintenance schedules these four and `purge_expired_rate_limit_buckets`.
 - **af)** P2 contract notes (item t) still open for P4 and later.
 - **ag)** Owner to confirm ADR 0016 (`data_entries` retention: cascade with the conversation). Accepted; confirmation still open.
 - **ah)** API-level matrix cells are not covered at DB level: field-level settings RPC (P3.5, ADR 0017), management API, audit redaction, signed URLs. Documented for P5/P9.
@@ -156,6 +157,18 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **bo)** Later-phase obligations from P4: see `plan.md` P4 section.
 - **bp)** ~~P5 not proven (`docs/evidence/P5/SUMMARY.md`): race suite not re-run on the final tree (owner stopped it); rule-following race ordering waits about 1.8 s against a 2 s lock timeout and may flake on a slow machine; Turnstile never called for real (fake verifier only), and the widget must render it with action `session_create` (not built yet); shared NAT: the per-IP preflight is shared across bots, so keep `SESSION_PREFLIGHT_PER_IP_LIMIT` well above the per-bot per-IP limit; a wrong `TRUSTED_PROXY_HOPS` puts everyone in one bucket, and measuring it on Render stays a P10 gate; `FOR SHARE` contention under load untested (P11); `rate_limit_buckets` grows under IPv6 rotation until P6 schedules `purge_expired_rate_limit_buckets`; the plan's `Db` insert, update and list methods were replaced by service-role RPCs (design deviation).~~ Closed 2026-11-07: race timing margins widened (waits 1.09–1.56 s against a 2 s lock timeout; one run, 36 orderings clean); Turnstile action moved to `shared`; shared-NAT trade-off and the RPC design recorded as design notes in `plan.md` P5; proxy hops handed to P10, load contention to P11, bucket purge to P6, real Turnstile verification to P8 and P12.
 - **bq)** ~~Migration 011 is not on the hosted dev project (still at 010). Applying it needs owner approval; run `get_advisors` after.~~ Done 2026-11-07: 011 applied, schema matches local, advisors unchanged.
+- **br)** P6 not proven (`docs/evidence/P6/SUMMARY.md`; static and self-reported where the evidence says so):
+  - Real provider calls: none made. Every embedding test uses the labelled fake. Retrieval quality on real documents open (§3a c, P11).
+  - The PDF child can still open network connections, because Node's permission model does not block them (`confinement-probe.txt`). Egress control needed at deployment (P10). WebAssembly not blocked.
+  - Known bounded under-counts, owner to accept (each at most one batch): a stale worker's usage written after the next attempt settled (P6-R6 #1); a failed usage write later settled by the sweep (P6-R5 #3); a billed batch whose process died before recording it (P6-R6 #2); an aborted multi-part Gemini call (P6-R5 #4; the evidence says the current batch size makes it unreachable); the same worker id re-claiming its own lease in-process (P6-R6 #3, hypothesis).
+  - Known over-counts, which fail closed: a network failure before sending counts its estimate (P6-R4 F5); recorded usage can count in two windows when timestamps overlap.
+  - Untested orderings: orphan sweep against a reserve that settles the same row (reasoned safe); a reserve with two or more unsettled earlier rows of one job; a sweep-expired row settled by its own job's next reserve.
+  - Disabled bots: indexing spend is allowed by design. Owner may confirm.
+  - `release_job_lease` gives back an attempt without a counter. Bounded by `max_attempts`.
+  - Code layout: the embedding adapter lives in `worker/`; P7 query embeddings will need to share it.
+  - F7 performance test guards regressions but did not fail on the old code (0.44 s old, 0.1 s new).
+  - Run order: `make db-test` after `make db-race` without a reset fails one 210 test. The suite runs reset, test, lint, then race.
+  - Hosted: migration 012 needs owner approval to apply; post-push checks (`rules.md §5`) follow.
 
 ### 3b. P3-D5 backlog
 
@@ -296,10 +309,11 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
-2. Admin panel runs `contracts:sync` (§3a bm).
-3. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
-4. P6 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae, ac, av, az, bf.
+1. P6 (`phase/p6` @ `6a805e6`): owner approval to merge to `main`, push, and apply migration 012 to the hosted dev project (§3a br). Command plan: `make db-plan PROJECT_REF=rbejeqwxyxtklehuzibv`, then `npx --no-install supabase db push --remote=rbejeqwxyxtklehuzibv --yes`. Then the post-push checks in `rules.md §5`, recorded in `docs/evidence/P6/post-push.md`.
+2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
+3. Admin panel runs `contracts:sync` (§3a bm).
+4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
+5. P7 only on owner go-ahead; obligations in `plan.md` P4 section and §3a ae (cleanup part done in P6), ac, av, az, bf.
 
 ## 8. Change log
 | Date | Change |
@@ -328,6 +342,7 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | 2026-11-07 | P5 visitor sessions and abuse controls built, tested and debugged on `phase/p5`; not on `main`; awaiting owner approval. Migration 011 local only, not on the hosted project. Final gates in §2; race suite not re-run on the final tree. Open: §3a ae, am, av, az, bp, bq. Evidence: `docs/evidence/P5/SUMMARY.md`. Docs updated by `haiku-docs` (P5-DOC1). |
 | 2026-11-07 | P5 closed: migration 011 applied to the hosted dev project; `phase/p5` merged to `main`. Recorded by Opus. |
 | 2026-11-07 | P5 open items closed (§3a bp): race timing fixed, Turnstile action in `shared`, decisions recorded, remaining items handed to P6, P8, P10, P11, P12. Full test suite not re-run, at the owner's instruction. Recorded by Opus. |
+| 2026-11-08 | P6 ingestion pipeline (worker) built, tested and debugged on `phase/p6` @ `6a805e6`. Not on `main`, not pushed; migration 012 local only (hosted at 011). Gates in §2; reviews P6-R1 to R6 static and self-reported. Owner acceptance, merge, push and 012 apply pending (§7 item 1). Open: §3a br; §3a ae cleanup part done. Evidence: `docs/evidence/P6/SUMMARY.md`. Recorded by Opus. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
@@ -346,3 +361,4 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 - 2026-11-06 (P3-D5, P3.5, P3-DOC9): `sonnet-implementer` ×8 more (P3-D5-T1 to T3, P3.5-T1 to T3, P35-D1-A, B; configured `claude-sonnet-5-5`). `security-reviewer` ×2 more (P3.5-R1, R3; configured `claude-sonnet-5-5`). `reviewer` ×1 more (P3.5-R2; configured `claude-sonnet-5-5`). `haiku-docs` ×1 more (P3-DOC9; configured `claude-haiku-5-5`). Actual model resolution not observable; self-reports **unverified**; results verified by Opus reruns.
 - 2026-11-06 (P4, P4-DOC1): `sonnet-implementer` ×5 more (P4-T1, T2, D1, D2, D3; configured `claude-sonnet-5-5`). `security-reviewer` ×2 more (P4-R1, R3). `reviewer` ×1 more (P4-R2). `haiku-docs` ×1 more (P4-DOC1; configured `claude-haiku-5-5`). Actual model resolution not observable; self-reports **unverified**; results verified by Opus reruns.
 - 2026-11-07 (P5, P5-DOC1): `sonnet-implementer` ×5 more (P5-A, P5-B, P5-D1-A, P5-D1-B, P5-D2; configured `claude-sonnet-5-5`). `security-reviewer` ×2 more (P5-R1, R3). `reviewer` ×1 more (P5-R2). `haiku-docs` ×1 more (P5-DOC1; configured `claude-haiku-5-5`). Actual model resolution not observable; self-reports **unverified**; results verified by Opus reruns except where the evidence says otherwise.
+- 2026-11-08 (P6, this checkpoint): `sonnet-implementer` runs for wave 1, wave 2, P6-D1, P6-D2 (three), P6-D3 (two), P6-D4 and P6-D5 (two); configured `claude-sonnet-5-5`. One run stopped on a usage limit and was resumed after the limit reset. `security-reviewer` for P6-R1, R3, R4, R5 and R6 and `reviewer` for P6-R2 (configured `claude-sonnet-5-5`; static). `haiku-docs` for this checkpoint (configured `claude-haiku-5-5`). Actual model resolution not observable; self-reports **unverified**; gates rerun by Opus.

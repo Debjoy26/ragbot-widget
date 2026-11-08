@@ -17,7 +17,7 @@ Read `status.md`, `handover.md` and the active `plan.md` phase section; inspect 
 ## Sub-agents (`.claude/agents/`)
 | Agent | Model (pinned) | Tools | Use |
 |---|---|---|---|
-| `sonnet-implementer` | `claude-sonnet-5-5` | Read, Write, Edit, Glob, Grep, Bash | Implementation inside an owner-approved phase/debug cycle only |
+| `sonnet-implementer` | `claude-sonnet-5-5` | Read, Write, Edit, Glob, Grep, Bash, SendMessage, ListAgents | Implementation inside an owner-approved phase/debug cycle only |
 | `haiku-docs` | `claude-haiku-5-5` | Read, Edit, Write | `status.md` / `handover.md` checkpoints from an evidence packet |
 | `reviewer` | `claude-sonnet-5-5` | Read, Grep, Glob | Read-only correctness/spec-conformance review of a diff |
 | `security-reviewer` | `claude-sonnet-5-5` | Read, Grep, Glob | Read-only review against `handover.md §4` invariants and TECH_SPECS §8 |
