@@ -1,0 +1,2 @@
+old assertion fails in 304 of 20000 random secrets (1.52%)
+new assertion fails in 0 of 20000 random secrets

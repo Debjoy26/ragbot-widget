@@ -42,7 +42,12 @@ describe('rateKey', () => {
   });
 
   it('does not contain the plain identifier', () => {
-    expect(rateKey(SECRET, 'message_ip', ['bot', '203.0.113.9'])).not.toContain('203');
+    // Checks the whole identifier, as text and hex-encoded. A fragment such as '203' appears in a random
+    // 64-char hex digest by chance in about 1.5% of runs (P6-D7: two CI failures), so it proved nothing.
+    const ip = '203.0.113.9';
+    const key = rateKey(SECRET, 'message_ip', ['bot', ip]);
+    expect(key).not.toContain(ip);
+    expect(key).not.toContain(Buffer.from(ip, 'utf8').toString('hex'));
   });
 
   it.each([['short'], ['x'.repeat(31)], ['']])('rejects a secret under 32 bytes (%j)', (secret) => {
