@@ -99,7 +99,7 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 - Visitor bearer token binds bot, session, expiry; conversation lookup checks ownership.
 - CORS is not authentication. Do not rely on IP or user-agent as identity.
 - TLS, trusted proxy configuration, canonical IP handling, payload/concurrency/time limits.
-- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority. Ingestion uses a job-based reservation (`reserve_job_budget`), and the worker never calls a provider without one.
+- Atomic budget reservation; include fallback and ingestion usage; provider billing remains final authority. Ingestion uses a job-based reservation (`reserve_index_budget`, fenced on the job lease), and the worker never calls a provider without one.
 - Disable raw model HTML/remote images. Use safe source links and no inline scripts.
 - Generic untrusted prompts/documents never grant access or change server configuration.
 

@@ -1,0 +1,6 @@
+punctuation 2000 13 ms
+punctuation 8000 174 ms
+punctuation 32000 2753 ms
+headingSpaces 2000 6 ms
+headingSpaces 8000 87 ms
+headingSpaces 32000 1386 ms

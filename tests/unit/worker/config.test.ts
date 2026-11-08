@@ -6,6 +6,7 @@ import {
   loadWorkerConfig,
   STUCK_RUN_MARGIN_SECONDS,
 } from '../../../worker/src/lib/config.ts';
+import { GEMINI_MAX_BATCH, maxEmbeddingBatchSize } from '../../../worker/src/lib/embeddings.ts';
 
 // P6-QUEUE. Fake values generated at run time; nothing reads the real environment.
 const fakeKey = (): string => `fake-${randomBytes(12).toString('hex')}`;
@@ -238,6 +239,33 @@ describe('loadWorkerConfig: relations between values', () => {
   it('requires the database timeout to end well inside the lease', () => {
     expect(refusal({ ...validEnv(), DB_TIMEOUT_MS: '60001' }).variables).toContain('DB_TIMEOUT_MS');
     expect(() => loadWorkerConfig({ ...validEnv(), DB_TIMEOUT_MS: '60000' })).not.toThrow();
+  });
+
+  it('refuses an embedding batch larger than the configured provider accepts (Gemini: 100)', () => {
+    expect(GEMINI_MAX_BATCH).toBe(100);
+    expect(maxEmbeddingBatchSize('gemini')).toBe(100);
+    expect(
+      loadWorkerConfig({ ...validEnv(), EMBEDDING_BATCH_SIZE: '100' }).embeddingBatchSize,
+    ).toBe(100);
+    const err = refusal({ ...validEnv(), EMBEDDING_BATCH_SIZE: '101' });
+    expect(err.variables).toEqual(['EMBEDDING_BATCH_SIZE', 'EMBEDDING_PROVIDER']);
+    expect(err.message).not.toContain('101');
+  });
+
+  it('lets a non-Gemini provider batch up to the write limit of 200, and no more', () => {
+    const openai = {
+      ...validEnv(),
+      EMBEDDING_PROVIDER: 'openai',
+      EMBEDDING_MODEL: 'text-embedding-3-small',
+      OPENAI_API_KEY: fakeKey(),
+    };
+    expect(maxEmbeddingBatchSize('openai')).toBe(200);
+    expect(loadWorkerConfig({ ...openai, EMBEDDING_BATCH_SIZE: '200' }).embeddingBatchSize).toBe(
+      200,
+    );
+    expect(refusal({ ...openai, EMBEDDING_BATCH_SIZE: '201' }).variables).toContain(
+      'EMBEDDING_BATCH_SIZE',
+    );
   });
 
   it('requires STUCK_RUN_THRESHOLD_SECONDS >= CHAT_DEADLINE_MS/1000 + the named margin', () => {

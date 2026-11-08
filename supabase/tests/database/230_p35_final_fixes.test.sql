@@ -28,7 +28,8 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 -- R3-3
 -- Moved in P6-D2 from reserve_job_budget (dropped in 012) to the fenced reserve_index_budget / settle_index_budget.
 -- The fence needs a document, a version and a running job held by worker 'w' whose payload names that version, and
--- the bot must be enabled for this section only (R3-2 left it disabled; reserve_index_budget refuses a disabled bot).
+-- the bot is enabled for this section only (R3-2 left it disabled; reserve_index_budget does not refuse a disabled bot, so
+-- this is not needed for the fence; it only keeps the section as it was).
 insert into public.documents (id, bot_id, title, status) values
   ('d2000000-0000-4000-8000-000000000230', 'b1000000-0000-4000-8000-000000000230', 'Doc3', 'indexing');
 insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status) values

@@ -9,7 +9,7 @@
 --
 -- Ids end in 000000000250: bots bN, documents dN, versions eN/cN, jobs fN/aN. Worker ids are 'w1' (the holder) and 'w2'.
 begin;
-select plan(346);
+select plan(357);
 
 -- A valid embedding (1536 numbers) and a short one (1535), kept as transaction-local settings so every role can use them.
 select set_config('p6.emb', (select jsonb_agg(0.01)::text from generate_series(1, 1536)), true);
@@ -565,6 +565,20 @@ insert into public.jobs (id, type, payload, state, attempts, max_attempts, locke
   ('ba3a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'running',   1, 3, 'w1', now() + interval '1 hour'),
   ('ba4a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'queued',    1, 3, null, null),
   ('ba5a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'succeeded', 1, 3, null, null);
+-- reserve_request_budget and the job rows (bot b7, cap 5.0): an indexing job holds a 3.0 reservation (ca2a); chat runs rq1, rq2.
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
+  ('b7000000-0000-4000-8000-000000000250', 'p6-d3-chat', 'x', array['en'], 'm', 1536, true);
+insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
+  ('b7000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}');
+insert into public.visitor_sessions (id, bot_id, expires_at) values
+  ('a7000000-0000-4000-8000-000000000250', 'b7000000-0000-4000-8000-000000000250', now() + interval '1 hour');
+insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash) values
+  ('cb1a0000-0000-4000-8000-000000000250', 'b7000000-0000-4000-8000-000000000250', 'a7000000-0000-4000-8000-000000000250', '00000000-0000-4000-8000-0000000002b1', repeat('a', 64)),
+  ('cb2a0000-0000-4000-8000-000000000250', 'b7000000-0000-4000-8000-000000000250', 'a7000000-0000-4000-8000-000000000250', '00000000-0000-4000-8000-0000000002b2', repeat('a', 64));
+insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until) values
+  ('ca1a0000-0000-4000-8000-000000000250', 'index_document', '{}', 'running', 1, 3, 'w1', now() + interval '1 hour');
+insert into public.budget_reservations (id, bot_id, job_id, amount, state, expires_at) values
+  ('ca2a0000-0000-4000-8000-000000000250', 'b7000000-0000-4000-8000-000000000250', 'ca1a0000-0000-4000-8000-000000000250', 3.0, 'reserved', now() + interval '1 hour');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 
@@ -603,6 +617,15 @@ select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-400
 select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a released reservation cannot be settled');
 -- Spend now: settled 0.5 + the other job's 1.0 = 1.5, so 3.5 fits exactly and 3.51 does not.
 select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: released spend is free again but settled and live spend still count (3.51 over)');
+-- A job reservation still 'reserved' but past its expires_at keeps counting (a stale worker can still settle it).
+-- Spend is 1.5 (settled 0.5 + the other job's 1.0), so 3.5 is the room; push the other job's row past its expiry.
+update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.x3')::uuid;
+select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'reserved', 'index budget: the other job''s row is still reserved but past expires_at');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: a job row reserved past expires_at still counts (3.51 over)');
+-- After the sweep marks it expired it still counts.
+select cmp_ok(public.expire_stale_budget_reservations(100), '>=', 1, 'index budget: the sweep expires at least the stale job row');
+select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'expired', 'index budget: the other job''s row is now expired');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: the same row, swept to expired, still counts (3.51 over)');
 select isnt(public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.5, 3600), null, 'index budget: 3.5 fits the cap exactly');
 -- Argument checks.
 select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 0, 3600)$q$, '22023', null, 'index budget: amount 0 -> 22023');
@@ -622,6 +645,18 @@ select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-
 -- The disabled bot: indexing is still allowed, because knowledge is indexed before a bot is enabled.
 select lives_ok($q$select public.reserve_index_budget('f6a00000-0000-4000-8000-000000000250', 'w1', 'e6a00000-0000-4000-8000-000000000250', 1.0, 3600)$q$, 'index budget: a disabled bot can still reserve for indexing (knowledge goes in before launch)');
 select is((select count(*)::int from public.budget_reservations where bot_id = 'b6000000-0000-4000-8000-000000000250' and state = 'reserved'), 1, 'index budget: the disabled bot''s indexing reservation exists');
+-- reserve_request_budget counts the indexing job's row (3.0 of the 5.0 cap) in every state a stale worker can still settle.
+-- A chat reserve of 2.5 would make 5.5, so it is refused; 2.0 fits exactly.
+select throws_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb1a0000-0000-4000-8000-000000000250', 2.5, 600)$q$, 'RB001', null, 'chat budget: a live job reservation counts (2.5 over)');
+update public.budget_reservations set expires_at = now() - interval '1 minute' where id = 'ca2a0000-0000-4000-8000-000000000250';
+select is((select state from public.budget_reservations where id = 'ca2a0000-0000-4000-8000-000000000250'), 'reserved', 'chat budget: the job row is still reserved but past expires_at');
+select throws_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb1a0000-0000-4000-8000-000000000250', 2.5, 600)$q$, 'RB001', null, 'chat budget: a job reservation past expires_at still counts (2.5 over)');
+update public.budget_reservations set state = 'expired' where id = 'ca2a0000-0000-4000-8000-000000000250';
+select throws_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb1a0000-0000-4000-8000-000000000250', 2.5, 600)$q$, 'RB001', null, 'chat budget: an expired job reservation still counts (2.5 over)');
+select lives_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb2a0000-0000-4000-8000-000000000250', 2.0, 600)$q$, 'chat budget: 2.0 fits next to the expired job row (5.0 of 5.0)');
+-- Without the job row the same 2.5 fits (2.0 + 2.5 of 5.0).
+update public.budget_reservations set state = 'released' where id = 'ca2a0000-0000-4000-8000-000000000250';
+select lives_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb1a0000-0000-4000-8000-000000000250', 2.5, 600)$q$, 'chat budget: with the job row released the 2.5 reserve succeeds');
 -- The fence for all three, and for reset_version_chunks (the matrix of the first section: same fixtures).
 select throws_ok(format(f.call, c.job, c.worker, c.ver), c.code::char(5), null::text, f.name || ': ' || c.label)
   from (values

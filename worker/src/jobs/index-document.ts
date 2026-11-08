@@ -24,7 +24,9 @@
 // for the chunks still to embed (re-estimated each time; the database expires the job's earlier
 // reservation but keeps counting it). The estimate counts UTF-8 bytes (see ESTIMATE_BYTES_PER_TOKEN).
 // Each batch's cost (provider token counts when given, else the estimate) is added up and its usage
-// row is recorded right after the provider answered, before the chunks are written. When the total
+// row is recorded right after the provider answered, before the chunks are written (without the
+// job's abort signal, so an abort cannot drop it). A provider request that fails after it was sent
+// (timeout, dropped connection, 5xx) counts its estimated cost as spent. When the total
 // passes BUDGET_OVERRUN_FACTOR times the reservation the job stops: the spend is settled and the
 // version fails BUDGET_EXCEEDED. Otherwise the reservation is settled with the actual cost once all
 // batches are written; on any other failure that is not a lost lease it is settled with the cost
@@ -440,8 +442,6 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
           reservationId = reserved;
         } catch (err) {
           if (dbCode(err) === 'RB001') throw new PermanentFailure('BUDGET_EXCEEDED', 'daily_cap');
-          // A disabled bot spends nothing; retry later (the database dead-letters after max attempts).
-          if (dbCode(err) === 'RB039') throw new RetryJobError('bot_disabled');
           throw err;
         }
       }
@@ -470,10 +470,41 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
         const from = start + (b - batchesBefore) * batchSize;
         const slice = chunks.slice(from, from + batchSize);
         const started = Date.now();
-        const result = await embeddings.embed(
-          slice.map((c) => c.content),
-          { taskType: 'document', signal },
-        );
+        let result;
+        try {
+          result = await embeddings.embed(
+            slice.map((c) => c.content),
+            { taskType: 'document', signal },
+          );
+        } catch (err) {
+          // A request that was sent and then timed out, dropped mid-response or got a 5xx may
+          // still have been billed. Count its estimate as spent and write its usage row (usage
+          // includes failed attempts), so the failure path settles at least that much instead of
+          // releasing and the ledger agrees with the settled amount. (One batch is one request:
+          // see maxEmbeddingBatchSize.) Rate limits, auth and other 4xx are not billed; a request
+          // refused before sending (a local config or shape error) is not a transient error and
+          // records and counts nothing.
+          if (err instanceof ProviderError && err.kind === 'transient') {
+            const estimatedTokens = slice.reduce(
+              (sum, c) => sum + estimateBudgetTokens(c.content),
+              0,
+            );
+            const estimatedCost = usd(estimatedTokens, price);
+            actualCost += estimatedCost;
+            // No abort signal (R-4), as for a completed call.
+            await ctx.db.rpc<unknown>('record_usage_event', {
+              p_bot_id: row.botId,
+              p_job_id: job.id,
+              p_provider: embeddings.provider,
+              p_model: embeddings.model,
+              p_operation: 'embedding_index',
+              p_input_tokens: estimatedTokens,
+              p_estimated_cost: estimatedCost,
+              p_latency_ms: Date.now() - started,
+            });
+          }
+          throw err;
+        }
         const latencyMs = Date.now() - started;
         // Provider token counts when given, else the conservative estimate.
         const reported = result.inputTokens;
@@ -485,20 +516,18 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
         // The provider has been paid for this batch whatever happens next: count it and record the
         // usage now, before anything is validated or written.
         actualCost += cost;
-        await ctx.db.rpc<unknown>(
-          'record_usage_event',
-          {
-            p_bot_id: row.botId,
-            p_job_id: job.id,
-            p_provider: embeddings.provider,
-            p_model: embeddings.model,
-            p_operation: 'embedding_index',
-            p_input_tokens: tokens,
-            p_estimated_cost: cost,
-            p_latency_ms: latencyMs,
-          },
-          signal,
-        );
+        // No abort signal here, only the database client's own timeout: the money is already
+        // spent, and an abort between the provider's answer and this write must not drop the row.
+        await ctx.db.rpc<unknown>('record_usage_event', {
+          p_bot_id: row.botId,
+          p_job_id: job.id,
+          p_provider: embeddings.provider,
+          p_model: embeddings.model,
+          p_operation: 'embedding_index',
+          p_input_tokens: tokens,
+          p_estimated_cost: cost,
+          p_latency_ms: latencyMs,
+        });
         // Spent far more than reserved: stop here. The spend is settled by the failure path.
         if (actualCost > reservedAmount * BUDGET_OVERRUN_FACTOR) {
           throw new PermanentFailure('BUDGET_EXCEEDED', 'overrun');

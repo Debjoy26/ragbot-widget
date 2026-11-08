@@ -796,8 +796,8 @@ $$;
 -- client_settings (UPDATE) as reserve_request_budget does, then the reservation row.
 --
 -- reserve_index_budget: EVERY call is a new attempt. A still-'reserved' row of the job is marked 'expired' first
--- and keeps counting toward the daily cap (with settled rows, live reserved rows and every job row in 'expired',
--- exactly the sum reserve_job_budget used), so reserving twice for one job needs room for both. A disabled bot is
+-- and keeps counting toward the daily cap (with settled rows, every job row in 'reserved' or 'expired' even past
+-- its expires_at, and request rows in 'reserved' until expires_at), so reserving twice for one job needs room for both. A disabled bot is
 -- not refused: admins index knowledge before enabling a bot. RB002 when settings or the cap are
 -- missing, RB001 over the cap (the statement is rolled back, so nothing is marked expired by a refused call).
 -- Returns the new reservation's id.
@@ -850,8 +850,10 @@ begin
    where br.bot_id = v_bot
      and br.created_at >= v_day
      and (br.state = 'settled'
-          or (br.state = 'reserved' and br.expires_at > now())
-          -- A stale worker can still settle an expired job reservation, so it keeps counting until it is settled.
+          -- A request reservation counts until expires_at; a job reservation counts while 'reserved' whatever its
+          -- expires_at says, because a stale worker can still settle it. Only settle or release ends that.
+          or (br.state = 'reserved' and (br.job_id is not null or br.expires_at > now()))
+          -- The same for a job reservation that expire_stale_budget_reservations already marked 'expired'.
           or (br.state = 'expired' and br.job_id is not null));
 
   if v_spent + p_amount > v_cap then
@@ -936,6 +938,100 @@ begin
   if not found then
     raise exception 'release_index_budget: reservation is not active' using errcode = 'RB003';
   end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- reserve_request_budget (011's version, redefined): the same signature and behaviour (RB039 for a disabled bot, the
+-- FOR SHARE bot and run locks, lock_timeout, the idempotent early return, the run-state check), but its daily cap
+-- sum now counts job reservations exactly as reserve_index_budget does, because both draw on one daily cap. Owner,
+-- search_path and grants are unchanged (create or replace keeps them).
+-- ---------------------------------------------------------------------------
+create or replace function public.reserve_request_budget(
+  p_bot_id      uuid,
+  p_request_id  uuid,
+  p_amount      numeric,
+  p_ttl_seconds integer
+)
+returns uuid
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+declare
+  v_enabled   boolean;
+  v_policy    jsonb;
+  v_cap_text  text;
+  v_cap       numeric;
+  v_spent     numeric;
+  v_day       timestamptz := date_trunc('day', now() at time zone 'UTC') at time zone 'UTC';
+  v_existing  public.budget_reservations%rowtype;
+  v_run_state text;
+  v_id        uuid;
+begin
+  if p_bot_id is null or p_request_id is null or p_amount is null or p_amount <= 0
+     or p_ttl_seconds is null or p_ttl_seconds < 1 or p_ttl_seconds > 86400 then
+    raise exception 'reserve_request_budget: bot, request, positive amount and ttl (1..86400s) are required'
+      using errcode = '22023';
+  end if;
+
+  select b.enabled into v_enabled from public.bot_profiles b where b.id = p_bot_id for share;
+  if found and not v_enabled then
+    raise exception 'reserve_request_budget: bot is disabled' using errcode = 'RB039';
+  end if;
+
+  select cs.budget_policy into v_policy
+    from public.client_settings cs where cs.bot_id = p_bot_id for update;
+  if not found then
+    raise exception 'reserve_request_budget: no client settings for bot' using errcode = 'RB002';
+  end if;
+
+  v_cap_text := v_policy ->> 'daily_cap_usd';
+  if v_cap_text is null or v_cap_text !~ '^[0-9]+(\.[0-9]+)?$' then
+    raise exception 'reserve_request_budget: daily cap is missing or invalid' using errcode = 'RB002';
+  end if;
+  v_cap := v_cap_text::numeric;
+
+  select r.state into v_run_state
+    from public.request_runs r where r.id = p_request_id and r.bot_id = p_bot_id
+    for share;
+  if not found then
+    raise exception 'reserve_request_budget: request not found for bot' using errcode = 'RB004';
+  end if;
+
+  select * into v_existing from public.budget_reservations br where br.request_id = p_request_id;
+  if found then
+    if v_existing.bot_id = p_bot_id and v_existing.state in ('reserved', 'settled') then
+      return v_existing.id;
+    end if;
+    raise exception 'reserve_request_budget: existing reservation is not reusable' using errcode = 'RB004';
+  end if;
+
+  -- New reservation only: the run must still be live.
+  if v_run_state not in ('reserved', 'running') then
+    raise exception 'reserve_request_budget: request is not active' using errcode = 'RB004';
+  end if;
+
+  select coalesce(sum(br.amount), 0) into v_spent
+    from public.budget_reservations br
+   where br.bot_id = p_bot_id
+     and br.created_at >= v_day
+     and (br.state = 'settled'
+          -- A request reservation counts until expires_at. A job (indexing) reservation counts while 'reserved'
+          -- whatever its expires_at says, and while 'expired', as reserve_index_budget counts it: a stale worker
+          -- can still settle it, so the room stays taken until it is settled or released.
+          or (br.state = 'reserved' and (br.job_id is not null or br.expires_at > now()))
+          or (br.state = 'expired' and br.job_id is not null));
+
+  if v_spent + p_amount > v_cap then
+    raise exception 'reserve_request_budget: daily budget exceeded' using errcode = 'RB001';
+  end if;
+
+  insert into public.budget_reservations (bot_id, request_id, amount, state, expires_at)
+  values (p_bot_id, p_request_id, p_amount, 'reserved', now() + make_interval(secs => p_ttl_seconds))
+  returning id into v_id;
+
+  return v_id;
 end;
 $$;
 

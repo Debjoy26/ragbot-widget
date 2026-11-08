@@ -39,8 +39,8 @@ const EXPECTED = [
   'purge_expired_conversations',
   'purge_expired_data_entries',
   'purge_expired_usage_records',
-  'purge_terminal_jobs',
   'fail_orphaned_index_versions',
+  'purge_terminal_jobs',
   'prune_superseded_chunks',
   'expire_abandoned_uploads',
 ];
@@ -88,6 +88,21 @@ const live = new AbortController().signal;
 describe('maintenance tasks', () => {
   it('covers exactly the listed functions, in order', () => {
     expect(MAINTENANCE_TASKS.map((t) => t.name)).toEqual(EXPECTED);
+  });
+
+  it('fails orphaned index versions before it purges terminal jobs (R-6)', async () => {
+    const names = MAINTENANCE_TASKS.map((t) => t.name);
+    expect(names.indexOf('fail_orphaned_index_versions')).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf('fail_orphaned_index_versions')).toBeLessThan(
+      names.indexOf('purge_terminal_jobs'),
+    );
+    // And the order holds at run time, not only in the list.
+    const s = setup();
+    await runMaintenance(config, s.deps, live);
+    const ran = s.calls.map((c) => c.name);
+    expect(ran.indexOf('fail_orphaned_index_versions')).toBeLessThan(
+      ran.indexOf('purge_terminal_jobs'),
+    );
   });
 
   it('calls each function once with configured arguments and opt-in contention retry', async () => {

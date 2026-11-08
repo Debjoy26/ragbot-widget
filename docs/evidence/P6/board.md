@@ -89,3 +89,8 @@ Unit: 47 files, 2045 tests pass; `tsc -b`, `tsc -p tests --noEmit`, ESLint, Pret
 Uncommitted in worktree p6-d2e (branch p6/d2e): tests/integration/ingestion-e2e.test.ts, ingestion-process.test.ts, helpers/{fake-embeddings,ingestion-fixtures}.ts (ingestion-runtime.ts unchanged). Ran against an overlay (my tests + P6-D2-W worker/shared files as of 15:00 + P6-D2-DB 012 on the reset stack): ingestion-e2e + ingestion-process, 66 passed, 0 failed. tsc -p tests, ESLint, Prettier clean on my files.
 Helper changes others should know: test bots are now created `enabled: true` (reserve_index_budget refuses a disabled bot, RB039); A2 now expects locked_by to be `<WORKER_ID>-<6 hex>`; the C2 abort test now expects the job `queued` after SIGTERM (was `running`).
 Not mine, still calling the DROPPED reserve_job_budget: tests/integration/admin-real-session.test.ts lines 568 and 2168 (needs Opus or another owner).
+
+### [P6-D4] 2026-11-08 CLAIM: worker/src/jobs/index-document.ts, tests/unit/worker/index-document.test.ts, tests/integration/ingestion-e2e.test.ts (failed-after-send usage row)
+
+### [P6-D4] 2026-11-08 DONE: failed-after-send usage row (self-reported, unverified)
+Uncommitted in worktree p6-d4 (branch p6/d4). Unit index-document 119 passed; ingestion-e2e 56 passed (A9 included); tsc -b, tsc -p tests, ESLint, Prettier clean.

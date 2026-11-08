@@ -422,7 +422,7 @@ export class IngestionHarness {
       allowed_languages: ['en'],
       embedding_model: this.model,
       embedding_dimensions: 1536,
-      // reserve_index_budget refuses a disabled bot (RB039), so an indexing bot must be enabled.
+      // Enabled like a live bot. Indexing itself does not require it (a disabled bot indexes normally).
       enabled: true,
     })) as { id: string }[];
     if (bot === undefined) throw new Error('bot insert returned nothing');

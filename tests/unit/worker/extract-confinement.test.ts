@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -58,7 +58,7 @@ afterAll(() => {
 const PROBE = `
 const fs = require('node:fs');
 const [outside, environ, allowedScript, allowedPkg] = process.argv.slice(1);
-const attempt = (fn) => { try { fn(); return 'READ'; } catch (e) { return e.code ?? 'ERR'; } };
+const attempt = (fn) => { try { fn(); return 'READ'; } catch (e) { return e.code ?? e.name ?? 'ERR'; } };
 const result = {
   outside: attempt(() => fs.readFileSync(outside)),
   environ: attempt(() => fs.readFileSync(environ)),
@@ -91,6 +91,27 @@ function probe(confined: boolean): Record<string, string> {
   return JSON.parse(run.stdout) as Record<string, string>;
 }
 
+/** What reading each path does under the given node flags: 'READ' or the error code. */
+function readCodes(flags: readonly string[], paths: readonly string[]): Record<string, string> {
+  const script = `
+const fs = require('node:fs');
+const out = {};
+for (const p of process.argv.slice(1)) {
+  try { fs.readFileSync(p); out[p] = 'READ'; } catch (e) {
+    if (e.code === 'EISDIR') { out[p] = 'READ'; continue; }
+    out[p] = e.code ?? e.name ?? 'ERR';
+  }
+}
+process.stdout.write(JSON.stringify(out));
+`;
+  const run = spawnSync(process.execPath, [...flags, '-e', script, ...paths], {
+    env: {},
+    encoding: 'utf8',
+  });
+  expect(run.status).toBe(0);
+  return JSON.parse(run.stdout) as Record<string, string>;
+}
+
 describe('PDF child confinement (real node process, the flags the extractor uses)', () => {
   it('control: an unconfined node can read the file and the parent environment', () => {
     const open = probe(false);
@@ -116,7 +137,9 @@ describe('PDF child confinement (real node process, the flags the extractor uses
     const closed = probe(true);
     expect(closed['write']).toBe('ERR_ACCESS_DENIED');
     expect(closed['spawn']).toBe('ERR_ACCESS_DENIED');
-    expect(closed['codegen']).not.toBe('READ');
+    // The specific refusal, not just "not READ": --disallow-code-generation-from-strings raises an
+    // EvalError (a permission error would also be a refusal, but a syntax or other error is not).
+    expect(['EvalError', 'ERR_ACCESS_DENIED']).toContain(closed['codegen']);
   });
 
   it('allows only the child script and the pdfjs package directory to be read', () => {
@@ -129,6 +152,41 @@ describe('PDF child confinement (real node process, the flags the extractor uses
     expect(args.some((a) => a.startsWith('--allow-fs-write'))).toBe(false);
     expect(args.some((a) => a.startsWith('--allow-child-process'))).toBe(false);
     expect(args.some((a) => a.includes('*'))).toBe(false);
+  });
+
+  it('does not let the pdfjs directory flag reach a sibling whose name starts the same way', () => {
+    // The real flags, a path that does not exist: a permission refusal comes before the file
+    // system is asked, so ERR_ACCESS_DENIED means "not allowed" and ENOENT would mean "allowed".
+    const siblings = [`${PDFJS_DIR}-other`, `${PDFJS_DIR}-other/package.json`, `${PDFJS_DIR}x`];
+    const parent = dirname(PDFJS_DIR);
+    const codes = readCodes(confinementArgs(256, CHILD), [
+      ...siblings,
+      join(parent, 'pdfjs-dist-other', 'package.json'),
+      join(PDFJS_DIR, 'package.json'),
+      parent,
+    ]);
+    for (const sibling of siblings) expect(codes[sibling], sibling).toBe('ERR_ACCESS_DENIED');
+    expect(codes[join(parent, 'pdfjs-dist-other', 'package.json')]).toBe('ERR_ACCESS_DENIED');
+    expect(codes[parent]).toBe('ERR_ACCESS_DENIED');
+    expect(codes[join(PDFJS_DIR, 'package.json')]).toBe('READ'); // control: the flag does allow its own directory
+  });
+
+  it('keeps a real sibling directory with a shared name prefix unreadable (flag shape of confinementArgs)', () => {
+    const allowed = join(dir, 'pdfjs-dist');
+    const sibling = join(dir, 'pdfjs-dist-other');
+    mkdirSync(allowed);
+    mkdirSync(sibling);
+    writeFileSync(join(allowed, 'a.txt'), 'allowed');
+    writeFileSync(join(sibling, 'a.txt'), 'sibling');
+    // Same flags as the extractor, with the pdfjs directory swapped for the fixture directory.
+    const flags = confinementArgs(256, CHILD).map((a) =>
+      a === `--allow-fs-read=${PDFJS_DIR}` ? `--allow-fs-read=${allowed}` : a,
+    );
+    expect(flags).toContain(`--allow-fs-read=${allowed}`);
+    const codes = readCodes(flags, [join(allowed, 'a.txt'), join(sibling, 'a.txt'), sibling]);
+    expect(codes[join(allowed, 'a.txt')]).toBe('READ');
+    expect(codes[join(sibling, 'a.txt')]).toBe('ERR_ACCESS_DENIED');
+    expect(codes[sibling]).toBe('ERR_ACCESS_DENIED');
   });
 
   it('the real extraction still works under the confinement', async () => {

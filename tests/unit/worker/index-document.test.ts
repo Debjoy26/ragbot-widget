@@ -69,6 +69,8 @@ function makeConfig(over: Partial<WorkerConfig> = {}): WorkerConfig {
 interface Call {
   readonly name: string;
   readonly args: Record<string, unknown>;
+  /** The abort signal the handler passed to the database client, if any. */
+  readonly signal: AbortSignal | undefined;
 }
 
 type Responder = (args: Record<string, unknown>) => unknown;
@@ -154,9 +156,15 @@ function makeRig(
     fail_document_version: () => null,
   };
   const db: Db = {
-    rpc: (name: string, args: Readonly<Record<string, unknown>>) => {
-      calls.push({ name, args: { ...args } });
+    rpc: (name: string, args: Readonly<Record<string, unknown>>, signal?: AbortSignal) => {
+      calls.push({ name, args: { ...args }, signal });
       events.push(`rpc:${name}`);
+      // Like the real client: a call made with an already aborted signal never reaches the database.
+      if (signal?.aborted === true) {
+        const aborted = new Error('aborted');
+        aborted.name = 'AbortError';
+        return Promise.reject(aborted);
+      }
       const responder = responders[name];
       if (responder === undefined) return Promise.reject(new Error(`unexpected rpc ${name}`));
       try {
@@ -257,6 +265,15 @@ function expectPartialSpendSettled(rig: Rig, expectedCost?: number): void {
   const amount = settles[0]?.args['p_actual'] as number;
   expect(amount).toBeGreaterThan(0);
   if (expectedCost !== undefined) expect(amount).toBeCloseTo(expectedCost, 10);
+}
+
+/** Budget-token estimate of chunks [from, to) of a plain-text document, as the handler computes it. */
+function estimateOfChunks(bytes: Uint8Array, from: number, to: number): number {
+  const { chunks } = chunkModule.chunkDocument(
+    [{ number: 1, text: new TextDecoder().decode(bytes) }],
+    'text/plain',
+  );
+  return chunks.slice(from, to).reduce((sum, c) => sum + estimateBudgetTokens(c.content), 0);
 }
 
 function noEmbedNoWrite(rig: Rig): void {
@@ -598,8 +615,8 @@ describe('index_document: partial spend', () => {
       .mockImplementationOnce((texts: readonly string[]) =>
         Promise.resolve({ vectors: texts.map(vector), inputTokens: 300 }),
       )
-      .mockRejectedValueOnce(new ProviderError('transient', 'embedding request failed'));
-    await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+      .mockRejectedValueOnce(new ProviderError('auth', 'embedding provider returned HTTP 401'));
+    await run(rig);
     expectPartialSpendSettled(rig, 0.00008);
   });
 
@@ -611,6 +628,107 @@ describe('index_document: partial spend', () => {
     await run(rig);
     expect(rig.of('release_index_budget')).toHaveLength(1);
     expect(rig.of('settle_index_budget')).toHaveLength(0);
+  });
+
+  // P6-D3 R-3: a request that was sent and then failed may still have been billed.
+  describe('a request that failed after it was sent counts its estimated cost as spent', () => {
+    const sentFailures: [string, ProviderError][] = [
+      ['a timeout', new ProviderError('transient', 'embedding request timed out')],
+      ['a network error', new ProviderError('transient', 'embedding request failed (network)')],
+      ['an HTTP 5xx', new ProviderError('transient', 'embedding provider returned HTTP 503')],
+    ];
+
+    it.each(sentFailures)(
+      '%s on the only batch settles the batch estimate and does not release',
+      async (_n, failure) => {
+        const rig = makeRig(SHORT);
+        rig.embed.mockRejectedValueOnce(failure);
+        await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+        expect(rig.of('release_index_budget')).toHaveLength(0);
+        // The only batch is the whole reservation, so the estimate settled equals the amount reserved.
+        const reserved = rig.of('reserve_index_budget')[0]?.args['p_amount'] as number;
+        expectPartialSpendSettled(rig, reserved);
+        // P6-D4: usage includes failed attempts, so the failed call has a row carrying the estimate,
+        // equal to the settled amount (no signal: R-4).
+        const usage = rig.of('record_usage_event');
+        expect(usage).toHaveLength(1);
+        const row = usage[0]?.args ?? {};
+        expect(row['p_operation']).toBe('embedding_index');
+        expect(row['p_input_tokens']).toBe(estimateOfChunks(SHORT, 0, 1000));
+        expect(row['p_estimated_cost'] as number).toBeCloseTo(
+          rig.of('settle_index_budget')[0]?.args['p_actual'] as number,
+          10,
+        );
+        expect(row['p_bot_id']).toBe(BOT_ID);
+        expect(row['p_job_id']).toBe(JOB_ID);
+        expect(usage[0]?.signal).toBeUndefined();
+      },
+    );
+
+    it('the usage rows (completed calls plus the failed one) sum to the settled amount', async () => {
+      const rig = makeRig(longText());
+      rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+      rig.embed
+        .mockImplementationOnce((texts: readonly string[]) =>
+          Promise.resolve({ vectors: texts.map(vector), inputTokens: 100 }),
+        )
+        .mockRejectedValueOnce(new ProviderError('transient', 'embedding request timed out'));
+      await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+      const usage = rig.of('record_usage_event');
+      expect(usage).toHaveLength(2);
+      expect(usage[1]?.args['p_input_tokens']).toBe(estimateOfChunks(longText(), 2, 4));
+      const sum = usage.reduce((acc, u) => acc + (u.args['p_estimated_cost'] as number), 0);
+      expect(sum).toBeCloseTo(rig.of('settle_index_budget')[0]?.args['p_actual'] as number, 10);
+    });
+
+    it('a request refused before it was sent (a local error) records no usage and counts nothing', async () => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockRejectedValueOnce(new TypeError('embedding batch shape refused locally'));
+      await run(rig).catch(() => undefined);
+      expect(rig.of('record_usage_event')).toHaveLength(0);
+      expect(rig.of('settle_index_budget')).toHaveLength(0);
+      expect(rig.of('release_index_budget')).toHaveLength(1);
+    });
+
+    it('adds the estimate of the failed batch to the batches already paid for', async () => {
+      const rig = makeRig(longText());
+      rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+      rig.embed
+        .mockImplementationOnce((texts: readonly string[]) =>
+          Promise.resolve({ vectors: texts.map(vector), inputTokens: 100 }),
+        )
+        .mockRejectedValueOnce(new ProviderError('transient', 'embedding request timed out'));
+      await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+      const failedBatch = estimateOfChunks(longText(), 2, 4);
+      expectPartialSpendSettled(rig, ((100 + failedBatch) * 0.2) / 1_000_000);
+    });
+
+    it.each([
+      ['rate limited', new ProviderError('rate_limited', 'embedding provider returned HTTP 429')],
+      ['unauthorised', new ProviderError('auth', 'embedding provider returned HTTP 401')],
+      ['a billing refusal', new ProviderError('billing', 'embedding provider returned HTTP 402')],
+      ['a permanent 4xx', new ProviderError('permanent', 'embedding provider returned HTTP 400')],
+    ])('%s was not billed: the reservation is released, not settled', async (_n, failure) => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockRejectedValueOnce(failure);
+      await run(rig).catch(() => undefined);
+      expect(rig.of('release_index_budget')).toHaveLength(1);
+      expect(rig.of('settle_index_budget')).toHaveLength(0);
+      expect(rig.of('record_usage_event')).toHaveLength(0);
+    });
+
+    it('an abort is not a sent-request failure: nothing is settled or released', async () => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockImplementationOnce(() => {
+        rig.controller.abort(new LeaseLostError());
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        return Promise.reject(err);
+      });
+      await run(rig);
+      expect(rig.of('settle_index_budget')).toHaveLength(0);
+      expect(rig.of('release_index_budget')).toHaveLength(0);
+    });
   });
 
   it('a failing settle never masks the original failure', async () => {
@@ -679,19 +797,6 @@ describe('index_document: budget (reserve, settle, release through the *_index_b
     const tokens = embeddedTexts.reduce((sum, t) => sum + estimateBudgetTokens(t), 0);
     expect(second[0]?.args['p_amount'] as number).toBeCloseTo((tokens * 0.2) / 1_000_000, 8);
   });
-
-  it('a disabled bot (RB039) is not a file failure: the job retries later and nothing is embedded', async () => {
-    const rig = makeRig(SHORT);
-    rig.responders['reserve_index_budget'] = () => {
-      throw new DbError('http', 400, 'RB039');
-    };
-    const err = await run(rig).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(RetryJobError);
-    expect((err as RetryJobError).code).toBe('bot_disabled');
-    expect(failedWith(rig)).toBeUndefined();
-    expect(rig.embed).not.toHaveBeenCalled();
-    expect(rig.of('release_index_budget')).toHaveLength(0);
-  });
 });
 
 describe('index_document: usage is recorded right after the provider answers', () => {
@@ -710,6 +815,39 @@ describe('index_document: usage is recorded right after the provider answers', (
         'rpc:write_document_chunks',
       ]);
     }
+  });
+
+  it('writes the usage row without the job abort signal (a timeout only)', async () => {
+    const rig = makeRig(longText());
+    rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+    await run(rig);
+    const usage = rig.of('record_usage_event');
+    expect(usage.length).toBeGreaterThan(1);
+    for (const call of usage) expect(call.signal).toBeUndefined();
+    // The other calls of the job do carry it, so the test would notice a rig that drops signals.
+    expect(rig.of('write_document_chunks')[0]?.signal).toBe(rig.controller.signal);
+  });
+
+  it('an abort between the provider answer and the usage write does not drop the row', async () => {
+    const rig = makeRig(SHORT);
+    let stored = 0;
+    rig.responders['record_usage_event'] = () => {
+      stored += 1;
+      return randomUUID();
+    };
+    rig.embed.mockImplementationOnce((texts: readonly string[]) => {
+      // The provider answered (and was paid), then the lease was lost before the usage write.
+      queueMicrotask(() => {
+        rig.controller.abort(new LeaseLostError());
+      });
+      return Promise.resolve({ vectors: texts.map(vector), inputTokens: 40 });
+    });
+    await run(rig);
+    const usage = rig.of('record_usage_event');
+    expect(usage).toHaveLength(1);
+    expect(usage[0]?.args['p_input_tokens']).toBe(40);
+    // The row reached the database (the rig refuses calls made with an aborted signal).
+    expect(stored).toBe(1);
   });
 
   it('when the write fails the usage is already recorded and the spend is settled', async () => {
@@ -1385,8 +1523,10 @@ describe('index_document: transient failures retry', () => {
     await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
     expect(rig.of('write_document_chunks')).toHaveLength(1);
     expect(rig.names()).not.toContain('activate_version_for_job');
-    // One batch (2 chunks, 5 tokens reported) was paid for: 5 tokens at 0.2 USD per million.
-    expectPartialSpendSettled(rig, 0.000001);
+    // One batch (2 chunks, 5 tokens reported) was paid for, and the second request failed after it
+    // was sent (transient), so its estimate counts too. 0.2 USD per million tokens.
+    const second = estimateOfChunks(longText(), 2, 4);
+    expectPartialSpendSettled(rig, ((5 + second) * 0.2) / 1_000_000);
   });
 
   it.each([

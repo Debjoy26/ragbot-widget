@@ -10,6 +10,10 @@ import {
   chunkDocumentAsync,
   deriveChunkingVersion,
   estimateTokens,
+  matchHeading,
+  MAX_HEADING_LINE_CHARS,
+  splitHard,
+  splitSentences,
   type Chunk,
 } from '../../../worker/src/lib/chunk.ts';
 
@@ -37,7 +41,10 @@ function checkInvariants(chunks: Chunk[]): void {
 
 const GOLDEN_COUNTS = [6, 3, 4];
 const GOLDEN_HASH = '69c308e50e67948fb36af8c5c21a18a3ba0d5f93bfd6b6458a6e318b59101101';
-const GOLDEN_VERSION = 'c1-350-50-63a5402b';
+// The version hash changed from 63a5402b to e9e81409 when sentence and heading detection moved from
+// backtracking regexes to linear scans (P6-D3, review R-1): the pattern set the hash covers is
+// different. The chunk OUTPUT hash above did not change, so stored chunks stay valid in content.
+const GOLDEN_VERSION = 'c1-350-50-e9e81409';
 
 describe('chunking config', () => {
   it('has a versioned config constant derived from the sizes, weights and patterns', () => {
@@ -403,4 +410,232 @@ describe('chunkDocumentAsync', () => {
       ).rejects.toBeInstanceOf(RangeError);
     },
   );
+});
+
+// ---------------------------------------------------------------------------------------------
+// P6-D3 R-1: chunking time is linear in the input. Hostile shapes used to cost time quadratic in
+// the length of a run (32000 consecutive `!` took about 2.7 s; 1,000,000 would take well over 20
+// minutes).
+// ---------------------------------------------------------------------------------------------
+describe('chunkDocument: linear time on hostile input (R-1)', () => {
+  const N = 1_000_000;
+  const LIMIT_MS = 2000;
+  const shapes: readonly [string, 'text/plain' | 'text/markdown', string][] = [
+    ['a run of "!"', 'text/plain', `a${'!'.repeat(N)}b`],
+    ['a run of "."', 'text/plain', '.'.repeat(N)],
+    ['punctuation, closers, no whitespace', 'text/plain', `x${'.")'.repeat(N / 3)}y`],
+    ['spaces inside a Markdown heading', 'text/markdown', `# a${' '.repeat(N)}b`],
+    ['a heading ending in a run of "#"', 'text/markdown', `# a ${'#'.repeat(N)}`],
+    ['a single line of "#"', 'text/markdown', '#'.repeat(N)],
+    ['only spaces', 'text/plain', ' '.repeat(N)],
+    ['only newlines', 'text/markdown', '\n'.repeat(N)],
+    ['blank lines made of spaces', 'text/plain', '\n \n'.repeat(N / 3)],
+    ['combining marks after one letter', 'text/plain', `a${'\u0301'.repeat(N)}`],
+    ['zero-width joiners after one letter', 'text/plain', `a${'\u200D'.repeat(N)}`],
+    ['one unbroken CJK run', 'text/plain', '\u65E5'.repeat(N)],
+    ['one unbroken ASCII word', 'text/plain', 'a'.repeat(N)],
+    ['one-character words', 'text/plain', 'a '.repeat(N / 2)],
+    ['one-character sentences', 'text/plain', 'a. '.repeat(N / 3)],
+    ['one million heading lines', 'text/markdown', '# h\n'.repeat(N / 4)],
+  ];
+
+  it.each(shapes)(
+    'chunks 1,000,000 characters of %s in under 2 seconds',
+    (_name, mediaType, text) => {
+      expect(text.length).toBeGreaterThanOrEqual(N - 4);
+      const started = performance.now();
+      const { chunks } = chunkDocument([{ number: 1, text }], mediaType);
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeLessThan(LIMIT_MS);
+      chunks.forEach((chunk, i) => {
+        expect(chunk.chunk_index).toBe(i);
+        expect(chunk.token_count).toBeLessThanOrEqual(CHUNK_TARGET_TOKENS);
+      });
+    },
+  );
+
+  it('keeps time proportional to size: 16 times the input costs far less than 16 squared', () => {
+    const time = (n: number): number => {
+      const started = performance.now();
+      chunkDocument([{ number: 1, text: `a${'!'.repeat(n)}b` }], 'text/plain');
+      return performance.now() - started;
+    };
+    time(20_000); // warm up
+    const small = Math.max(time(40_000), 1);
+    const large = time(640_000);
+    expect(large / small).toBeLessThan(16 * 6);
+  });
+
+  it('never treats a line longer than the heading cap as a heading', () => {
+    const longLine = `# ${'h'.repeat(MAX_HEADING_LINE_CHARS)}`;
+    expect(matchHeading(longLine)).toBeNull();
+    expect(matchHeading(`# ${'h'.repeat(MAX_HEADING_LINE_CHARS - 2)}`)).not.toBeNull();
+    const { chunks } = chunkDocument([{ number: 1, text: `${longLine}\n\nbody` }], 'text/markdown');
+    expect(chunks.every((c) => c.section === null)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The linear scans must select exactly what the old backtracking code selected. The old patterns
+// and the old hard splitter are copied here as the reference.
+// ---------------------------------------------------------------------------------------------
+describe('linear scans match the legacy regexes (R-1)', () => {
+  const LEGACY_SENTENCE =
+    /[.!?\u2026]+["'\u201D\u2019)\]]*(?=\s)|[\u3002\uFF01\uFF1F\uFF0E]+[\u300D\u300F\uFF09]*/gu;
+  const LEGACY_HEADING = /^\s{0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+
+  function legacySentences(text: string): { text: string; sep: string }[] {
+    const pieces: { text: string; sep: string }[] = [];
+    let pos = 0;
+    let sep = '';
+    for (const m of text.matchAll(LEGACY_SENTENCE)) {
+      const end = m.index + m[0].length;
+      pieces.push({ text: text.slice(pos, end), sep });
+      const ws = /^\s*/.exec(text.slice(end))?.[0] ?? '';
+      sep = ws;
+      pos = end + ws.length;
+    }
+    if (pos < text.length) pieces.push({ text: text.slice(pos), sep });
+    return pieces;
+  }
+
+  const CAP_Q = CHUNK_TARGET_TOKENS * 4;
+  function legacyHard(text: string): { text: string; sep: string }[] {
+    const quarter = (t: string): number => {
+      let q = 0;
+      for (const ch of t) {
+        const cp = ch.codePointAt(0) as number;
+        q += cp < 0x80 ? 1 : cp < 0x2e80 ? 2 : 4;
+      }
+      return q;
+    };
+    const combining = /^(?:\p{M}|\u200D|\uFE0F|[\u{E0100}-\u{E01EF}])/u;
+    const points = Array.from(text);
+    const pieces: { text: string; sep: string }[] = [];
+    let start = 0;
+    while (start < points.length) {
+      let q = 0;
+      let end = start;
+      while (end < points.length) {
+        const cost = quarter(points[end] as string);
+        if (q + cost > CAP_Q && end > start) break;
+        q += cost;
+        end += 1;
+      }
+      while (
+        end < points.length &&
+        end > start + 1 &&
+        (combining.test(points[end] as string) || points[end - 1] === '\u200D')
+      ) {
+        end -= 1;
+      }
+      pieces.push({ text: points.slice(start, end).join(''), sep: '' });
+      start = end;
+    }
+    return pieces;
+  }
+
+  // Small deterministic generator (a linear congruential sequence); no Math.random.
+  function generator(seed: number): () => number {
+    let state = seed;
+    return () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 2 ** 32;
+    };
+  }
+  const ALPHABET = [
+    'a',
+    'b',
+    'Word',
+    ' ',
+    '  ',
+    '\t',
+    '\r',
+    '.',
+    '!',
+    '?',
+    '\u2026',
+    '"',
+    "'",
+    ')',
+    ']',
+    '\u201D',
+    '#',
+    '##',
+    '#######',
+    '\u3002',
+    '\uFF01',
+    '\u300D',
+    '\uFF09',
+    '\u65E5',
+    '\u0301',
+    '\u200D',
+    '\u{1F600}',
+    '\u2028',
+    ' # ',
+    '\u00E9',
+    '\u00A0',
+    '\uFE0F',
+    '\n',
+  ];
+  function randomText(next: () => number, length: number): string {
+    let out = '';
+    for (let i = 0; i < length; i += 1) {
+      out += ALPHABET[Math.floor(next() * ALPHABET.length)] as string;
+    }
+    return out;
+  }
+
+  it('splits sentences exactly as the legacy pattern did, on 20000 random strings', () => {
+    const next = generator(7);
+    for (let i = 0; i < 20_000; i += 1) {
+      const text = randomText(next, 1 + Math.floor(next() * 40));
+      expect(splitSentences(text), JSON.stringify(text)).toEqual(legacySentences(text));
+    }
+  });
+
+  it('finds the same headings and heading text as the legacy pattern, on 20000 random lines', () => {
+    const next = generator(11);
+    for (let i = 0; i < 20_000; i += 1) {
+      const line = randomText(next, 1 + Math.floor(next() * 24)).replaceAll('\n', ' ');
+      const legacy = LEGACY_HEADING.exec(line);
+      const expected = legacy === null ? null : (legacy[1] ?? '');
+      const actual = matchHeading(line);
+      // Only the trimmed label is used by the chunker; compare that and the match/no-match answer.
+      expect(actual === null, JSON.stringify(line)).toBe(expected === null);
+      if (expected !== null)
+        expect((actual as string).trim(), JSON.stringify(line)).toBe(expected.trim());
+    }
+  });
+
+  it('keeps the heading edge cases of the legacy pattern', () => {
+    expect(matchHeading('# Title')).toBe('Title');
+    expect(matchHeading('## Title ##')).toBe('Title');
+    expect(matchHeading('   ### Title  ')).toBe('Title');
+    expect(matchHeading('#')).toBe('');
+    expect(matchHeading('#\tTitle')).toBe('Title');
+    expect(matchHeading('#NoSpace')).toBeNull();
+    expect(matchHeading('####### seven')).toBeNull();
+    expect(matchHeading('    # four spaces')).toBeNull();
+    expect(matchHeading('# Title\r')).toBeNull(); // `.` never matched a carriage return
+    expect(matchHeading('# C# and F#')).toBe('C# and F#');
+    expect(matchHeading('# ###')).toBe('###');
+  });
+
+  it('cuts an unbroken run exactly as the legacy splitter did', () => {
+    const next = generator(23);
+    const parts = ['x', '\u0301', '\u200D', '\u65E5', '\u{1F600}', '\u00E9', '\uFE0F', 'ab'];
+    for (let i = 0; i < 200; i += 1) {
+      let text = '';
+      const length = 1 + Math.floor(next() * 3000);
+      for (let j = 0; j < length; j += 1) {
+        text += parts[Math.floor(next() * parts.length)] as string;
+      }
+      expect(splitHard(text), `case ${String(i)}`).toEqual(legacyHard(text));
+    }
+    for (const unit of ['\u0301', '\u200D', '\u65E5', 'x']) {
+      const text = `a${unit.repeat(5000)}`;
+      expect(splitHard(text)).toEqual(legacyHard(text));
+    }
+  });
 });

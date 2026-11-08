@@ -8,6 +8,7 @@ import {
   type WorkerAiConfig,
 } from '@ragbot/shared';
 import { assertWorkerEnv } from '../env-guard.js';
+import { maxEmbeddingBatchSize, MAX_WRITE_BATCH } from './embeddings.js';
 import { LOG_LEVELS, type LogLevel } from './logger.js';
 
 /**
@@ -171,7 +172,7 @@ const envSchema = z.object({
   EXTRACT_TIMEOUT_MS: integer(1, 3_600_000),
   EXTRACT_CHILD_MEMORY_MB: integer(16, 16_384),
   // write_document_chunks accepts at most 200 chunks per call.
-  EMBEDDING_BATCH_SIZE: integer(1, 200),
+  EMBEDDING_BATCH_SIZE: integer(1, MAX_WRITE_BATCH),
   EMBEDDING_PRICE_PER_MILLION_TOKENS: decimal(10_000),
 });
 
@@ -266,6 +267,11 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     ],
     // A heartbeat call that hangs for the whole database timeout must still end well inside the lease.
     [['DB_TIMEOUT_MS', 'JOB_LEASE_SECONDS'], v.DB_TIMEOUT_MS * 2 > v.JOB_LEASE_SECONDS * 1000],
+    // One batch is one provider request: the configured provider must accept that many inputs.
+    [
+      ['EMBEDDING_BATCH_SIZE', 'EMBEDDING_PROVIDER'],
+      v.EMBEDDING_BATCH_SIZE > maxEmbeddingBatchSize(ai.embedding.provider),
+    ],
     [
       ['STUCK_RUN_THRESHOLD_SECONDS', 'CHAT_DEADLINE_MS'],
       v.STUCK_RUN_THRESHOLD_SECONDS * 1000 < v.CHAT_DEADLINE_MS + STUCK_RUN_MARGIN_SECONDS * 1000,

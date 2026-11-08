@@ -96,17 +96,19 @@ export const MAINTENANCE_TASKS: readonly Task[] = [
     name: 'purge_expired_usage_records',
     run: call('purge_expired_usage_records', (c) => ({ p_batch: c.purgeBatchSize })),
   },
+  // Order matters (review P6-R3, R-6): fail_orphaned_index_versions runs BEFORE purge_terminal_jobs,
+  // so it sees the index jobs before the purge deletes the finished ones.
+  {
+    name: 'fail_orphaned_index_versions',
+    run: call('fail_orphaned_index_versions', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
+    })),
+  },
   {
     name: 'purge_terminal_jobs',
     run: call('purge_terminal_jobs', (c) => ({
       p_older_than_days: c.terminalJobRetentionDays,
       p_batch: c.retentionBatchSize,
-    })),
-  },
-  {
-    name: 'fail_orphaned_index_versions',
-    run: call('fail_orphaned_index_versions', (c) => ({
-      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
     })),
   },
   {

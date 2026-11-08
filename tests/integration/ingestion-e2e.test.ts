@@ -382,11 +382,27 @@ describe('A. queue', () => {
       expect(backend.completedCalls).toBe(Math.ceil(n / 2));
       expect(backend.batchSizes.slice(0, 3)).toEqual([2, 2, 2]);
       expect(backend.inputsSeen).toBe(n + 2); // n chunks once, plus the batch that failed once
-      // No duplicate usage rows: one per completed provider call, for this job only.
+      // Usage includes failed attempts (P6-D4): one row per completed provider call plus one for the
+      // call that failed after it was sent, for this job only; no duplicates from the retry.
       const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
-      expect(usage).toHaveLength(Math.ceil(n / 2));
+      expect(usage).toHaveLength(Math.ceil(n / 2) + 1);
       expect(usage.every((u) => u.job_id === done.id)).toBe(true);
-      expect(usage.reduce((sum, u) => sum + u.input_tokens, 0)).toBe(backend.tokensReported);
+      // The failed call is the third request of the first attempt (rows are in creation order); its
+      // row carries the worker's estimate for that batch (UTF-8 bytes / 3, rounded up).
+      const extracted = await extractText(utf8(makeText('a9')), 'text/plain', {
+        timeoutMs: 5000,
+        maxMemoryMb: 64,
+        maxPages: 10,
+        maxChars: 5_000_000,
+      });
+      const failedBatchEstimate = chunkDocument(extracted.pages, 'text/plain')
+        .chunks.slice(4, 6)
+        .reduce((sum, c) => sum + Math.ceil(Buffer.byteLength(c.content, 'utf8') / 3), 0);
+      expect(failedBatchEstimate).toBeGreaterThan(0);
+      expect(usage[2]?.input_tokens).toBe(failedBatchEstimate);
+      expect(usage.reduce((sum, u) => sum + u.input_tokens, 0)).toBe(
+        backend.tokensReported + failedBatchEstimate,
+      );
       // Each attempt settled its own spend; nothing is left reserved or released.
       const reservations = (await bot.reservations()).filter((r) => r.job_id === done.id);
       expect(reservations.map((r) => r.state)).toEqual(['settled', 'settled']);

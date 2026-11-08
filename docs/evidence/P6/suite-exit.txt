@@ -1,0 +1,19 @@
+rev 4d55e66 + working tree; node v24.22.2; 2026-11-08T15:48:48+05:30
+npm_build exit=0
+npm_lint exit=0
+npm_format_check exit=0
+npm_typecheck exit=0
+db-local exit=0
+db-test exit=0
+db-lint exit=0
+db-race exit=0
+npm_test exit=0
+integration exit=0
+api-smoke exit=0
+test-make exit=0
+secret-self exit=0
+secret-scan exit=0
+advisors-local exit=0
+dist-extract-check exit=0
+regex-dos-probe-after exit=0
+ALL PASSED

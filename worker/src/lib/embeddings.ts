@@ -26,6 +26,17 @@ import {
 export const EMBEDDING_REQUEST_TIMEOUT_MS = 60_000;
 /** batchEmbedContents accepts at most 100 requests per call; larger inputs are split. */
 export const GEMINI_MAX_BATCH = 100;
+/** write_document_chunks accepts at most this many chunks per call, so no batch is larger. */
+export const MAX_WRITE_BATCH = 200;
+
+/**
+ * The most inputs one indexing batch may hold for `provider`. A batch is meant to be ONE provider
+ * request, so a failure after the request was sent cannot hide a part that was already paid for:
+ * Gemini's batchEmbedContents takes at most 100, the others are bound by MAX_WRITE_BATCH.
+ */
+export function maxEmbeddingBatchSize(provider: EmbeddingConfig['provider']): number {
+  return provider === 'gemini' ? GEMINI_MAX_BATCH : MAX_WRITE_BATCH;
+}
 /** A response larger than this many bytes is refused (200 vectors of 1536 numbers is about 6 MB of JSON). */
 export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 /**

@@ -5,10 +5,10 @@ npm notice run vitest run --project unit
 
 
  Test Files  47 passed (47)
-      Tests  2045 passed (2045)
-   Start at  15:09:38
-   Duration  5.79s (tests 71%, import 25%, transform 2%, worker 2%)
+      Tests  2084 passed (2084)
+   Start at  15:51:16
+   Duration  7.07s (tests 75%, import 20%, transform 4%, worker 1%)
 
-    Isolate  47 workers spawned · ~106ms startup each (spawn + environment, per file)
-             at least ~1.14s faster with isolate: false — reuses workers across files instead of one per file
+    Isolate  47 workers spawned · ~110ms startup each (spawn + environment, per file)
+             at least ~1.18s faster with isolate: false — reuses workers across files instead of one per file
 

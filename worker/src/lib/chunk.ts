@@ -60,32 +60,72 @@ interface Atom {
 const CAP_Q = CHUNK_TARGET_TOKENS * 4;
 const OVERLAP_Q = CHUNK_OVERLAP_TOKENS * 4;
 
-interface Piece {
+export interface Piece {
   text: string;
   sep: string;
 }
 
 // Every pattern and weight below shapes the chunk boundaries, so CHUNKING_VERSION hashes them all.
-const SENTENCE_BOUNDARY =
-  /[.!?\u2026]+["'\u201D\u2019)\]]*(?=\s)|[\u3002\uFF01\uFF1F\uFF0E]+[\u300D\u300F\uFF09]*/gu;
-const LEADING_WHITESPACE = /^\s*/;
+//
+// None of these patterns is ever run over a whole document. Sentence boundaries and headings used to
+// be found with backtracking regexes (a lookahead after a greedy run, a lazy `.*?` before an
+// anchored end), which cost time quadratic in the length of a run of punctuation or spaces. They
+// are now found by scans that only move forward; each regex below tests one character at a time.
+// The scans select exactly what the old regexes selected (a unit test compares them with the old
+// regexes), except that a line longer than MAX_HEADING_LINE_CHARS is never a heading.
+/** Ends a sentence only when whitespace follows (after any closing quotes or brackets). */
+const SENTENCE_TERMINATOR = /[.!?\u2026]/u;
+const SENTENCE_CLOSER = /["'\u201D\u2019)\]]/u;
+/** Full-width terminators end a sentence without needing whitespace. */
+const WIDE_TERMINATOR = /[\u3002\uFF01\uFF1F\uFF0E]/u;
+const WIDE_CLOSER = /[\u300D\u300F\uFF09]/u;
+const WHITESPACE = /\s/u;
 const WORD_SEPARATOR = /\s+/g;
 const PARAGRAPH_SEPARATOR = /\n[ \t]*\n/;
 /** Separator between atoms that came from different blocks. */
 const BLOCK_SEPARATOR = '\n\n';
 
-/** Split into sentences, keeping the whitespace between them. */
-function splitSentences(text: string): Piece[] {
-  const boundary = SENTENCE_BOUNDARY;
+/** End of the run of characters matching `isIn` that starts at `from` (`from` itself if none). */
+function runEnd(text: string, from: number, isIn: RegExp): number {
+  let i = from;
+  while (i < text.length && isIn.test(text.charAt(i))) i += 1;
+  return i;
+}
+
+/**
+ * Split into sentences, keeping the whitespace between them. One forward scan: a run of ASCII
+ * terminators (`.!?` and the ellipsis) ends a sentence when closing quotes or brackets and then
+ * whitespace follow it; a run that fails that test is skipped as a whole, since every later
+ * position inside the run would fail identically. A run of full-width terminators ends a sentence
+ * wherever it stands.
+ */
+export function splitSentences(text: string): Piece[] {
   const pieces: Piece[] = [];
   let pos = 0;
   let sep = '';
-  for (const m of text.matchAll(boundary)) {
-    const end = m.index + m[0].length;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text.charAt(i);
+    let end: number;
+    if (SENTENCE_TERMINATOR.test(ch)) {
+      const terminators = runEnd(text, i + 1, SENTENCE_TERMINATOR);
+      const closers = runEnd(text, terminators, SENTENCE_CLOSER);
+      if (closers >= text.length || !WHITESPACE.test(text.charAt(closers))) {
+        i = terminators;
+        continue;
+      }
+      end = closers;
+    } else if (WIDE_TERMINATOR.test(ch)) {
+      end = runEnd(text, runEnd(text, i + 1, WIDE_TERMINATOR), WIDE_CLOSER);
+    } else {
+      i += 1;
+      continue;
+    }
     pieces.push({ text: text.slice(pos, end), sep });
-    const ws = LEADING_WHITESPACE.exec(text.slice(end))?.[0] ?? '';
-    sep = ws;
-    pos = end + ws.length;
+    const wsEnd = runEnd(text, end, WHITESPACE);
+    sep = text.slice(end, wsEnd);
+    pos = wsEnd;
+    i = end;
   }
   if (pos < text.length) pieces.push({ text: text.slice(pos), sep });
   return pieces;
@@ -109,29 +149,43 @@ const COMBINING = /^(?:\p{M}|\u200D|\uFE0F|[\u{E0100}-\u{E01EF}])/u;
 /**
  * Last resort for one unbroken run (a long URL, CJK text with no spaces): cut by code points,
  * never inside a surrogate pair and never before a combining mark or joiner.
+ *
+ * Each cut point is found with a binary search over running costs and a table of the nearest
+ * allowed cut at or before each position, so the work is proportional to the run's length even when
+ * a piece is much shorter than the cap (a run of thousands of combining marks cuts one code point at
+ * a time).
  */
-function splitHard(text: string): Piece[] {
+export function splitHard(text: string): Piece[] {
   const points = Array.from(text);
+  const count = points.length;
+  // cost[i] = quarter-tokens of the first i code points.
+  const cost = new Int32Array(count + 1);
+  // lastCut[i] = the largest position <= i where a cut is allowed (the end counts as allowed).
+  const lastCut = new Int32Array(count + 1);
+  for (let i = 0; i < count; i += 1) {
+    cost[i + 1] = (cost[i] as number) + quarterTokens(points[i] as string);
+  }
+  for (let i = 1; i <= count; i += 1) {
+    const blocked =
+      i < count && (COMBINING.test(points[i] as string) || points[i - 1] === '\u200D');
+    lastCut[i] = blocked ? (lastCut[i - 1] as number) : i;
+  }
   const pieces: Piece[] = [];
   let start = 0;
-  while (start < points.length) {
-    let q = 0;
-    let end = start;
-    while (end < points.length) {
-      const cp = points[end] as string;
-      const cost = quarterTokens(cp);
-      if (q + cost > CAP_Q && end > start) break;
-      q += cost;
-      end += 1;
+  while (start < count) {
+    // The longest run that fits the cap, but never empty.
+    const budget = (cost[start] as number) + CAP_Q;
+    let lo = start + 1;
+    let hi = count;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if ((cost[mid] as number) <= budget) lo = mid;
+      else hi = mid - 1;
     }
-    // Do not cut before a combining mark or joiner, or right after a zero-width joiner.
-    while (
-      end < points.length &&
-      end > start + 1 &&
-      (COMBINING.test(points[end] as string) || points[end - 1] === '\u200D')
-    ) {
-      end -= 1;
-    }
+    let end = lo;
+    // Do not cut before a combining mark or joiner, or right after a zero-width joiner. Back off
+    // to the nearest allowed cut, but never below one code point.
+    if (end < count && end > start + 1) end = Math.max(lastCut[end] as number, start + 1);
     pieces.push({ text: points.slice(start, end).join(''), sep: '' });
     start = end;
   }
@@ -183,7 +237,44 @@ function* toAtoms(text: string, sep: string, section: string | null): Steps<Atom
 }
 
 const FENCE = /^\s{0,3}(```|~~~)/;
-const HEADING = /^\s{0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+const SPACE_OR_TAB = /[ \t]/;
+/** `.` in the old heading regex: anything but a line terminator (a line never holds `\n`). */
+const LINE_TERMINATOR = /[\r\u2028\u2029]/;
+/** A line longer than this is never treated as a heading, so heading detection stays cheap. */
+export const MAX_HEADING_LINE_CHARS = 2000;
+
+/**
+ * ATX heading test: up to three leading whitespace characters, one to six `#`, then the end of the
+ * line or a space or tab. Returns the heading text (not yet trimmed; closing `#` marks and
+ * surrounding blanks removed), `''` for an empty heading, or null when the line is not a heading.
+ * Same answer as the regex `^\s{0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$` on its capture
+ * group, found without backtracking. A line containing `\r`, U+2028 or U+2029 after the marks
+ * never matched that regex (`.` stops at them) and does not match here.
+ */
+export function matchHeading(line: string): string | null {
+  if (line.length > MAX_HEADING_LINE_CHARS) return null;
+  let i = 0;
+  while (i < 3 && i < line.length && WHITESPACE.test(line.charAt(i))) i += 1;
+  let marks = 0;
+  while (i + marks < line.length && line.charAt(i + marks) === '#') marks += 1;
+  if (marks < 1 || marks > 6) return null;
+  const rest = line.slice(i + marks);
+  if (rest === '') return '';
+  if (!SPACE_OR_TAB.test(rest.charAt(0)) || LINE_TERMINATOR.test(rest)) return null;
+  const start = runEnd(rest, 0, SPACE_OR_TAB);
+  if (start === rest.length) return '';
+  let end = rest.length;
+  while (SPACE_OR_TAB.test(rest.charAt(end - 1))) end -= 1;
+  // An optional closing run of `#`, but only when blanks separate it from the text.
+  let hashes = end;
+  while (hashes > start && rest.charAt(hashes - 1) === '#') hashes -= 1;
+  if (hashes < end && hashes > start && SPACE_OR_TAB.test(rest.charAt(hashes - 1))) {
+    let textEnd = hashes;
+    while (textEnd > start && SPACE_OR_TAB.test(rest.charAt(textEnd - 1))) textEnd -= 1;
+    return rest.slice(start, textEnd);
+  }
+  return rest.slice(start, end);
+}
 
 /** Everything that shapes the chunk boundaries, hashed into CHUNKING_VERSION. */
 export interface ChunkingFingerprint {
@@ -195,16 +286,20 @@ export interface ChunkingFingerprint {
 
 export const CHUNKING_FINGERPRINT: ChunkingFingerprint = {
   weights: [Q_ASCII, Q_ALPHABETIC, Q_WIDE, ASCII_LIMIT, ALPHABETIC_LIMIT],
-  sizes: [CHUNK_TARGET_TOKENS, CHUNK_OVERLAP_TOKENS, MAX_SECTION_CHARS],
+  sizes: [CHUNK_TARGET_TOKENS, CHUNK_OVERLAP_TOKENS, MAX_SECTION_CHARS, MAX_HEADING_LINE_CHARS],
   separators: [BLOCK_SEPARATOR],
   patterns: [
-    SENTENCE_BOUNDARY,
-    LEADING_WHITESPACE,
+    SENTENCE_TERMINATOR,
+    SENTENCE_CLOSER,
+    WIDE_TERMINATOR,
+    WIDE_CLOSER,
+    WHITESPACE,
     WORD_SEPARATOR,
     PARAGRAPH_SEPARATOR,
     COMBINING,
     FENCE,
-    HEADING,
+    SPACE_OR_TAB,
+    LINE_TERMINATOR,
   ],
 };
 
@@ -257,10 +352,10 @@ function markdownBlocks(text: string): { text: string; section: string | null }[
       continue;
     }
     if (fence === null) {
-      const heading = HEADING.exec(line);
-      if (heading) {
+      const heading = matchHeading(line);
+      if (heading !== null) {
         flush();
-        const label = sectionLabel(heading[1] ?? '');
+        const label = sectionLabel(heading);
         if (label !== null) {
           section = label;
           blocks.push({ text: line.trim(), section });
