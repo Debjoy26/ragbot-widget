@@ -1,0 +1,5 @@
+npm notice run ragbot-widget@0.1.0 build
+npm notice run tsc -b && npm run build -w widget
+npm notice run @ragbot/widget@1.0.0 build
+npm notice run node scripts/build.mjs
+built widget v1.0.0

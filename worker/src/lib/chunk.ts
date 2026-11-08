@@ -1,0 +1,293 @@
+// Deterministic chunking (P6, TECH_SPECS §6/§7). Same input, same output, byte for byte: no
+// locale, ICU, clock or randomness is involved. Sizes are estimated tokens, not a model tokenizer.
+import type { ExtractedPage } from './extract.js';
+import type { KnowledgeMediaType } from './sniff.js';
+
+/** Target and maximum chunk size, in estimated tokens. */
+export const CHUNK_TARGET_TOKENS = 350;
+/** Approximate overlap carried into the next chunk, in estimated tokens. */
+export const CHUNK_OVERLAP_TOKENS = 50;
+/** Stored as `chunking_version`. Change the prefix when the algorithm changes, not just the sizes. */
+export const CHUNKING_VERSION = `c1-${CHUNK_TARGET_TOKENS}-${CHUNK_OVERLAP_TOKENS}`;
+/** Longest section label kept, in code points. */
+export const MAX_SECTION_CHARS = 200;
+
+export interface Chunk {
+  chunk_index: number;
+  content: string;
+  token_count: number;
+  /** Source page for PDFs; null for Markdown and plain text. */
+  page_number: number | null;
+  /** Nearest preceding Markdown heading at the start of the chunk; null for plain text and PDF. */
+  section: string | null;
+}
+
+export interface ChunkResult {
+  chunks: Chunk[];
+  version: string;
+}
+
+// Token estimate in quarter-tokens, integers only so the result never depends on float rounding:
+// ASCII costs 1/4 token per character, other scripts below U+2E80 cost 1/2, CJK and above cost 1.
+const Q_ASCII = 1;
+const Q_ALPHABETIC = 2;
+const Q_WIDE = 4;
+
+function quarterTokens(text: string): number {
+  let q = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) as number;
+    q += cp < 0x80 ? Q_ASCII : cp < 0x2e80 ? Q_ALPHABETIC : Q_WIDE;
+  }
+  return q;
+}
+
+/** Estimated token count of `text`: 0 for the empty string, otherwise at least 1. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(quarterTokens(text) / 4);
+}
+
+interface Atom {
+  text: string;
+  /** Whitespace that preceded this piece in the source (or the paragraph separator). */
+  sep: string;
+  q: number;
+  section: string | null;
+}
+
+const CAP_Q = CHUNK_TARGET_TOKENS * 4;
+const OVERLAP_Q = CHUNK_OVERLAP_TOKENS * 4;
+
+interface Piece {
+  text: string;
+  sep: string;
+}
+
+/** Split into sentences, keeping the whitespace between them. */
+function splitSentences(text: string): Piece[] {
+  const boundary =
+    /[.!?\u2026]+["'\u201D\u2019)\]]*(?=\s)|[\u3002\uFF01\uFF1F\uFF0E]+[\u300D\u300F\uFF09]*/gu;
+  const pieces: Piece[] = [];
+  let pos = 0;
+  let sep = '';
+  for (const m of text.matchAll(boundary)) {
+    const end = m.index + m[0].length;
+    pieces.push({ text: text.slice(pos, end), sep });
+    const ws = /^\s*/.exec(text.slice(end))?.[0] ?? '';
+    sep = ws;
+    pos = end + ws.length;
+  }
+  if (pos < text.length) pieces.push({ text: text.slice(pos), sep });
+  return pieces;
+}
+
+function splitWords(text: string): Piece[] {
+  const pieces: Piece[] = [];
+  let sep = '';
+  let pos = 0;
+  for (const m of text.matchAll(/\s+/g)) {
+    if (m.index > pos) pieces.push({ text: text.slice(pos, m.index), sep });
+    sep = m[0];
+    pos = m.index + m[0].length;
+  }
+  if (pos < text.length) pieces.push({ text: text.slice(pos), sep });
+  return pieces;
+}
+
+const COMBINING = /^(?:\p{M}|\u200D|\uFE0F|[\u{E0100}-\u{E01EF}])/u;
+
+/**
+ * Last resort for one unbroken run (a long URL, CJK text with no spaces): cut by code points,
+ * never inside a surrogate pair and never before a combining mark or joiner.
+ */
+function splitHard(text: string): Piece[] {
+  const points = Array.from(text);
+  const pieces: Piece[] = [];
+  let start = 0;
+  while (start < points.length) {
+    let q = 0;
+    let end = start;
+    while (end < points.length) {
+      const cp = points[end] as string;
+      const cost = quarterTokens(cp);
+      if (q + cost > CAP_Q && end > start) break;
+      q += cost;
+      end += 1;
+    }
+    // Do not cut before a combining mark or joiner, or right after a zero-width joiner.
+    while (
+      end < points.length &&
+      end > start + 1 &&
+      (COMBINING.test(points[end] as string) || points[end - 1] === '\u200D')
+    ) {
+      end -= 1;
+    }
+    pieces.push({ text: points.slice(start, end).join(''), sep: '' });
+    start = end;
+  }
+  return pieces;
+}
+
+/** Break a block of text into atoms that each fit the cap. */
+function toAtoms(text: string, sep: string, section: string | null): Atom[] {
+  const atoms: Atom[] = [];
+  const push = (piece: Piece, forceSep?: string): void => {
+    const q = quarterTokens(piece.text);
+    atoms.push({ text: piece.text, sep: forceSep ?? piece.sep, q, section });
+  };
+  let first = true;
+  const sepFor = (piece: Piece): string => {
+    if (first) {
+      first = false;
+      return sep;
+    }
+    return piece.sep;
+  };
+  for (const sentence of splitSentences(text)) {
+    if (quarterTokens(sentence.text) <= CAP_Q) {
+      push(sentence, sepFor(sentence));
+      continue;
+    }
+    for (const word of splitWords(sentence.text)) {
+      const wordSep = sepFor({ text: word.text, sep: word.sep || sentence.sep });
+      if (quarterTokens(word.text) <= CAP_Q) {
+        push(word, wordSep);
+        continue;
+      }
+      let firstHard = true;
+      for (const hard of splitHard(word.text)) {
+        push(hard, firstHard ? wordSep : '');
+        firstHard = false;
+      }
+    }
+  }
+  return atoms;
+}
+
+const FENCE = /^\s{0,3}(```|~~~)/;
+const HEADING = /^\s{0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+
+function sectionLabel(raw: string): string | null {
+  const label = Array.from(raw.trim()).slice(0, MAX_SECTION_CHARS).join('');
+  return label === '' ? null : label;
+}
+
+/** Split Markdown into blocks (heading lines, paragraphs) with the heading in effect for each. */
+function markdownBlocks(text: string): { text: string; section: string | null }[] {
+  const blocks: { text: string; section: string | null }[] = [];
+  let section: string | null = null;
+  let para: string[] = [];
+  let fence: string | null = null;
+  const flush = (): void => {
+    const joined = para.join('\n').trim();
+    if (joined !== '') blocks.push({ text: joined, section });
+    para = [];
+  };
+  for (const line of text.split('\n')) {
+    const fenceMatch = FENCE.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1] as string;
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
+      para.push(line);
+      continue;
+    }
+    if (fence === null) {
+      const heading = HEADING.exec(line);
+      if (heading) {
+        flush();
+        const label = sectionLabel(heading[1] ?? '');
+        if (label !== null) {
+          section = label;
+          blocks.push({ text: line.trim(), section });
+        }
+        continue;
+      }
+      if (line.trim() === '') {
+        flush();
+        continue;
+      }
+    }
+    para.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+function plainBlocks(text: string): { text: string; section: string | null }[] {
+  return text
+    .split(/\n[ \t]*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p !== '')
+    .map((p) => ({ text: p, section: null }));
+}
+
+function packAtoms(atoms: Atom[], pageNumber: number | null, out: Chunk[]): void {
+  let cur: Atom[] = [];
+  let curQ = 0;
+
+  const addCost = (a: Atom): number => (cur.length === 0 ? a.q : quarterTokens(a.sep) + a.q);
+  const emit = (): void => {
+    const content = cur.map((a, i) => (i === 0 ? a.text : a.sep + a.text)).join('');
+    if (content.trim() === '') return;
+    out.push({
+      chunk_index: out.length,
+      content,
+      token_count: estimateTokens(content),
+      page_number: pageNumber,
+      section: (cur[0] as Atom).section,
+    });
+  };
+  const total = (list: Atom[]): number =>
+    list.reduce((sum, a, i) => sum + (i === 0 ? a.q : quarterTokens(a.sep) + a.q), 0);
+
+  for (const atom of atoms) {
+    if (cur.length > 0 && curQ + addCost(atom) > CAP_Q) {
+      emit();
+      // Carry the longest tail of the emitted chunk that fits the overlap budget.
+      let start = cur.length;
+      let overlapQ = 0;
+      for (let i = cur.length - 1; i >= 0; i -= 1) {
+        const next = cur[i + 1];
+        const cost = (cur[i] as Atom).q + (next ? quarterTokens(next.sep) : 0);
+        if (overlapQ + cost > OVERLAP_Q) break;
+        overlapQ += cost;
+        start = i;
+      }
+      cur = cur.slice(start);
+      // Overlap never reaches back across a heading, so a chunk's label matches its new content.
+      while (cur.length > 0 && (cur[0] as Atom).section !== atom.section) cur.shift();
+      // The new atom must fit beside the overlap; otherwise shorten the overlap.
+      while (cur.length > 0 && total(cur) + quarterTokens(atom.sep) + atom.q > CAP_Q) {
+        cur.shift();
+      }
+      curQ = total(cur);
+    }
+    curQ += addCost(atom);
+    cur.push(atom);
+  }
+  if (cur.length > 0) emit();
+}
+
+/**
+ * Chunk extracted pages. PDF chunks never span pages, so every chunk has one `page_number`.
+ * Markdown chunks carry the nearest preceding heading as `section`. `chunk_index` runs from 0
+ * without gaps across the whole document. Empty or whitespace-only pages produce no chunks.
+ */
+export function chunkDocument(pages: ExtractedPage[], mediaType: KnowledgeMediaType): ChunkResult {
+  const chunks: Chunk[] = [];
+  const isPdf = mediaType === 'application/pdf';
+  const isMarkdown = mediaType === 'text/markdown';
+
+  for (const page of pages) {
+    const blocks = isMarkdown ? markdownBlocks(page.text) : plainBlocks(page.text);
+    const atoms: Atom[] = [];
+    for (const block of blocks) {
+      for (const atom of toAtoms(block.text, '\n\n', isMarkdown ? block.section : null)) {
+        atoms.push(atom);
+      }
+    }
+    packAtoms(atoms, isPdf ? page.number : null, chunks);
+  }
+  return { chunks, version: CHUNKING_VERSION };
+}

@@ -1,0 +1,3 @@
+Target: local stack (127.0.0.1:54322) · default; pass --remote for RagBot (rbejeqwxyxtklehuzibv)
+No issues found
+{"results":[],"message":"db advisors","target":{"kind":"local","host":"127.0.0.1","port":54322}}

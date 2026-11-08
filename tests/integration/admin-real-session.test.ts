@@ -422,7 +422,7 @@ describe('real sessions carry the right assurance level', () => {
     const forged = `${parts[0]}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${parts[2]}`;
     const r = await rpc(stack, forged, 'schema_version');
     expect(r.status).toBe(401);
-    expect(r.body).not.toBe(11);
+    expect(r.body).not.toBe(12);
   });
 });
 
@@ -545,7 +545,7 @@ describe('every browser-callable RPC over /rest/v1/rpc, for every principal', ()
             if (c.name === 'admin_list_members')
               expectSchema(adminListMembersResponseSchema, r.body);
             if (c.name === 'schema_version')
-              expect(expectSchema(schemaVersionResponseSchema, r.body)).toBe(11);
+              expect(expectSchema(schemaVersionResponseSchema, r.body)).toBe(12);
           } else {
             expectCode(r, want);
           }

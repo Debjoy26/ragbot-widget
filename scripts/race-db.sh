@@ -64,6 +64,7 @@ J1=ac700000-0000-4000-8000-000000000001; J2=ac700000-0000-4000-8000-000000000002
 BUCKET=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 OWNR=ae100000-0000-4000-8000-000000000001; ADMN=ae100000-0000-4000-8000-000000000002
 DOC=ae200000-0000-4000-8000-000000000001;  VER=ae300000-0000-4000-8000-000000000001
+IDXD=af200000-0000-4000-8000-000000000001; IDXV=af300000-0000-4000-8000-000000000001; IDXJ=af700000-0000-4000-8000-000000000001
 
 pq() { docker exec -i "$C" psql -U postgres -X -q -At -v ON_ERROR_STOP=1 -v VERBOSITY=verbose "$@"; }
 
@@ -91,7 +92,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=36
+EXPECTED=41
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -487,6 +488,50 @@ run_order "settings locked, reserve, bot edit"     "$RUN_ROW"               "$OP
 run_order "settings edit by the rule, reserve"      "$RUN_ROW"               "$OP_RULE"    "$RESERVE"  "$V_OPSET" ""    ""            yes
 run_order "corpus bump in flight, start"           "$CAP1"                  "$BUMP"       "$BEGIN1"   "$V_BUMP"  ""    "55P03 40P01" yes
 run_order "start in flight, corpus bump"           "$CAP1"                  "$BEGIN1"     "$BUMP"     "$V_BUMP"  ""    "55P03 40P01" yes
+
+# ---- P6 (migration 012): the worker's fenced functions ----
+# One running index job held by worker w1, its version in 'embedding'. The fence (lock order: document, job,
+# version) makes a second worker, or a call after the job was handed back, wait for the first and then fail with
+# RB013 (lease not held); the holder's own repeat is an idempotent upsert. The waits stay below lock_timeout (2 s).
+IDX_FIX="insert into public.documents (id, bot_id, title, status) values ('$IDXD', '$BOT', 'race', 'indexing');
+  insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status, embedding_model)
+    values ('$IDXV', '$IDXD', 1, '$BOT/$IDXD/$IDXV/original.txt', 'text/plain', 100, 'embedding', 'm');
+  insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until)
+    values ('$IDXJ', 'index_document', jsonb_build_object('bot_id', '$BOT', 'document_id', '$IDXD', 'version_id', '$IDXV'), 'running', 1, 3, 'w1', now() + interval '1 hour');"
+IDX_EMB="(select jsonb_agg(0.01) from generate_series(1, 1536))"
+WRITE_W1="select public.write_document_chunks('$IDXJ', 'w1', '$IDXV', jsonb_build_array(jsonb_build_object('chunk_index', 0, 'content', 'from-w1', 'embedding', $IDX_EMB)));"
+WRITE_W1B="select public.write_document_chunks('$IDXJ', 'w1', '$IDXV', jsonb_build_array(jsonb_build_object('chunk_index', 0, 'content', 'from-w1-again', 'embedding', $IDX_EMB)));"
+WRITE_W2="select public.write_document_chunks('$IDXJ', 'w2', '$IDXV', jsonb_build_array(jsonb_build_object('chunk_index', 0, 'content', 'from-w2', 'embedding', $IDX_EMB)));"
+RETRY_IDX="select public.retry_job_later('$IDXJ', 'w1', 'race_retry', 30);"
+HEART_IDX="select public.heartbeat_job('$IDXJ', 'w1', 60);"
+V_WRITE_HOLDER="select case
+  when (select count(*) from public.document_chunks where document_version_id = '$IDXV') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.document_chunks where document_version_id = '$IDXV') || ' chunk rows'
+  when (select content from public.document_chunks where document_version_id = '$IDXV') <> 'from-w1' then 'VIOLATION: the chunk is not the lease holder''s'
+  else 'CONSISTENT: only the lease holder wrote its chunk' end"
+V_WRITE_TWICE="select case
+  when (select count(*) from public.document_chunks where document_version_id = '$IDXV') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.document_chunks where document_version_id = '$IDXV') || ' chunk rows'
+  when (select content from public.document_chunks where document_version_id = '$IDXV') <> 'from-w1-again' then 'VIOLATION: the second write did not follow the first'
+  else 'CONSISTENT: one row, the second write replaced the first' end"
+V_RETRY_IDX="select case
+  when (select state from public.jobs where id = '$IDXJ') <> 'queued' then 'VIOLATION: the job is ' || (select state from public.jobs where id = '$IDXJ')
+  when (select locked_by from public.jobs where id = '$IDXJ') is not null or (select locked_until from public.jobs where id = '$IDXJ') is not null
+    then 'VIOLATION: the lease was restored after the job was handed back'
+  when (select last_error from public.jobs where id = '$IDXJ') <> 'race_retry' then 'VIOLATION: the error code was lost'
+  when (select status from public.document_versions where id = '$IDXV') <> 'embedding' then 'VIOLATION: a requeue changed the version'
+  else 'CONSISTENT: job queued, lease cleared, version untouched' end"
+V_RETRY_NOWRITE="select case
+  when (select count(*) from public.document_chunks where document_version_id = '$IDXV') <> 0
+    then 'VIOLATION: a chunk was written after the job was handed back'
+  when (select state from public.jobs where id = '$IDXJ') <> 'queued' then 'VIOLATION: the job is ' || (select state from public.jobs where id = '$IDXJ')
+  else 'CONSISTENT: no chunk after the retry, job queued' end"
+
+run_order "write in flight (w1), write by w2"      "$IDX_FIX"               "$WRITE_W1"   "$WRITE_W2" "$V_WRITE_HOLDER" "" "RB013" yes
+run_order "write in flight (w1), write by w1"      "$IDX_FIX"               "$WRITE_W1"   "$WRITE_W1B" "$V_WRITE_TWICE" "" ""     yes
+run_order "retry in flight, heartbeat"             "$IDX_FIX"               "$RETRY_IDX"  "$HEART_IDX" "$V_RETRY_IDX" ""   "RB013" yes
+run_order "heartbeat in flight, retry"             "$IDX_FIX"               "$HEART_IDX"  "$RETRY_IDX" "$V_RETRY_IDX" ""   ""      yes
+run_order "retry in flight, write by the holder"   "$IDX_FIX"               "$RETRY_IDX"  "$WRITE_W1"  "$V_RETRY_NOWRITE" "" "RB013" yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }
