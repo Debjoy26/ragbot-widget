@@ -472,6 +472,30 @@ describe('runtime: heartbeat', () => {
     await rt.shutdown();
   });
 
+  it('does not complete a job whose handler resolves after the lease was lost', async () => {
+    const gate = deferred();
+    const h = harness({
+      queue: [row()],
+      impl: {
+        heartbeat_job: () => {
+          throw new DbError('http', 400, 'RB013');
+        },
+      },
+    });
+    const rt = h.start({
+      index_document: async (_job, ctx) => {
+        await gate.promise;
+        expect(ctx.signal.aborted).toBe(true);
+      },
+    });
+    await tick(30_000);
+    gate.resolve();
+    await tick(0);
+    expect(h.named('complete_job')).toHaveLength(0);
+    expect(h.named('retry_job_later')).toHaveLength(0);
+    await rt.shutdown();
+  });
+
   it('does not call the DB for a job that throws after its lease was lost', async () => {
     const gate = deferred();
     const h = harness({
@@ -638,6 +662,40 @@ describe('runtime: graceful shutdown', () => {
     expect(h.named('complete_job')).toHaveLength(0);
     expect(h.named('retry_job_later')).toHaveLength(0);
     expect(h.named('fail_job')).toHaveLength(0);
+  });
+
+  it('does not complete a job whose handler RESOLVES after the shutdown abort (it returned early)', async () => {
+    const h = harness({ queue: [row()], config: { shutdownGraceMs: 5000 } });
+    const rt = h.start({
+      index_document: (_j, ctx) =>
+        new Promise<void>((resolve) => {
+          // A well-behaved handler stops promptly and returns normally when the signal aborts.
+          ctx.signal.addEventListener('abort', () => {
+            resolve();
+          });
+        }),
+    });
+    await tick(0);
+    let result: { drained: boolean; aborted: number } | undefined;
+    void rt.shutdown().then((r) => (result = r));
+    await tick(5000);
+    await tick(0);
+    expect(result).toEqual({ drained: false, aborted: 1 });
+    expect(h.named('complete_job')).toHaveLength(0);
+    expect(h.named('retry_job_later')).toHaveLength(0);
+    expect(h.named('fail_job')).toHaveLength(0);
+  });
+
+  it('still completes a job that resolves normally inside the grace period', async () => {
+    const gate = deferred();
+    const h = harness({ queue: [row()], config: { shutdownGraceMs: 5000 } });
+    const rt = h.start({ index_document: () => gate.promise });
+    await tick(0);
+    void rt.shutdown();
+    await tick(1000);
+    gate.resolve();
+    await tick(0);
+    expect(h.named('complete_job')).toHaveLength(1);
   });
 
   it('is bounded even when a handler ignores the abort', async () => {

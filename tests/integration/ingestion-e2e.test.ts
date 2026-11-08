@@ -20,7 +20,7 @@ import {
 } from './helpers/ingestion-fixtures.ts';
 import { RuntimePool } from './helpers/ingestion-runtime.ts';
 
-// P6 acceptance cases A1-A8, B1-B12 and C3-C5 (docs/evidence/P6/test-plan.md), end to end against the LOCAL
+// P6 acceptance cases A1-A10 (A9 resumption and A10 partial spend are P6-D1 additions), B1-B12 and C3-C5 (docs/evidence/P6/test-plan.md), end to end against the LOCAL
 // stack: real jobs, real Storage objects, real database functions, and the real index/cleanup handlers run
 // by the real runtime in this process. The ONLY fake is the embedding provider (FAKE, see
 // helpers/fake-embeddings.ts); no provider is ever called. Cases A3, C1 and C2 need a real process and are
@@ -342,6 +342,81 @@ describe('A. queue', () => {
       const hits = await bot.match('anything');
       expect(hits.length).toBeGreaterThan(0);
       expect(hits.every((r) => r.document_version_id === v1.versionId)).toBe(true);
+    },
+  );
+
+  t(
+    'A9 resumption: a transient failure after some batches; the retry embeds only the remaining chunks, records no duplicate usage and activates',
+    async () => {
+      const bot = await mkBot({ indexMaxAttempts: 3 });
+      // Two batches embed and are written, then the third call fails transiently.
+      backend.failFrom(3, 'transient');
+      await startRuntime({ JOB_BACKOFF_BASE_SECONDS: '4', JOB_BACKOFF_MAX_SECONDS: '8' });
+      const up = await bot.register({ bytes: utf8(makeText('a9')), mediaType: 'text/plain' });
+      // The provider recovers before the retry (the backoff is at least two seconds).
+      await waitFor('the failing third provider call', () => backend.calls >= 3, 60_000, 20);
+      backend.stopFailing();
+      const callsAtFailure = backend.calls;
+      const done = await bot.waitJobDone(up.versionId, 80_000);
+
+      expect(done.state).toBe('succeeded');
+      expect(done.attempts).toBe(2);
+      expect((await bot.version(up.versionId)).status).toBe('ready');
+      const idx = await bot.chunkIndexes(up.versionId);
+      const n = idx.length;
+      expect(n).toBeGreaterThan(6);
+      expect(idx).toEqual(range(n));
+      // First attempt: 2 completed calls (4 chunks) and one failed call. Retry: the remaining n - 4
+      // chunks only, never the first two batches again.
+      expect(callsAtFailure).toBe(3);
+      expect(backend.completedCalls).toBe(Math.ceil(n / 2));
+      expect(backend.batchSizes.slice(0, 3)).toEqual([2, 2, 2]);
+      expect(backend.inputsSeen).toBe(n + 2); // n chunks once, plus the batch that failed once
+      // No duplicate usage rows: one per completed provider call, for this job only.
+      const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
+      expect(usage).toHaveLength(Math.ceil(n / 2));
+      expect(usage.every((u) => u.job_id === done.id)).toBe(true);
+      expect(usage.reduce((sum, u) => sum + u.input_tokens, 0)).toBe(backend.tokensReported);
+      // Each attempt settled its own spend; nothing is left reserved or released.
+      const reservations = (await bot.reservations()).filter((r) => r.job_id === done.id);
+      expect(reservations.map((r) => r.state)).toEqual(['settled', 'settled']);
+      const cost = usage.reduce((sum, u) => sum + Number(u.estimated_cost), 0);
+      const settled = reservations.reduce((sum, r) => sum + Number(r.amount), 0);
+      expect(Math.abs(settled - cost)).toBeLessThan(0.00001);
+      const row = (await bot.status()).find((r) => r.document_id === up.documentId);
+      expect(row?.batches_total).toBe(Math.ceil(n / 2));
+      expect(row?.batches_done).toBe(Math.ceil(n / 2));
+    },
+  );
+
+  t(
+    'A10 partial spend: a permanent provider failure after some batches settles the reservation at the cost so far, which counts toward the cap',
+    async () => {
+      const bot = await mkBot();
+      backend.failFrom(3, 'permanent'); // two batches embed, the third call fails for good
+      await startRuntime();
+      const up = await bot.register({ bytes: utf8(makeText('a10')), mediaType: 'text/plain' });
+      const failed = await bot.waitVersion(up.versionId, ['failed', 'ready']);
+      expect(failed.status).toBe('failed');
+      expect(failed.failure_code).toBe('INDEXING_FAILED');
+      // A permanent failure completes the job. The two written batches stay (never active, never
+      // retrievable) until cleanup; the document has no active version.
+      const job = await bot.waitJobDone(up.versionId);
+      expect(job.state).toBe('succeeded');
+      expect((await bot.document(up.documentId)).active_version_id).toBeNull();
+      expect(await bot.match('a10')).toEqual([]);
+      expect(await bot.chunkIndexes(up.versionId)).toEqual(range(4));
+      expect(backend.completedCalls).toBe(2);
+      const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
+      expect(usage).toHaveLength(2);
+      const cost = usage.reduce((sum, u) => sum + Number(u.estimated_cost), 0);
+      expect(cost).toBeGreaterThan(0);
+
+      const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
+      // 'settled' rows count toward the daily cap; 'released' and 'reserved' would not be spend.
+      expect(reservations.map((r) => r.state)).toEqual(['settled']);
+      const amount = Number(reservations[0]?.amount);
+      expect(Math.abs(amount - cost)).toBeLessThan(0.00001);
     },
   );
 

@@ -11,14 +11,17 @@
 //    nothing. In particular the budget reservation is left to its TTL: a later attempt reuses it.
 //  * Document deleted mid-job (RB010) or version no longer indexable (RB030): nothing to do.
 //
-// The retry model is "start over with idempotent writes": chunk upserts are keyed on
-// (version, chunk_index) and extraction/chunking are deterministic, so a retried attempt writes
-// the same rows. Migration 012 offers the worker no read of the chunks already written, so a retry
-// re-embeds from the first batch (see the report).
+// Retries resume: get_index_job_context reports `written_chunks`, the count of this version's chunks
+// already written. Batches are written in order from chunk 0 and extraction/chunking are
+// deterministic, so a retried attempt skips chunk indexes below `written_chunks` (no embedding, no
+// write, no usage row) and continues from the first unwritten chunk, provided the chunking produced
+// at least that many chunks; otherwise it starts from 0 (chunk upserts are keyed on
+// (version, chunk_index), so rewriting is harmless).
 //
-// Budget (TECH_SPECS section 8): `reserve_job_budget` runs before any provider call. The
-// reservation is settled with the actual cost once all batches are written, and released on every
-// failure path that is not a lost lease.
+// Budget (TECH_SPECS section 8): `reserve_job_budget` runs before any provider call, for the chunks
+// still to embed. The reservation is settled with the actual cost once all batches are written. On
+// every other failure path that is not a lost lease it is settled with the cost spent so far when
+// at least one batch was embedded, and released only when nothing was spent.
 //
 // Logging: ids, counts, durations and codes only. Never document text, chunks, vectors or keys.
 import { createHash } from 'node:crypto';
@@ -62,6 +65,8 @@ interface IndexContext {
   readonly maxBytes: number;
   readonly maxPages: number;
   readonly activeVersionNumber: number | null;
+  /** Count of this version's chunks already written (resumption point). */
+  readonly writtenChunks: number;
 }
 
 /** A permanent outcome for the version. `reason` is a log-safe token. */
@@ -114,6 +119,12 @@ function int(row: Record<string, unknown>, name: string): number {
   return n;
 }
 
+function nonNegativeInt(row: Record<string, unknown>, name: string): number {
+  const n = int(row, name);
+  if (n < 0) throw new Error('invalid index job context');
+  return n;
+}
+
 function parseContext(raw: unknown): IndexContext {
   const row: unknown = Array.isArray(raw) ? raw[0] : raw;
   if (!isRecord(row)) throw new Error('invalid index job context');
@@ -132,6 +143,7 @@ function parseContext(raw: unknown): IndexContext {
     maxPages: int(row, 'max_pages'),
     activeVersionNumber:
       active === null || active === undefined ? null : int(row, 'active_version_number'),
+    writtenChunks: nonNegativeInt(row, 'written_chunks'),
   };
 }
 
@@ -179,6 +191,8 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
 
     let reservationId: string | null = null;
     let botId: string | null = null;
+    // Cost of the batches embedded by THIS attempt (counted as soon as the provider answered).
+    let actualCost = 0;
 
     async function release(): Promise<void> {
       if (reservationId === null || botId === null) return;
@@ -192,6 +206,29 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
       } catch (err) {
         // Left to the stale-reservation sweeper; never masks the original failure.
         log.warn('index_release_failed', { code: errorCode(err) });
+      }
+    }
+
+    // After a failure: pay for what was spent. Settles with the cost so far when a batch was
+    // embedded, releases when nothing was spent. Never masks the original failure.
+    async function settleOrRelease(): Promise<void> {
+      if (reservationId === null || botId === null) return;
+      if (!(actualCost > 0)) {
+        await release();
+        return;
+      }
+      const id = reservationId;
+      reservationId = null;
+      try {
+        await ctx.db.rpc<unknown>('settle_budget_reservation', {
+          p_bot_id: botId,
+          p_reservation_id: id,
+          p_actual_amount: actualCost,
+        });
+        log.info('index_partial_spend_settled');
+      } catch (err) {
+        // RB003: already settled or released elsewhere. Anything else is left to the sweeper.
+        log.warn('index_settle_failed', { code: errorCode(err) });
       }
     }
 
@@ -304,10 +341,15 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
         );
       }
 
-      // 7. Estimate and reserve, before any provider call.
+      // 7. Resume point, then estimate and reserve (for the chunks still to embed), before any
+      // provider call.
       const batchSize = config.embeddingBatchSize;
       const price = config.embeddingPricePerMillionTokens;
-      const estimatedTokens = chunks.reduce((sum, c) => sum + c.token_count, 0);
+      const start =
+        row.writtenChunks > 0 && chunks.length >= row.writtenChunks ? row.writtenChunks : 0;
+      const batchesBefore = Math.ceil(start / batchSize);
+      const remaining = chunks.slice(start);
+      const estimatedTokens = remaining.reduce((sum, c) => sum + c.token_count, 0);
       const estimatedCost = Math.max(MIN_RESERVATION_USD, usd(estimatedTokens, price));
       try {
         reservationId = await ctx.db.rpc<string>(
@@ -330,11 +372,11 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
       }
 
       // 8. Embed in batches; each batch is written, its usage recorded, then counted.
-      const batchesTotal = Math.ceil(chunks.length / batchSize);
+      const batchesTotal = batchesBefore + Math.ceil(remaining.length / batchSize);
       await progress({
         ...(startedStatus === 'embedding' ? {} : { status: 'embedding' }),
         batches_total: batchesTotal,
-        batches_done: 0,
+        batches_done: batchesBefore,
         extraction_method: extracted.method,
         extraction_version: extracted.version,
         chunking_version: chunked.version,
@@ -343,14 +385,15 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
       log.info('index_embedding_started', {
         chunk_count: chunks.length,
         batches_total: batchesTotal,
+        resumed_from_chunk: start,
         estimated_token_total: estimatedTokens,
       });
 
-      let actualCost = 0;
-      for (let b = 0; b < batchesTotal; b += 1) {
+      for (let b = batchesBefore; b < batchesTotal; b += 1) {
         if (signal.aborted) throw new LeaseLostError();
         await ctx.heartbeat();
-        const slice = chunks.slice(b * batchSize, (b + 1) * batchSize);
+        const from = start + (b - batchesBefore) * batchSize;
+        const slice = chunks.slice(from, from + batchSize);
         const started = Date.now();
         const result = await embeddings.embed(
           slice.map((c) => c.content),
@@ -361,6 +404,8 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
         assertEmbeddingShape(result.vectors, slice.length);
         const tokens = result.inputTokens ?? slice.reduce((sum, c) => sum + c.token_count, 0);
         const cost = usd(tokens, price);
+        // The provider has been paid for this batch whatever happens next.
+        actualCost += cost;
 
         await call(
           'write_document_chunks',
@@ -392,7 +437,6 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
           signal,
         );
         await progress({ batches_done: b + 1 });
-        actualCost += cost;
       }
 
       // 9. Settle with the actual cost.
@@ -438,7 +482,7 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
         log.warn('index_stopped', { reason: 'lease_lost_or_aborted' });
         return;
       }
-      await release();
+      await settleOrRelease();
 
       if (err instanceof Stop) {
         log.info('index_nothing_to_do', { reason: err.reason });

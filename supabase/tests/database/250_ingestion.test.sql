@@ -7,7 +7,7 @@
 --
 -- Ids end in 000000000250: bots bN, documents dN, versions eN/cN, jobs fN/aN. Worker ids are 'w1' (the holder) and 'w2'.
 begin;
-select plan(212);
+select plan(227);
 
 -- A valid embedding (1536 numbers) and a short one (1535), kept as transaction-local settings so every role can use them.
 select set_config('p6.emb', (select jsonb_agg(0.01)::text from generate_series(1, 1536)), true);
@@ -21,6 +21,22 @@ insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget
   ('b1000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}'),
   ('b2000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000}', '{}', '{}'),
   ('b3000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}');
+
+-- P6-D1 fixtures for the reindex check: an admin, a bot with the quotas and attempts policy, and a live document
+-- (df) whose active version has an upload_etag and a checksum. Ids: bot b4, user a9, document df, version c9.
+insert into auth.users (id, aud, role, email) values
+  ('a9000000-0000-4000-8000-000000000250', 'authenticated', 'authenticated', 'p6-owner@example.test');
+insert into public.admin_memberships (user_id, role, active) values
+  ('a9000000-0000-4000-8000-000000000250', 'owner', true);
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
+  ('b4000000-0000-4000-8000-000000000250', 'p6-reindex', 'x', array['en'], 'm', 1536, true);
+insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
+  ('b4000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50, "index_max_attempts": 3, "cleanup_max_attempts": 3, "quotas": {"reindex": {"limit": 10, "window_seconds": 3600}}}', '{}', '{}');
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('df000000-0000-4000-8000-000000000250', 'b4000000-0000-4000-8000-000000000250', 'df', 'ready', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status, upload_etag, checksum, embedding_model, created_at) values
+  ('c9000000-0000-4000-8000-000000000250', 'df000000-0000-4000-8000-000000000250', 1, 'b4000000-0000-4000-8000-000000000250/df000000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt', 'text/plain', 100, 'ready', 'etag-src', 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789', 'm', now());
+update public.documents set active_version_id = 'c9000000-0000-4000-8000-000000000250' where id = 'df000000-0000-4000-8000-000000000250';
 
 -- Documents. d1 context/progress; d2 live with a reindex version; d3 deleted (fence, cleanup, storage targets);
 -- d4 bot without max_pages; d5 chunk writes; d6 older version versus a newer active one; d7 first version that fails;
@@ -161,6 +177,15 @@ select results_eq(
   $q$select version_number, active_version_id, active_version_number from public.get_index_job_context('f2000000-0000-4000-8000-000000000250', 'w1', 'e3000000-0000-4000-8000-000000000250')$q$,
   $q$values (2, 'e2000000-0000-4000-8000-000000000250'::uuid, 1)$q$,
   'context: a reindex version reports the active version and its number');
+select results_eq(
+  $q$select batches_done, written_chunks from public.get_index_job_context('f1000000-0000-4000-8000-000000000250', 'w1', 'e1000000-0000-4000-8000-000000000250')$q$,
+  $q$values (null::integer, 0)$q$, 'context: before any progress or write, batches_done is null and written_chunks is 0');
+select results_eq(
+  $q$select batches_done, written_chunks from public.get_index_job_context('f5000000-0000-4000-8000-000000000250', 'w1', 'e5000000-0000-4000-8000-000000000250')$q$,
+  $q$values (null::integer, 0)$q$, 'context: a version in the embedding state with no chunks yet reports written_chunks 0');
+select results_eq(
+  $q$select batches_done, written_chunks from public.get_index_job_context('f2000000-0000-4000-8000-000000000250', 'w1', 'e3000000-0000-4000-8000-000000000250')$q$,
+  $q$values (null::integer, 0)$q$, 'context: written_chunks counts this version only (the live version of the same document has a chunk, the new one has none)');
 select throws_ok($q$select * from public.get_index_job_context('f4000000-0000-4000-8000-000000000250', 'w1', 'e4000000-0000-4000-8000-000000000250')$q$, 'RB036', null, 'context: upload_policy without max_pages fails closed (RB036)');
 
 -- ===== update_version_progress =====
@@ -197,6 +222,9 @@ select throws_ok($q$select public.update_version_progress('f1000000-0000-4000-80
 select results_eq(
   $q$select status, batches_done, batches_total from public.document_versions where id = 'e1000000-0000-4000-8000-000000000250'$q$,
   $q$values ('embedding', 2, 4)$q$, 'progress: refused patches changed nothing');
+select results_eq(
+  $q$select batches_done, written_chunks from public.get_index_job_context('f1000000-0000-4000-8000-000000000250', 'w1', 'e1000000-0000-4000-8000-000000000250')$q$,
+  $q$values (2, 0)$q$, 'context: batches_done reflects the progress patch while written_chunks stays 0');
 
 -- ===== write_document_chunks =====
 select is(public.write_document_chunks('f5000000-0000-4000-8000-000000000250', 'w1', 'e5000000-0000-4000-8000-000000000250',
@@ -220,6 +248,12 @@ select is(public.write_document_chunks('a1000000-0000-4000-8000-000000000250', '
   (select jsonb_agg(jsonb_build_object('chunk_index', g, 'content', 'c' || g, 'embedding', current_setting('p6.emb')::jsonb)) from generate_series(0, 199) g)),
   200, 'chunks: exactly 200 chunks in one call is accepted');
 select is((select count(*)::int from public.document_chunks where document_version_id = 'c8000000-0000-4000-8000-000000000250'), 200, 'chunks: 200 rows stored');
+select results_eq(
+  $q$select written_chunks from public.get_index_job_context('f5000000-0000-4000-8000-000000000250', 'w1', 'e5000000-0000-4000-8000-000000000250')$q$,
+  $q$values (2)$q$, 'context: after a partial write written_chunks is the number of rows written (2)');
+select results_eq(
+  $q$select written_chunks from public.get_index_job_context('a1000000-0000-4000-8000-000000000250', 'w1', 'c8000000-0000-4000-8000-000000000250')$q$,
+  $q$values (200)$q$, 'context: a sibling version of the same document reports its own count (200), not the other version''s');
 select throws_ok($q$select public.write_document_chunks('a1000000-0000-4000-8000-000000000250', 'w1', 'c8000000-0000-4000-8000-000000000250',
   (select jsonb_agg(jsonb_build_object('chunk_index', g, 'content', 'c', 'embedding', current_setting('p6.emb')::jsonb)) from generate_series(200, 400) g))$q$,
   '22023', null, 'chunks: 201 chunks in one call -> 22023');
@@ -468,6 +502,26 @@ select throws_ok($q$select public.write_document_chunks(gen_random_uuid(), 'w', 
 select throws_ok($q$select * from public.expire_abandoned_uploads(1, 1)$q$, '42501', null, 'authenticated: expire_abandoned_uploads -> permission denied');
 select throws_ok($q$select public.record_usage_event(gen_random_uuid(), null, 'p', 'm', 'chat', 1, 0, 1)$q$, '42501', null, 'authenticated: record_usage_event -> permission denied');
 reset role;
+
+-- ===== reindex carries the source version's etag and checksum (P6-D1) =====
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"a9000000-0000-4000-8000-000000000250","aal":"aal2","role":"authenticated"}', true);
+select ok((select r.version_number = 2 from public.admin_reindex_document('df000000-0000-4000-8000-000000000250') r), 'reindex: the owner creates version 2 of the live document');
+reset role;
+select is(
+  (select row(v.upload_etag, v.checksum, v.status, v.storage_path, v.media_type, v.byte_size) from public.document_versions v where v.document_id = 'df000000-0000-4000-8000-000000000250' and v.version_number = 2),
+  row('etag-src'::text, 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'::text, 'uploaded'::text, 'b4000000-0000-4000-8000-000000000250/df000000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt'::text, 'text/plain'::text, 100::bigint),
+  'reindex: the new version has the source upload_etag and checksum, and still reuses the original and starts uploaded');
+select is(
+  (select row(v.upload_etag, v.checksum) from public.document_versions v where v.id = 'c9000000-0000-4000-8000-000000000250'),
+  row('etag-src'::text, 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'::text),
+  'reindex: the source version is unchanged');
+select is((select count(*)::int from public.jobs j where j.type = 'index_document' and j.payload ->> 'document_id' = 'df000000-0000-4000-8000-000000000250' and j.state = 'queued' and j.max_attempts = 3), 1, 'reindex: one queued index job with the policy attempts');
+select is((select count(*)::int from public.audit_logs where action = 'document.reindex' and actor_user_id = 'a9000000-0000-4000-8000-000000000250'), 1, 'reindex: one audit row');
+select is((select pg_get_userbyid(p.proowner) from pg_proc p where p.oid = 'public.admin_reindex_document(uuid)'::regprocedure), (select pg_get_userbyid(p.proowner) from pg_proc p where p.oid = 'public.admin_document_status(uuid, integer, integer)'::regprocedure), 'reindex: the replaced function has the same owner as its siblings');
+select ok((select p.prosecdef and p.proconfig = array['search_path=""'] from pg_proc p where p.oid = 'public.admin_reindex_document(uuid)'::regprocedure), 'reindex: still SECURITY DEFINER with an empty search_path');
+select ok(has_function_privilege('authenticated', 'public.admin_reindex_document(uuid)', 'execute') and not has_function_privilege('anon', 'public.admin_reindex_document(uuid)', 'execute') and not has_function_privilege('service_role', 'public.admin_reindex_document(uuid)', 'execute'), 'reindex: EXECUTE is still authenticated only');
+select ok((select p.proretset and pg_get_function_result(p.oid) = 'TABLE(version_id uuid, version_number integer)' from pg_proc p where p.oid = 'public.admin_reindex_document(uuid)'::regprocedure), 'reindex: the return type is unchanged');
 
 select * from finish();
 rollback;

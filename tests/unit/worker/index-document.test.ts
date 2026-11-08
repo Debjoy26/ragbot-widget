@@ -84,6 +84,8 @@ function contextRow(over: Record<string, unknown> = {}): Record<string, unknown>
     max_pages: 50,
     active_version_id: null,
     active_version_number: null,
+    batches_done: 0,
+    written_chunks: 0,
     ...over,
   };
 }
@@ -202,6 +204,17 @@ function run(rig: Rig, j: ClaimedJob = job): Promise<void> {
 function failedWith(rig: Rig): string | undefined {
   const c = rig.of('fail_document_version')[0];
   return c === undefined ? undefined : (c.args['p_failure_code'] as string);
+}
+
+/** A batch was embedded before the failure: the reservation is settled with that cost, not released. */
+function expectPartialSpendSettled(rig: Rig, expectedCost?: number): void {
+  expect(rig.of('release_budget_reservation')).toHaveLength(0);
+  const settles = rig.of('settle_budget_reservation');
+  expect(settles).toHaveLength(1);
+  expect(settles[0]?.args).toMatchObject({ p_bot_id: BOT_ID, p_reservation_id: RESERVATION_ID });
+  const amount = settles[0]?.args['p_actual_amount'] as number;
+  expect(amount).toBeGreaterThan(0);
+  if (expectedCost !== undefined) expect(amount).toBeCloseTo(expectedCost, 10);
 }
 
 function noEmbedNoWrite(rig: Rig): void {
@@ -403,6 +416,155 @@ describe('index_document: retried attempts', () => {
   });
 });
 
+describe('index_document: resumption from written_chunks', () => {
+  const resumeConfig = makeConfig({ embeddingBatchSize: 2 });
+
+  async function fresh(bytes: Uint8Array): Promise<Rig> {
+    const rig = makeRig(bytes);
+    rig.ctx = { ...rig.ctx, config: resumeConfig };
+    await run(rig);
+    return rig;
+  }
+
+  it('skips chunk indexes below written_chunks: no embedding, write or usage row for them', async () => {
+    const bytes = longText();
+    const full = await fresh(bytes);
+    const total = full
+      .of('write_document_chunks')
+      .flatMap((c) => c.args['p_chunks'] as unknown[]).length;
+    expect(total).toBeGreaterThan(5);
+
+    const rig = makeRig(bytes, { status: 'embedding', written_chunks: 4, batches_done: 2 });
+    rig.ctx = { ...rig.ctx, config: resumeConfig };
+    await run(rig);
+
+    const indexes = rig
+      .of('write_document_chunks')
+      .flatMap((c) => (c.args['p_chunks'] as { chunk_index: number }[]).map((x) => x.chunk_index));
+    expect(indexes).toEqual(Array.from({ length: total - 4 }, (_, i) => i + 4));
+    expect(rig.embedCalls.flat()).toHaveLength(total - 4);
+    const batches = Math.ceil((total - 4) / 2);
+    expect(rig.embedCalls).toHaveLength(batches);
+    expect(rig.of('record_usage_event')).toHaveLength(batches);
+    // The estimate covers the remaining chunks only.
+    expect(rig.of('reserve_job_budget')[0]?.args['p_amount']).toBeLessThan(
+      full.of('reserve_job_budget')[0]?.args['p_amount'] as number,
+    );
+    // batches_done stays consistent: two batches were done before, the rest continue from there.
+    const patches = rig.of('update_version_progress').map((c) => c.args['p_patch']);
+    expect(patches[1]).toMatchObject({ batches_total: 2 + batches, batches_done: 2 });
+    expect(patches.slice(2)).toEqual(
+      Array.from({ length: batches }, (_, i) => ({ batches_done: 3 + i })),
+    );
+    expect(rig.of('activate_version_for_job')[0]?.args['p_expected_chunks']).toBe(total);
+  });
+
+  it('with every chunk already written it embeds nothing and activates', async () => {
+    const bytes = longText();
+    const full = await fresh(bytes);
+    const total = full
+      .of('write_document_chunks')
+      .flatMap((c) => c.args['p_chunks'] as unknown[]).length;
+    const rig = makeRig(bytes, { status: 'embedding', written_chunks: total });
+    rig.ctx = { ...rig.ctx, config: resumeConfig };
+    await run(rig);
+    expect(rig.embed).not.toHaveBeenCalled();
+    expect(rig.of('write_document_chunks')).toHaveLength(0);
+    expect(rig.of('record_usage_event')).toHaveLength(0);
+    expect(rig.of('activate_version_for_job')[0]?.args['p_expected_chunks']).toBe(total);
+    expect(rig.of('release_budget_reservation')).toHaveLength(0);
+  });
+
+  it('starts from chunk 0 when written_chunks exceeds what the chunking produced', async () => {
+    const bytes = longText();
+    const full = await fresh(bytes);
+    const total = full
+      .of('write_document_chunks')
+      .flatMap((c) => c.args['p_chunks'] as unknown[]).length;
+    const rig = makeRig(bytes, { status: 'embedding', written_chunks: total + 1 });
+    rig.ctx = { ...rig.ctx, config: resumeConfig };
+    await run(rig);
+    const indexes = rig
+      .of('write_document_chunks')
+      .flatMap((c) => (c.args['p_chunks'] as { chunk_index: number }[]).map((x) => x.chunk_index));
+    expect(indexes).toEqual(Array.from({ length: total }, (_, i) => i));
+    expect(rig.of('update_version_progress')[1]?.args['p_patch']).toMatchObject({
+      batches_done: 0,
+    });
+    expect(rig.of('activate_version_for_job')[0]?.args['p_expected_chunks']).toBe(total);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['not a number', 'many'],
+  ])('fails closed when written_chunks is %s: nothing embedded, nothing failed', async (_n, v) => {
+    const rig = makeRig(SHORT);
+    rig.responders['get_index_job_context'] = () => {
+      const r = contextRow({ byte_size: SHORT.length });
+      if (v === undefined) delete r['written_chunks'];
+      else r['written_chunks'] = v;
+      return [r];
+    };
+    await expect(run(rig)).rejects.toThrow();
+    expect(rig.embed).not.toHaveBeenCalled();
+    expect(rig.of('write_document_chunks')).toHaveLength(0);
+    expect(rig.of('fail_document_version')).toHaveLength(0);
+  });
+});
+
+describe('index_document: partial spend', () => {
+  it('a permanent provider failure after a batch settles the cost so far and fails the version', async () => {
+    const rig = makeRig(longText());
+    rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+    rig.embed
+      .mockImplementationOnce((texts: readonly string[]) =>
+        Promise.resolve({ vectors: texts.map(vector), inputTokens: 500 }),
+      )
+      .mockRejectedValueOnce(new ProviderError('auth', 'embedding provider returned HTTP 401'));
+    await run(rig);
+    expect(failedWith(rig)).toBe('INDEXING_FAILED');
+    expectPartialSpendSettled(rig, 0.0001); // 500 tokens at 0.2 USD per million
+    expect(rig.names()).not.toContain('activate_version_for_job');
+  });
+
+  it('settles with the sum of every batch embedded before the failure', async () => {
+    const rig = makeRig(longText());
+    rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+    rig.embed
+      .mockImplementationOnce((texts: readonly string[]) =>
+        Promise.resolve({ vectors: texts.map(vector), inputTokens: 100 }),
+      )
+      .mockImplementationOnce((texts: readonly string[]) =>
+        Promise.resolve({ vectors: texts.map(vector), inputTokens: 300 }),
+      )
+      .mockRejectedValueOnce(new ProviderError('transient', 'embedding request failed'));
+    await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+    expectPartialSpendSettled(rig, 0.00008);
+  });
+
+  it('releases (and does not settle) when the provider failed on the first batch', async () => {
+    const rig = makeRig(SHORT);
+    rig.embed.mockRejectedValueOnce(
+      new ProviderError('auth', 'embedding provider returned HTTP 401'),
+    );
+    await run(rig);
+    expect(rig.of('release_budget_reservation')).toHaveLength(1);
+    expect(rig.of('settle_budget_reservation')).toHaveLength(0);
+  });
+
+  it('a failing settle never masks the original failure', async () => {
+    const rig = makeRig(SHORT);
+    rig.responders['write_document_chunks'] = () => {
+      throw new DbError('http', 503);
+    };
+    rig.responders['settle_budget_reservation'] = () => {
+      throw new DbError('network');
+    };
+    await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+  });
+});
+
 describe('index_document: nothing to do', () => {
   it.each(['ready', 'superseded', 'failed'])(
     'completes without work when the version is %s',
@@ -436,14 +598,14 @@ describe('index_document: nothing to do', () => {
     expect(rig.calls).toHaveLength(0);
   });
 
-  it('stops quietly when the document is deleted during the job (RB010 on write) and releases the reservation', async () => {
+  it('stops quietly when the document is deleted during the job (RB010 on write) and settles the partial spend', async () => {
     const rig = makeRig(SHORT);
     rig.responders['write_document_chunks'] = () => {
       throw new DbError('http', 400, 'RB010');
     };
     await run(rig);
     expect(failedWith(rig)).toBeUndefined();
-    expect(rig.names()).toContain('release_budget_reservation');
+    expectPartialSpendSettled(rig);
     expect(rig.names()).not.toContain('activate_version_for_job');
   });
 
@@ -454,7 +616,7 @@ describe('index_document: nothing to do', () => {
     };
     await run(rig);
     expect(failedWith(rig)).toBeUndefined();
-    expect(rig.names()).toContain('release_budget_reservation');
+    expectPartialSpendSettled(rig);
   });
 });
 
@@ -741,7 +903,7 @@ describe('index_document: transient failures retry', () => {
     expect(failedWith(rig)).toBeUndefined();
   });
 
-  it('a failure after some batches leaves written chunks, never activates, and releases the reservation', async () => {
+  it('a failure after some batches leaves written chunks, never activates, and settles the cost so far', async () => {
     const rig = makeRig(longText());
     rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
     rig.embed
@@ -752,8 +914,8 @@ describe('index_document: transient failures retry', () => {
     await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
     expect(rig.of('write_document_chunks')).toHaveLength(1);
     expect(rig.names()).not.toContain('activate_version_for_job');
-    expect(rig.names()).not.toContain('settle_budget_reservation');
-    expect(rig.of('release_budget_reservation')).toHaveLength(1);
+    // One batch (2 chunks, 5 tokens reported) was paid for: 5 tokens at 0.2 USD per million.
+    expectPartialSpendSettled(rig, 0.000001);
   });
 
   it.each([
@@ -761,7 +923,7 @@ describe('index_document: transient failures retry', () => {
     ['timeout', new DbError('timeout')],
     ['http 503', new DbError('http', 503)],
   ])(
-    'a database %s error becomes RetryJobError(db_unavailable) and releases the reservation',
+    'a database %s error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend',
     async (_n, dbErr) => {
       const rig = makeRig(SHORT);
       rig.responders['write_document_chunks'] = () => {
@@ -770,7 +932,7 @@ describe('index_document: transient failures retry', () => {
       const err = await run(rig).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(RetryJobError);
       expect((err as RetryJobError).code).toBe('db_unavailable');
-      expect(rig.names()).toContain('release_budget_reservation');
+      expectPartialSpendSettled(rig);
     },
   );
 
@@ -782,13 +944,13 @@ describe('index_document: transient failures retry', () => {
     expect(failedWith(rig)).toBeUndefined();
   });
 
-  it('an unexpected error is rethrown (the runtime retries it) after the reservation is released', async () => {
+  it('an unexpected error is rethrown (the runtime retries it) after the partial spend is settled', async () => {
     const rig = makeRig(SHORT);
     rig.responders['record_usage_event'] = () => {
       throw new TypeError('boom');
     };
     await expect(run(rig)).rejects.toBeInstanceOf(TypeError);
-    expect(rig.names()).toContain('release_budget_reservation');
+    expectPartialSpendSettled(rig);
     expect(failedWith(rig)).toBeUndefined();
   });
 

@@ -7,7 +7,8 @@
 //    process is shutting down. It must stop promptly then.
 //  * Resolving means "the job did its work": the runtime calls complete_job. That includes a
 //    permanent failure the handler has already recorded (for example a bad file whose version it
-//    failed), per the P6 state machine.
+//    failed), per the P6 state machine. The exception: a handler that resolves after its signal
+//    was aborted returned early, so the job is left to lease expiry instead.
 //  * Throwing RetryJobError (or any other error) means "transient": the runtime calls
 //    retry_job_later with a safe code and a backoff delay. After max_attempts the database
 //    dead-letters the job. An unexpected error is reduced to the code `handler_error`; its message
@@ -291,6 +292,15 @@ export function startRuntime(
         return;
       }
       if (outcome === 'ok') {
+        // A handler that resolves after its signal aborted (shutdown abort, lease or heartbeat
+        // lost) returned early: it did not finish its work. Completing would hide that, so the job
+        // is left to lease expiry.
+        if (controller.signal.aborted) {
+          log.warn('job_abandoned', {
+            reason: controller.signal.reason instanceof ShutdownError ? 'shutdown' : 'aborted',
+          });
+          return;
+        }
         await db.rpc<unknown>(
           'complete_job',
           { p_job_id: job.id, p_worker: config.workerId },

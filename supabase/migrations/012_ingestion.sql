@@ -81,6 +81,8 @@ $$;
 -- get_index_job_context: everything the worker needs to start, in one row. Fenced.
 -- embedding_model is the bot's current model (what the worker must embed with). max_bytes and max_pages come
 -- from upload_policy and fail closed (RB036) when missing or out of range, like the admin functions.
+-- batches_done (the version's value) and written_chunks (how many chunk rows this version already has) let a
+-- retried job resume instead of starting over; they are the last two columns.
 -- ---------------------------------------------------------------------------
 create function public.get_index_job_context(p_job_id uuid, p_worker text, p_version_id uuid)
 returns table (
@@ -97,7 +99,9 @@ returns table (
   max_bytes             bigint,
   max_pages             bigint,
   active_version_id     uuid,
-  active_version_number integer
+  active_version_number integer,
+  batches_done          integer,
+  written_chunks        integer
 )
 language plpgsql
 set search_path = ''
@@ -105,6 +109,7 @@ set lock_timeout = '2s'
 as $$
 #variable_conflict use_column
 declare
+  v_written integer;
   v_bot     uuid;
   v_doc     uuid;
   v_ver     public.document_versions%rowtype;
@@ -123,6 +128,7 @@ begin
     select x.version_number into v_act_num from public.document_versions x where x.id = v_active;
   end if;
   select b.embedding_model into v_model from public.bot_profiles b where b.id = v_bot;
+  select count(*)::integer into v_written from public.document_chunks c where c.document_version_id = p_version_id;
 
   select cs.upload_policy into v_policy from public.client_settings cs where cs.bot_id = v_bot;
   if not found or v_policy is null
@@ -137,7 +143,62 @@ begin
   end if;
 
   return query select v_bot, v_doc, v_ver.id, v_ver.version_number, v_ver.status, v_ver.storage_path, v_ver.media_type,
-                      v_ver.byte_size, v_ver.upload_etag, v_model, v_bytes, v_pages, v_active, v_act_num;
+                      v_ver.byte_size, v_ver.upload_etag, v_model, v_bytes, v_pages, v_active, v_act_num,
+                      v_ver.batches_done, v_written;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- admin_reindex_document, replaced from 009 (CREATE OR REPLACE keeps the owner and the EXECUTE grants): the new
+-- version now carries the source version's upload_etag and checksum. The worker verifies the stored object
+-- against upload_etag before it extracts; a reindex reuses the same original, so it must reuse the same etag
+-- (a NULL etag made the worker refuse every reindexed version). Everything else is identical to 009: guard
+-- order, quota, job, audit and return value.
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_reindex_document(p_document_id uuid)
+returns table (version_id uuid, version_number integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_doc      public.documents%rowtype;
+  v_act      public.document_versions%rowtype;
+  v_attempts bigint;
+  v_ver      uuid := gen_random_uuid();
+  v_num      integer;
+begin
+  perform public.admin_require(array['owner', 'admin']);
+  if p_document_id is null then
+    raise exception 'admin_reindex_document: document is required' using errcode = '22023';
+  end if;
+
+  select * into v_doc from public.documents d where d.id = p_document_id for update;
+  if not found or v_doc.deleted_at is not null then
+    raise exception 'admin_reindex_document: document not found' using errcode = 'RB037';
+  end if;
+  if v_doc.active_version_id is null then
+    raise exception 'admin_reindex_document: the document has no active version' using errcode = 'RB030';
+  end if;
+  select * into v_act from public.document_versions x where x.id = v_doc.active_version_id;
+
+  v_attempts := public.admin_policy_int(v_doc.bot_id, 'index_max_attempts', 1, 20);
+  perform public.admin_consume_quota(v_doc.bot_id, 'reindex');
+
+  select max(x.version_number) + 1 into v_num from public.document_versions x where x.document_id = p_document_id;
+  insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status, upload_etag, checksum)
+  values (v_ver, p_document_id, v_num, v_act.storage_path, v_act.media_type, v_act.byte_size, 'uploaded', v_act.upload_etag, v_act.checksum);
+
+  insert into public.jobs (type, dedupe_key, payload, max_attempts)
+  values ('index_document', 'index:version:' || v_ver::text,
+          jsonb_build_object('bot_id', v_doc.bot_id, 'document_id', p_document_id, 'version_id', v_ver),
+          v_attempts::integer);
+
+  perform public.admin_audit('document.reindex', 'document_version', v_ver,
+    jsonb_build_object('bot_id', v_doc.bot_id, 'document_id', p_document_id, 'version_id', v_ver,
+                       'version_number', v_num));
+  return query select v_ver, v_num;
 end;
 $$;
 

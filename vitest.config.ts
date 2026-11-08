@@ -11,7 +11,13 @@ export default defineConfig({
       { resolve: { alias }, test: { name: 'unit', include: ['tests/unit/**/*.test.ts'] } },
       {
         resolve: { alias },
-        test: { name: 'integration', include: ['tests/integration/**/*.test.ts'] },
+        test: {
+          name: 'integration',
+          include: ['tests/integration/**/*.test.ts'],
+          // One file at a time: the ingestion tests run a worker that claims every queued job, and
+          // other files queue jobs of their own. All files share one local database.
+          fileParallelism: false,
+        },
       },
     ],
   },
