@@ -109,6 +109,8 @@ function config(overrides: Record<string, string> = {}): WorkerConfig {
     TERMINAL_JOB_RETENTION_DAYS: '30',
     ABANDONED_UPLOAD_HOURS: '24',
     EXTRACT_MAX_CHARS: '1000',
+    WORKER_MAX_DOWNLOAD_BYTES: '1048576',
+    MAX_CHUNKS_PER_VERSION: '1000',
     EXTRACT_TIMEOUT_MS: '1000',
     EXTRACT_CHILD_MEMORY_MB: '64',
     EMBEDDING_BATCH_SIZE: '8',
@@ -265,7 +267,10 @@ describe('runtime against the local stack', () => {
       },
     });
     await waitFor(async () => (await getJob(id)).state === 'succeeded', 20_000);
-    expect(ranOn).toEqual([{ attempts: 2, worker: `rescuer-${RUN}` }]);
+    // P6-D2 (S-6): the worker id is the configured base plus a random suffix.
+    expect(ranOn).toHaveLength(1);
+    expect(ranOn[0]?.attempts).toBe(2);
+    expect(ranOn[0]?.worker).toMatch(new RegExp(`^rescuer-${RUN}-[0-9a-f]{6}$`));
     // The old worker's lease is gone: its heartbeat and completion are refused (RB013).
     for (const [fn, args] of [
       ['heartbeat_job', { p_job_id: id, p_worker: crashed, p_lease_seconds: 5 }],
@@ -318,7 +323,7 @@ describe('runtime against the local stack', () => {
     await rt.shutdown();
   }, 30_000);
 
-  it('shutdown leaves a running job to lease expiry, and another runtime then takes it', async () => {
+  it('shutdown hands a running job back to the queue with its attempt restored (P6-D2), and another runtime takes it', async () => {
     const id = await insertJob(5);
     const a = runtime(config({ WORKER_ID: `drain-${RUN}`, SHUTDOWN_GRACE_MS: '500' }), {
       warm_answer_cache: async (job, ctx) => {
@@ -335,12 +340,15 @@ describe('runtime against the local stack', () => {
     const result = await a.shutdown();
     expect(result).toEqual({ drained: false, aborted: 1 });
     const left = await getJob(id);
-    expect(left.state).toBe('running'); // not completed, not retried, not failed
+    // P6-D2 (C-7): release_job_lease returns the job to the queue and gives the attempt back.
+    expect(left.state).toBe('queued');
+    expect(left.attempts).toBe(0);
+    expect(left.locked_by).toBeNull();
     const b = runtime(config({ WORKER_ID: `after-${RUN}` }), {
       warm_answer_cache: () => Promise.resolve(),
     });
     await waitFor(async () => (await getJob(id)).state === 'succeeded', 20_000);
-    expect((await getJob(id)).attempts).toBe(2);
+    expect((await getJob(id)).attempts).toBe(1);
     await b.shutdown();
   }, 40_000);
 });

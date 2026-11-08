@@ -65,6 +65,8 @@ BUCKET=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 OWNR=ae100000-0000-4000-8000-000000000001; ADMN=ae100000-0000-4000-8000-000000000002
 DOC=ae200000-0000-4000-8000-000000000001;  VER=ae300000-0000-4000-8000-000000000001
 IDXD=af200000-0000-4000-8000-000000000001; IDXV=af300000-0000-4000-8000-000000000001; IDXJ=af700000-0000-4000-8000-000000000001
+CAPD1=af210000-0000-4000-8000-000000000001; CAPV1=af310000-0000-4000-8000-000000000001
+CAPD2=af220000-0000-4000-8000-000000000001; CAPV2=af320000-0000-4000-8000-000000000001
 
 pq() { docker exec -i "$C" psql -U postgres -X -q -At -v ON_ERROR_STOP=1 -v VERBOSITY=verbose "$@"; }
 
@@ -92,7 +94,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=41
+EXPECTED=45
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -302,7 +304,8 @@ run_order "reserve in flight, second reserve (cap)" "$RUN_ROW $RUN2_ROW $CAP15" 
 # complete_upload: two completes of one version. The second waits for the document lock, then sees the
 # version uploaded and queues nothing: one job.
 # add_document_version: two adds to one document get distinct numbers (the document row is locked).
-# reserve_job_budget: cap 1.5, two reservations of 1.0 for two running jobs: the cap is never exceeded.
+# reserve_index_budget (P6-D2, replaces reserve_job_budget): cap 1.5, two reservations of 1.0 for two running jobs held by
+# worker w1: the cap is never exceeded.
 AS_OWNER="set local role authenticated; select set_config('request.jwt.claims', '{\"sub\":\"$OWNR\",\"aal\":\"aal2\",\"role\":\"authenticated\"}', true);"
 AS_ADMIN="set local role authenticated; select set_config('request.jwt.claims', '{\"sub\":\"$ADMN\",\"aal\":\"aal2\",\"role\":\"authenticated\"}', true);"
 ADMIN_FIX="insert into auth.users (id, aud, role, email) values
@@ -333,15 +336,19 @@ V_ADD="select case
     or (select max(version_number) from public.document_versions where document_id = '$DOC') <> 3
     then 'VIOLATION: version numbers are not 1, 2, 3'
   else 'CONSISTENT: versions 1, 2 and 3' end"
-JOBS_RUN="insert into public.jobs (id, type, payload, state, max_attempts) values
-  ('$J1', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid), 'running', 3),
-  ('$J2', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid), 'running', 3);"
-RESERVE_J1="select public.reserve_job_budget('$BOT', '$J1', 1.0, 3600);"
-RESERVE_J2="select public.reserve_job_budget('$BOT', '$J2', 1.0, 3600);"
+JOBS_RUN="insert into public.documents (id, bot_id, title, status) values ('$CAPD1', '$BOT', 'cap1', 'indexing'), ('$CAPD2', '$BOT', 'cap2', 'indexing');
+  insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status) values
+    ('$CAPV1', '$CAPD1', 1, '$BOT/$CAPD1/$CAPV1/original.txt', 'text/plain', 100, 'embedding'),
+    ('$CAPV2', '$CAPD2', 1, '$BOT/$CAPD2/$CAPV2/original.txt', 'text/plain', 100, 'embedding');
+  insert into public.jobs (id, type, payload, state, max_attempts, locked_by, locked_until) values
+  ('$J1', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid, 'document_id', '$CAPD1'::uuid, 'version_id', '$CAPV1'::uuid), 'running', 3, 'w1', now() + interval '1 hour'),
+  ('$J2', 'index_document', jsonb_build_object('bot_id', '$BOT'::uuid, 'document_id', '$CAPD2'::uuid, 'version_id', '$CAPV2'::uuid), 'running', 3, 'w1', now() + interval '1 hour');"
+RESERVE_J1="select public.reserve_index_budget('$J1', 'w1', '$CAPV1', 1.0, 3600);"
+RESERVE_J2="select public.reserve_index_budget('$J2', 'w1', '$CAPV2', 1.0, 3600);"
 
 run_order "complete in flight, second complete"    "$ADMIN_FIX"             "$COMPLETE_O" "$COMPLETE_A" "$V_COMPLETE" ""  ""      yes
 run_order "add version in flight, second add"      "$ADMIN_FIX"             "$ADD_O"      "$ADD_A"    "$V_ADD"   ""    ""      yes
-run_order "job reserve in flight, second (cap)"    "$CAP15 $JOBS_RUN"       "$RESERVE_J1" "$RESERVE_J2" "$V_CAP" ""    "RB001" yes
+run_order "index reserve in flight, second (cap)"  "$CAP15 $JOBS_RUN"       "$RESERVE_J1" "$RESERVE_J2" "$V_CAP" ""    "RB001" yes
 
 # settings: two admin_update_settings calls with the same expected version. The bot has no public config yet, so
 # both patches bring display_name and supported_languages. The second waits for the bot row lock, then sees the
@@ -532,6 +539,50 @@ run_order "write in flight (w1), write by w1"      "$IDX_FIX"               "$WR
 run_order "retry in flight, heartbeat"             "$IDX_FIX"               "$RETRY_IDX"  "$HEART_IDX" "$V_RETRY_IDX" ""   "RB013" yes
 run_order "heartbeat in flight, retry"             "$IDX_FIX"               "$HEART_IDX"  "$RETRY_IDX" "$V_RETRY_IDX" ""   ""      yes
 run_order "retry in flight, write by the holder"   "$IDX_FIX"               "$RETRY_IDX"  "$WRITE_W1"  "$V_RETRY_NOWRITE" "" "RB013" yes
+
+# ---- P6-D2 (migration 012 changes): the index budget and release_job_lease ----
+# reserve_index_budget by the holder (w1) against a second worker (w2) for the same job: the fence makes w2 wait for w1's
+# transaction and then fail with RB013, so only the holder reserves. The budget cap is 100 here; one reservation exists.
+RESERVE_IDX_W1="select public.reserve_index_budget('$IDXJ', 'w1', '$IDXV', 1.0, 3600);"
+RESERVE_IDX_W2="select public.reserve_index_budget('$IDXJ', 'w2', '$IDXV', 1.0, 3600);"
+RELEASE_IDX="select public.release_job_lease('$IDXJ', 'w1');"
+V_RESERVE_HOLDER="select case
+  when (select count(*) from public.budget_reservations where job_id = '$IDXJ') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.budget_reservations where job_id = '$IDXJ') || ' reservations for one job'
+  when (select state from public.budget_reservations where job_id = '$IDXJ') <> 'reserved' then 'VIOLATION: the reservation is not reserved'
+  else 'CONSISTENT: only the lease holder reserved, one reservation' end"
+V_RELEASE_RESERVE="select case
+  when (select count(*) from public.budget_reservations where job_id = '$IDXJ') <> 0
+    then 'VIOLATION: a reservation was made after the lease was released'
+  when (select state from public.jobs where id = '$IDXJ') <> 'queued' or (select locked_by from public.jobs where id = '$IDXJ') is not null
+    then 'VIOLATION: the job is not queued with the lease cleared'
+  when (select attempts from public.jobs where id = '$IDXJ') <> 0 then 'VIOLATION: attempts were not given back'
+  else 'CONSISTENT: lease released, nothing reserved, attempt given back' end"
+
+# release_job_lease against claim_jobs. The job is a warm_answer_cache job held by w1 whose lease already ran out (so the
+# claim finds it due), 1 attempt used. Release first (still open): claim_jobs skips the locked row (SKIP LOCKED), does not
+# wait, and claims nothing; the job ends queued with 0 attempts. Claim first (still open): the stale holder's release waits
+# for the row, then finds another worker on the job and returns false; the job stays with w2 at attempt 2.
+LEASE_JOB="insert into public.jobs (id, type, payload, state, attempts, max_attempts, available_at, locked_by, locked_until)
+  values ('$J1', 'warm_answer_cache', jsonb_build_object('bot_id', '$BOT'::uuid), 'running', 1, 3, now() - interval '1 day', 'w1', now() - interval '1 minute');"
+RELEASE_LEASE="select public.release_job_lease('$J1', 'w1');"
+CLAIM_LEASE="select * from public.claim_jobs('w2', 1, 60, array['warm_answer_cache']);"
+V_RELEASE_FIRST="select case
+  when (select state from public.jobs where id = '$J1') <> 'queued' then 'VIOLATION: the job is ' || (select state from public.jobs where id = '$J1')
+  when (select locked_by from public.jobs where id = '$J1') is not null or (select locked_until from public.jobs where id = '$J1') is not null
+    then 'VIOLATION: the job was claimed or still holds a lease'
+  when (select attempts from public.jobs where id = '$J1') <> 0 then 'VIOLATION: attempts are ' || (select attempts from public.jobs where id = '$J1') || ', expected 0'
+  else 'CONSISTENT: released, queued, 0 attempts, not claimed' end"
+V_CLAIM_FIRST="select case
+  when (select state from public.jobs where id = '$J1') <> 'running' or (select locked_by from public.jobs where id = '$J1') <> 'w2'
+    then 'VIOLATION: the job is not held by w2 (the stale release took effect)'
+  when (select attempts from public.jobs where id = '$J1') <> 2 then 'VIOLATION: attempts are ' || (select attempts from public.jobs where id = '$J1') || ', expected 2'
+  else 'CONSISTENT: w2 holds the job at attempt 2, the stale release did nothing' end"
+
+run_order "reserve in flight (w1), reserve by w2"   "$IDX_FIX"               "$RESERVE_IDX_W1" "$RESERVE_IDX_W2" "$V_RESERVE_HOLDER" "" "RB013" yes
+run_order "release lease in flight, reserve by w1"  "$IDX_FIX"               "$RELEASE_IDX" "$RESERVE_IDX_W1" "$V_RELEASE_RESERVE" "" "RB013" yes
+run_order "release lease in flight, claim"          "$LEASE_JOB"             "$RELEASE_LEASE" "$CLAIM_LEASE" "$V_RELEASE_FIRST" "" ""       fast
+run_order "claim in flight, release lease (stale)"  "$LEASE_JOB"             "$CLAIM_LEASE" "$RELEASE_LEASE" "$V_CLAIM_FIRST"  "" ""       yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

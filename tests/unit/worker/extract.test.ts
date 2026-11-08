@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EXTRACTION_VERSION,
@@ -7,9 +8,14 @@ import {
   normalizeText,
   type ExtractLimits,
 } from '../../../worker/src/lib/extract.ts';
-import { buildPdf, utf8 } from './fixtures/pdf.ts';
+import { buildEmptyPasswordEncryptedPdf, buildPdf, utf8 } from './fixtures/pdf.ts';
 
-const LIMITS: ExtractLimits = { timeoutMs: 30_000, maxMemoryMb: 512, maxPages: 300 };
+const LIMITS: ExtractLimits = {
+  timeoutMs: 30_000,
+  maxMemoryMb: 512,
+  maxPages: 300,
+  maxChars: 1_000_000,
+};
 
 async function failureOf(promise: Promise<unknown>): Promise<ExtractError> {
   try {
@@ -101,6 +107,8 @@ describe('extractText: text and Markdown', () => {
       { timeoutMs: 0 },
       { maxMemoryMb: -1 },
       { maxPages: 1.5 },
+      { maxChars: 0 },
+      { maxChars: Number.NaN },
       { timeoutMs: Number.NaN },
     ];
     for (const patch of bad) {
@@ -274,5 +282,71 @@ describe('extractText: PDF', () => {
       }
     }
     expect(captured.join('\n')).not.toContain(marker);
+  });
+});
+
+describe('extractText: text limit (EXTRACT_MAX_CHARS)', () => {
+  it('refuses plain text and markdown over maxChars as FILE_UNSUPPORTED, and allows exactly maxChars', async () => {
+    const text = 'word '.repeat(100).trim();
+    for (const type of ['text/plain', 'text/markdown'] as const) {
+      const err = await failureOf(
+        extractText(utf8(text), type, { ...LIMITS, maxChars: text.length - 1 }),
+      );
+      expect(err.code).toBe('FILE_UNSUPPORTED');
+      expect(err.reason).toBe('too_much_text');
+      const ok = await extractText(utf8(text), type, { ...LIMITS, maxChars: text.length });
+      expect(ok.pages).toHaveLength(1);
+    }
+  });
+
+  it('refuses a PDF whose total text is over maxChars as FILE_UNSUPPORTED (summed over pages)', async () => {
+    const pages = [['a'.repeat(60)], ['b'.repeat(60)]];
+    const err = await failureOf(
+      extractText(buildPdf({ pages }), 'application/pdf', { ...LIMITS, maxChars: 100 }),
+    );
+    expect(err.code).toBe('FILE_UNSUPPORTED');
+    expect(err.reason).toBe('too_much_text');
+    const ok = await extractText(buildPdf({ pages }), 'application/pdf', {
+      ...LIMITS,
+      maxChars: 200,
+    });
+    expect(ok.pages).toHaveLength(2);
+  });
+});
+
+describe('extraction version', () => {
+  it('is tied to the installed pdfjs-dist version, read at run time', () => {
+    const pkg = createRequire(import.meta.url)('pdfjs-dist/package.json') as { version: string };
+    expect(EXTRACTION_VERSION).toBe(`x1-pdfjs-${pkg.version}`);
+  });
+});
+
+describe('extractText: encrypted PDFs with obfuscated names', () => {
+  const lines = ['Hidden handbook sentence that only exists after decryption.'];
+
+  it('control: the fixture is really encrypted and pdf.js opens it with the empty password', async () => {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const task = pdfjs.getDocument({
+      data: buildEmptyPasswordEncryptedPdf({ lines }),
+      verbosity: 0,
+    });
+    const doc = await task.promise;
+    const content = await (await doc.getPage(1)).getTextContent();
+    const text = content.items.map((i) => ('str' in i ? i.str : '')).join('');
+    expect(text).toContain('Hidden handbook sentence');
+    await task.destroy();
+  });
+
+  it.each([
+    ['plain /Encrypt', '/Encrypt'],
+    ['one escaped letter', '/Encr#79pt'],
+    ['an escaped first letter', '/#45ncrypt'],
+    ['every letter escaped', '/#45#6e#63#72#79#70#74'],
+    ['an escaped middle and last letter', '/Encr#79p#74'],
+  ])('refuses a PDF encrypted with the empty password whose key is %s', async (_name, key) => {
+    const pdf = buildEmptyPasswordEncryptedPdf({ lines, encryptKeyName: key });
+    const err = await failureOf(extractText(pdf, 'application/pdf', LIMITS));
+    expect(err.code).toBe('FILE_UNSUPPORTED');
+    expect(err.reason).toBe('encrypted');
   });
 });

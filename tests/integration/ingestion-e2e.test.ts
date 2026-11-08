@@ -2,8 +2,14 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDb, DbError, type Db } from '../../worker/src/lib/db.ts';
 import { createLogger } from '../../worker/src/lib/logger.ts';
+import { chunkDocument } from '../../worker/src/lib/chunk.ts';
+import { extractText } from '../../worker/src/lib/extract.ts';
 import { createStorage } from '../../worker/src/lib/storage.ts';
-import { MAINTENANCE_TASKS, runMaintenance } from '../../worker/src/maintenance.ts';
+import {
+  MAINTENANCE_TASKS,
+  runMaintenance,
+  type TaskResult,
+} from '../../worker/src/maintenance.ts';
 import { FakeEmbeddingBackend, fakeVectorFor } from './helpers/fake-embeddings.ts';
 import {
   buildPdf,
@@ -20,7 +26,8 @@ import {
 } from './helpers/ingestion-fixtures.ts';
 import { RuntimePool } from './helpers/ingestion-runtime.ts';
 
-// P6 acceptance cases A1-A10 (A9 resumption and A10 partial spend are P6-D1 additions), B1-B12 and C3-C5 (docs/evidence/P6/test-plan.md), end to end against the LOCAL
+// P6 acceptance cases A1-A10 (A9 resumption and A10 partial spend are P6-D1 additions), B1-B12, C3-C5 and the
+// debug cycle P6-D2 cases D1-D10 (docs/evidence/P6/test-plan.md, docs/evidence/P6/board.md), end to end against the LOCAL
 // stack: real jobs, real Storage objects, real database functions, and the real index/cleanup handlers run
 // by the real runtime in this process. The ONLY fake is the embedding provider (FAKE, see
 // helpers/fake-embeddings.ts); no provider is ever called. Cases A3, C1 and C2 need a real process and are
@@ -206,7 +213,10 @@ describe('A. queue', () => {
       const hold = backend.holdCall(1);
       await startRuntime({ WORKER_ID: `a2-second-${h.run}` });
       await hold.reached;
-      expect((await bot.indexJob(up.versionId)).locked_by).toBe(`a2-second-${h.run}`);
+      // The runtime's lease owner is its WORKER_ID plus a random suffix (P6-D2-W): the base identifies it.
+      expect((await bot.indexJob(up.versionId)).locked_by ?? '').toMatch(
+        new RegExp(`^a2-second-${h.run}-[0-9a-f]{6}$`),
+      );
 
       const chunk = {
         chunk_index: 0,
@@ -1007,25 +1017,597 @@ describe('C. maintenance, logs, extraction limits', () => {
   );
 
   t(
-    'C5 extraction child over the memory limit is killed: FILE_UNSUPPORTED, and the runtime goes on to index the next job',
+    'C5 extraction child over the memory limit is killed mid-parse: FILE_UNSUPPORTED (reason memory), a smaller PDF under the same limit still indexes, and the runtime goes on',
     async () => {
-      const bot = await mkBot();
-      await startRuntime({ EXTRACT_CHILD_MEMORY_MB: '16' });
-      // 250 pages of text is more than a 16 MB heap can parse (measured with the extraction module).
-      const pages = Array.from({ length: 250 }, (_, p) =>
-        Array.from(
-          { length: 40 },
-          (_, i) => `p${String(p)} l${String(i)} synthetic memory probe words`,
-        ),
+      // 24 MB lets pdf.js start and parse a 250-page PDF (measured with the extraction module, three runs
+      // each: the 250-page file passes, the 1000-page file below dies of memory at 24 and at 32 MB). So the
+      // heavy file proves a kill in the middle of a parse, not a child that never started.
+      // The 250-page control is priced at about $13 by the test's price per million tokens: a high daily cap.
+      const bot = await mkBot({ maxPages: 5000, dailyCapUsd: 1000 });
+      const lines: string[] = [];
+      const log = createLogger({ level: 'debug', sink: (l) => lines.push(l) });
+      await startRuntime(
+        { EXTRACT_CHILD_MEMORY_MB: '24', LOG_LEVEL: 'debug', EMBEDDING_BATCH_SIZE: '16' },
+        { log },
       );
+      const pdfPages = (n: number, perPage: number): string[][] =>
+        Array.from({ length: n }, (_, p) =>
+          Array.from(
+            { length: perPage },
+            (_, i) => `p${String(p)} l${String(i)} synthetic memory probe words`,
+          ),
+        );
+      const control = await bot.register({
+        bytes: buildPdf({ pages: pdfPages(250, 40) }),
+        mediaType: 'application/pdf',
+      });
+      expect((await bot.waitVersion(control.versionId, ['ready', 'failed'], 60_000)).status).toBe(
+        'ready',
+      );
+      expect(backend.calls).toBeGreaterThan(0); // the control really was embedded
+      const callsAfterControl = backend.calls;
+
       const heavy = await bot.register({
-        bytes: buildPdf({ pages }),
+        bytes: buildPdf({ pages: pdfPages(1000, 60) }),
         mediaType: 'application/pdf',
       });
       await expectFailed(bot, heavy, 'FILE_UNSUPPORTED');
-      expect(backend.calls).toBe(0);
+      expect(backend.calls).toBe(callsAfterControl); // no provider call for the killed file
+      const failLine = lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((p) => p['event'] === 'index_version_failed');
+      expect(failLine?.['reason']).toBe('memory'); // the memory limit, not a timeout or a failed start
+
       const text = await bot.register({ bytes: utf8(makeText('c5mem')), mediaType: 'text/plain' });
       expect((await bot.waitVersion(text.versionId, ['ready', 'failed'])).status).toBe('ready');
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------------------------------
+// D. Debug cycle P6-D2: one end-to-end case per fix
+// ---------------------------------------------------------------------------------------------------
+
+/** A long lease and a long heartbeat interval: a test that edits the job row is not raced by the heartbeat. */
+const LONG_LEASE = { JOB_LEASE_SECONDS: '30', JOB_HEARTBEAT_INTERVAL_SECONDS: '10' } as const;
+
+/** One maintenance pass over the local database (the real tasks, the real Storage). */
+async function maintain(overrides: Record<string, string> = {}): Promise<TaskResult[]> {
+  return runMaintenance(
+    h.config(overrides),
+    {
+      db: createDb({ url: h.apiUrl, secretKey: h.key, timeoutMs: 5000 }),
+      storage: createStorage({ url: h.apiUrl, secretKey: h.key, timeoutMs: 10_000 }),
+    },
+    new AbortController().signal,
+  );
+}
+
+function taskResult(results: TaskResult[], name: string): TaskResult {
+  const r = results.find((x) => x.task === name);
+  if (r === undefined) throw new Error(`maintenance has no task ${name}`);
+  return r;
+}
+
+/** How many chunks the worker's chunker makes of `makeText(marker)` (the expected activation count). */
+async function expectedChunks(marker: string): Promise<number> {
+  const bytes = utf8(makeText(marker));
+  // maxChars is a limit of the merged extraction module (P6-D2-W); a variable avoids an excess-property error
+  // against the base commit's narrower type.
+  const limits = { timeoutMs: 5000, maxMemoryMb: 64, maxPages: 10, maxChars: 5_000_000 };
+  const text = await extractText(bytes, 'text/plain', limits);
+  return chunkDocument(text.pages, 'text/plain').chunks.length;
+}
+
+/** Claims the version's index job by hand with a 1 s lease, lets it expire and dead-letters it. */
+async function deadLetter(bot: TestBot, up: UploadedVersion): Promise<void> {
+  const raw = createDb({ url: h.apiUrl, secretKey: h.key, timeoutMs: 5000 });
+  const job = await bot.indexJob(up.versionId);
+  const claimed = await raw.rpc<{ id: string }[]>('claim_jobs', {
+    p_worker: `dead-${h.run}`,
+    p_limit: 1,
+    p_lease_seconds: 1,
+    p_types: ['index_document'],
+  });
+  expect(claimed.map((r) => r.id)).toEqual([job.id]);
+  await sleep(1600);
+  // Any later claim dead-letters an expired lease with no attempts left.
+  expect(
+    await raw.rpc<unknown[]>('claim_jobs', {
+      p_worker: `dead-${h.run}`,
+      p_limit: 1,
+      p_lease_seconds: 1,
+      p_types: ['index_document'],
+    }),
+  ).toEqual([]);
+  const after = await bot.indexJob(up.versionId);
+  expect(after.state).toBe('failed');
+  expect(after.attempts).toBe(after.max_attempts);
+}
+
+describe('D. debug cycle P6-D2', () => {
+  // ---- D1 -----------------------------------------------------------------------------------------
+  for (const status of ['uploaded', 'extracting', 'embedding'] as const) {
+    t(
+      `D1 a dead-lettered job (expired lease, no attempts left) leaves a ${status} version; maintenance fails it INDEXING_FAILED and the document becomes failed`,
+      async () => {
+        const bot = await mkBot({ indexMaxAttempts: 1 });
+        const up = await bot.register({ bytes: utf8(makeText('d1')), mediaType: 'text/plain' });
+        if (status !== 'uploaded') await bot.patchVersion(up.versionId, { status });
+        await deadLetter(bot, up);
+        // The state the bug left behind: the job is dead, the version is still "in progress".
+        expect((await bot.version(up.versionId)).status).toBe(status);
+        const corpus = await bot.corpusVersion();
+
+        const results = await maintain();
+        expect(taskResult(results, 'fail_orphaned_index_versions')).toMatchObject({ ok: true });
+        expect(taskResult(results, 'fail_orphaned_index_versions').count).toBeGreaterThanOrEqual(1);
+
+        const v = await bot.version(up.versionId);
+        expect(v.status).toBe('failed');
+        expect(v.failure_code).toBe('INDEXING_FAILED');
+        const doc = await bot.document(up.documentId);
+        expect(doc.status).toBe('failed');
+        expect(doc.active_version_id).toBeNull();
+        expect(await bot.corpusVersion()).toBe(corpus);
+        expect(backend.calls).toBe(0);
+      },
+    );
+  }
+
+  t(
+    'D1 a dead-lettered replacement fails INDEXING_FAILED and the document keeps its active version and stays ready',
+    async () => {
+      const bot = await mkBot({ indexMaxAttempts: 1 });
+      await startRuntime();
+      const v1 = await indexedText(bot, 'd1old');
+      expect((await bot.version(v1.versionId)).status).toBe('ready');
+      await pool.shutdownAll();
+      const corpus = await bot.corpusVersion();
+
+      const v2 = await bot.addVersion(v1.documentId, {
+        bytes: utf8(makeText('d1new')),
+        mediaType: 'text/plain',
+      });
+      await deadLetter(bot, v2);
+      expect((await bot.version(v2.versionId)).status).toBe('uploaded');
+
+      const results = await maintain();
+      expect(taskResult(results, 'fail_orphaned_index_versions')).toMatchObject({ ok: true });
+      const second = await bot.version(v2.versionId);
+      expect(second.status).toBe('failed');
+      expect(second.failure_code).toBe('INDEXING_FAILED');
+      const doc = await bot.document(v1.documentId);
+      expect(doc.active_version_id).toBe(v1.versionId);
+      expect(doc.status).toBe('ready');
+      expect((await bot.version(v1.versionId)).status).toBe('ready');
+      expect(await bot.corpusVersion()).toBe(corpus);
+    },
+  );
+
+  t(
+    'D1 negative: maintenance leaves alone a version whose index job is still queued, and one whose job is still running',
+    async () => {
+      const bot = await mkBot();
+      const queued = await bot.register({ bytes: utf8(makeText('d1q')), mediaType: 'text/plain' });
+      const running = await bot.register({ bytes: utf8(makeText('d1r')), mediaType: 'text/plain' });
+      // Claim only the second one by hand, with a long lease. Both jobs are due, so claim both and put
+      // the first back to queued.
+      const raw = createDb({ url: h.apiUrl, secretKey: h.key, timeoutMs: 5000 });
+      const claimed = await raw.rpc<{ id: string }[]>('claim_jobs', {
+        p_worker: `live-${h.run}`,
+        p_limit: 2,
+        p_lease_seconds: 600,
+        p_types: ['index_document'],
+      });
+      expect(claimed).toHaveLength(2);
+      const qJob = await bot.indexJob(queued.versionId);
+      await bot.patchJob(qJob.id, {
+        state: 'queued',
+        attempts: 0,
+        locked_by: null,
+        locked_until: null,
+        available_at: new Date(Date.now() + 3600_000).toISOString(),
+      });
+
+      const results = await maintain();
+      expect(taskResult(results, 'fail_orphaned_index_versions')).toMatchObject({ ok: true });
+      expect((await bot.version(queued.versionId)).status).toBe('uploaded');
+      expect((await bot.version(running.versionId)).status).toBe('uploaded');
+      expect((await bot.indexJob(running.versionId)).state).toBe('running');
+      expect((await bot.document(queued.documentId)).status).not.toBe('failed');
+    },
+  );
+
+  // ---- D2 -----------------------------------------------------------------------------------------
+  const staleStored: [string, Record<string, string>][] = [
+    ['chunking_version', { chunking_version: 'c0-stale' }],
+    ['extraction_version', { extraction_version: 'x0-stale' }],
+    ['embedding_model', { embedding_model: 'fake-embed-stale' }],
+  ];
+  for (const [field, patch] of staleStored) {
+    t(
+      `D2 resume after the stored ${field} differs: the chunks are reset, the version indexes from chunk 0 and activates with the right count`,
+      async () => {
+        const marker = `d2${field.slice(0, 3)}`;
+        const expected = await expectedChunks(marker);
+        expect(expected).toBeGreaterThan(6);
+        const bot = await mkBot({ indexMaxAttempts: 3 });
+        // Two batches embed and are written, then the third call fails transiently (as in A9).
+        backend.failFrom(3, 'transient');
+        await startRuntime({ JOB_BACKOFF_BASE_SECONDS: '4', JOB_BACKOFF_MAX_SECONDS: '8' });
+        const up = await bot.register({ bytes: utf8(makeText(marker)), mediaType: 'text/plain' });
+        await waitFor('the failing third provider call', () => backend.calls >= 3, 60_000, 20);
+        // The failed attempt has handed the job back; the retry waits at least two seconds.
+        await waitFor(
+          'the job to be queued for a retry',
+          async () => {
+            const j = await bot.indexJob(up.versionId);
+            return j.state === 'queued' && j.attempts === 1;
+          },
+          20_000,
+          20,
+        );
+        expect(await bot.chunkIndexes(up.versionId)).toEqual(range(4));
+        const before = await bot.version(up.versionId);
+        const current = before[field as keyof typeof before];
+        expect(current).toBeTruthy();
+        // The stored value of an earlier run differs from what this worker would write now.
+        await bot.patchVersion(up.versionId, patch);
+        backend.stopFailing();
+        const callsBefore = backend.completedCalls;
+        expect(callsBefore).toBe(2);
+
+        const done = await bot.waitJobDone(up.versionId, 80_000);
+        expect(done.state).toBe('succeeded');
+        expect(done.attempts).toBe(2);
+        const v = await bot.version(up.versionId);
+        expect(v.status).toBe('ready');
+        expect(await bot.chunkIndexes(up.versionId)).toEqual(range(expected));
+        // Started over: every chunk embedded again, the two stale batches included.
+        expect(backend.completedCalls).toBe(callsBefore + Math.ceil(expected / 2));
+        // The new run wrote its own values back over the stale ones.
+        expect(v[field as keyof typeof v]).toBe(current);
+        expect(v.batches_done).toBe(Math.ceil(expected / 2));
+        expect(v.batches_total).toBe(Math.ceil(expected / 2));
+        expect((await bot.document(up.documentId)).active_version_id).toBe(up.versionId);
+        const hits = await bot.match(`${marker}-section-0`);
+        expect(hits.length).toBeGreaterThan(0);
+        expect(hits.every((r) => r.document_version_id === up.versionId)).toBe(true);
+      },
+    );
+  }
+
+  // ---- D3 -----------------------------------------------------------------------------------------
+  /**
+   * First attempt: the provider call is held, the reservation exists, then the lease is taken away and the
+   * provider answers (a paid batch whose chunks are refused). Returns the job and the first reservation.
+   */
+  async function lostLeaseAfterPaidBatch(bot: TestBot, up: UploadedVersion, factor: number) {
+    const hold = backend.holdCall(1);
+    await startRuntime(LONG_LEASE);
+    await hold.reached;
+    const job = await bot.indexJob(up.versionId);
+    const first = (await bot.reservations()).filter((r) => r.job_id === job.id);
+    expect(first).toHaveLength(1);
+    const reserved = Number(first[0]?.amount);
+    expect(reserved).toBeGreaterThan(0);
+    await bot.setDailyCap(reserved * factor);
+    // The lease is lost; it can be claimed again after three seconds.
+    await bot.stealLease(job.id, 3000);
+    hold.release(); // the provider answers: the batch is paid for, its chunks are refused (RB013)
+    await waitFor(
+      'the first attempt to record its usage',
+      async () =>
+        (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index').length >= 1,
+      15_000,
+      50,
+    );
+    expect(await bot.chunkIndexes(up.versionId)).toEqual([]);
+    return { job, reserved };
+  }
+
+  t(
+    'D3 lease lost after a paid batch, then the next attempt: the first attempt counts toward the day, so a cap that fits one attempt but not two refuses the second with BUDGET_EXCEEDED',
+    async () => {
+      const bot = await mkBot({ indexMaxAttempts: 3 });
+      const up = await bot.register({ bytes: utf8(makeText('d3')), mediaType: 'text/plain' });
+      // The cap is 1.5 times one attempt's reservation.
+      const { job } = await lostLeaseAfterPaidBatch(bot, up, 1.5);
+
+      const v = await bot.waitVersion(up.versionId, ['failed', 'ready'], 40_000);
+      expect(v.status).toBe('failed');
+      expect(v.failure_code).toBe('BUDGET_EXCEEDED');
+      const done = await bot.waitJobDone(up.versionId);
+      expect(done.state).toBe('succeeded');
+      expect(done.attempts).toBe(2);
+      expect(backend.calls).toBe(1); // the second attempt made no provider call
+      const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
+      // The first attempt's reservation was neither released nor reused: it still counts.
+      expect(reservations).toHaveLength(1);
+      expect(['reserved', 'expired']).toContain(reservations[0]?.state);
+      expect(await bot.chunkIndexes(up.versionId)).toEqual([]);
+      expect((await bot.document(up.documentId)).active_version_id).toBeNull();
+    },
+  );
+
+  t(
+    'D3 control: with a cap that fits both attempts the second attempt indexes; the first reservation is expired (still counting) and the second is settled',
+    async () => {
+      const bot = await mkBot({ indexMaxAttempts: 3 });
+      const up = await bot.register({ bytes: utf8(makeText('d3c')), mediaType: 'text/plain' });
+      const { job } = await lostLeaseAfterPaidBatch(bot, up, 3);
+
+      const v = await bot.waitVersion(up.versionId, ['failed', 'ready'], 40_000);
+      expect(v.status).toBe('ready');
+      const done = await bot.waitJobDone(up.versionId);
+      expect(done.state).toBe('succeeded');
+      expect(done.attempts).toBe(2);
+      const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
+      expect(reservations.map((r) => r.state)).toEqual(['expired', 'settled']);
+      // Both attempts paid the provider for the first batch: two usage rows for it, none lost.
+      const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
+      const n = (await bot.chunkIndexes(up.versionId)).length;
+      expect(usage).toHaveLength(1 + Math.ceil(n / 2));
+      expect(backend.completedCalls).toBe(1 + Math.ceil(n / 2));
+    },
+  );
+
+  // ---- D4 -----------------------------------------------------------------------------------------
+  t(
+    'D4 a crash right after the provider answered and before the chunk write: a usage row exists for that batch',
+    async () => {
+      const bot = await mkBot({ indexMaxAttempts: 3 });
+      const hold = backend.holdCall(1);
+      await startRuntime(LONG_LEASE);
+      const up = await bot.register({ bytes: utf8(makeText('d4')), mediaType: 'text/plain' });
+      await hold.reached;
+      const job = await bot.indexJob(up.versionId);
+      // The worker loses the job for good (an hour), so nothing else runs and the write is refused.
+      await bot.stealLease(job.id, 3600_000);
+      hold.release();
+
+      const usage = await waitFor(
+        'a usage row for the paid batch',
+        async () => {
+          const rows = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
+          return rows.length > 0 ? rows : null;
+        },
+        15_000,
+        50,
+      );
+      await sleep(500); // the refused chunk write has had time to happen
+      expect(usage).toHaveLength(1);
+      expect(usage[0]?.job_id).toBe(job.id);
+      expect(usage[0]?.model).toBe(h.model);
+      expect(usage[0]?.input_tokens).toBe(backend.tokensReported);
+      expect(Number(usage[0]?.estimated_cost)).toBeGreaterThan(0);
+      expect(backend.completedCalls).toBe(1);
+      expect(await bot.chunkIndexes(up.versionId)).toEqual([]); // the write did not happen
+      expect((await bot.version(up.versionId)).status).not.toBe('ready');
+    },
+  );
+
+  // ---- D5 -----------------------------------------------------------------------------------------
+  t(
+    'D5 overspend: the provider reports far more tokens than estimated; the job stops, settles what it spent and the version is BUDGET_EXCEEDED',
+    async () => {
+      const bot = await mkBot();
+      backend.tokenFactor = 50; // each batch is reported at 50 times its real size
+      const hold = backend.holdCall(1);
+      await startRuntime();
+      const up = await bot.register({ bytes: utf8(makeText('d5')), mediaType: 'text/plain' });
+      await hold.reached;
+      const job = await bot.indexJob(up.versionId);
+      const estimate = Number((await bot.reservations()).find((r) => r.job_id === job.id)?.amount);
+      expect(estimate).toBeGreaterThan(0);
+      hold.release();
+
+      const v = await bot.waitVersion(up.versionId, ['failed', 'ready'], 40_000);
+      expect(v.status).toBe('failed');
+      expect(v.failure_code).toBe('BUDGET_EXCEEDED');
+      expect((await bot.waitJobDone(up.versionId)).state).toBe('succeeded');
+      // It stopped at once: not every batch was bought.
+      const total = Math.ceil((await expectedChunks('d5')) / 2);
+      expect(backend.completedCalls).toBeGreaterThanOrEqual(1);
+      expect(backend.completedCalls).toBeLessThanOrEqual(2);
+      expect(backend.completedCalls).toBeLessThan(total);
+      expect(backend.calls).toBe(backend.completedCalls);
+      const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
+      expect(usage).toHaveLength(backend.completedCalls);
+      const spent = usage.reduce((sum, u) => sum + Number(u.estimated_cost), 0);
+      expect(spent).toBeGreaterThan(estimate); // it really overspent
+      // What was spent is settled, and counts toward the cap; nothing is left reserved or released.
+      const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
+      expect(reservations.map((r) => r.state)).toEqual(['settled']);
+      expect(Math.abs(Number(reservations[0]?.amount) - spent)).toBeLessThan(0.00001);
+      const doc = await bot.document(up.documentId);
+      expect(doc.active_version_id).toBeNull();
+      expect(doc.status).toBe('failed');
+      expect(await bot.match('d5')).toEqual([]);
+    },
+  );
+
+  // ---- D7 -----------------------------------------------------------------------------------------
+  t(
+    "D7 superseded version: after a newer version activates, maintenance removes the old version's chunks; the active version's chunks stay",
+    async () => {
+      const bot = await mkBot();
+      await startRuntime();
+      const v1 = await indexedText(bot, 'd7old');
+      expect((await bot.version(v1.versionId)).status).toBe('ready');
+      const v2 = await bot.addVersion(v1.documentId, {
+        bytes: utf8(makeText('d7new')),
+        mediaType: 'text/plain',
+      });
+      expect((await bot.waitVersion(v2.versionId, ['ready', 'failed'])).status).toBe('ready');
+      expect((await bot.version(v1.versionId)).status).toBe('superseded');
+      const oldChunks = await bot.chunkIndexes(v1.versionId);
+      const newChunks = await bot.chunkIndexes(v2.versionId);
+      expect(oldChunks.length).toBeGreaterThan(2); // the old chunks are still there
+      expect(newChunks.length).toBeGreaterThan(2);
+      const corpus = await bot.corpusVersion();
+
+      const results = await maintain();
+      expect(taskResult(results, 'prune_superseded_chunks')).toMatchObject({ ok: true });
+      expect(taskResult(results, 'prune_superseded_chunks').count).toBeGreaterThanOrEqual(
+        oldChunks.length,
+      );
+
+      expect(await bot.chunkIndexes(v1.versionId)).toEqual([]);
+      expect(await bot.chunkIndexes(v2.versionId)).toEqual(newChunks);
+      expect((await bot.version(v1.versionId)).status).toBe('superseded');
+      expect((await bot.version(v2.versionId)).status).toBe('ready');
+      expect((await bot.document(v1.documentId)).active_version_id).toBe(v2.versionId);
+      expect(await bot.corpusVersion()).toBe(corpus);
+      const hits = await bot.match('d7new-section-0');
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits.every((r) => r.document_version_id === v2.versionId)).toBe(true);
+    },
+  );
+
+  t(
+    'D7 negative: maintenance does not remove the chunks of a failed version or of a ready one',
+    async () => {
+      const bot = await mkBot();
+      backend.failFrom(3, 'permanent'); // two batches embed and are written, then the version fails
+      await startRuntime();
+      const bad = await bot.register({ bytes: utf8(makeText('d7bad')), mediaType: 'text/plain' });
+      expect((await bot.waitVersion(bad.versionId, ['failed', 'ready'])).status).toBe('failed');
+      await bot.waitJobDone(bad.versionId);
+      backend.stopFailing();
+      const good = await bot.register({ bytes: utf8(makeText('d7ok')), mediaType: 'text/plain' });
+      expect((await bot.waitVersion(good.versionId, ['ready', 'failed'])).status).toBe('ready');
+      const badChunks = await bot.chunkIndexes(bad.versionId);
+      const goodChunks = await bot.chunkIndexes(good.versionId);
+      expect(badChunks).toEqual(range(4));
+      expect(goodChunks.length).toBeGreaterThan(2);
+
+      await maintain();
+
+      expect(await bot.chunkIndexes(bad.versionId)).toEqual(badChunks);
+      expect(await bot.chunkIndexes(good.versionId)).toEqual(goodChunks);
+    },
+  );
+
+  // ---- D8 -----------------------------------------------------------------------------------------
+  t(
+    'D8 an older version reaching the worker after a newer one is active is failed SUPERSEDED before any provider call',
+    async () => {
+      const bot = await mkBot();
+      // The older version's job is parked until the newer version is active.
+      const v1 = await bot.register({ bytes: utf8(makeText('d8old')), mediaType: 'text/plain' });
+      const oldJob = await bot.indexJob(v1.versionId);
+      await bot.patchJob(oldJob.id, {
+        available_at: new Date(Date.now() + 3600_000).toISOString(),
+      });
+      const v2 = await bot.addVersion(v1.documentId, {
+        bytes: utf8(makeText('d8new')),
+        mediaType: 'text/plain',
+      });
+      await startRuntime();
+      expect((await bot.waitVersion(v2.versionId, ['ready', 'failed'])).status).toBe('ready');
+      expect((await bot.version(v1.versionId)).status).toBe('uploaded');
+      const corpus = await bot.corpusVersion();
+      const calls = backend.calls;
+      const usageBefore = (await bot.usageEvents()).length;
+
+      await bot.patchJob(oldJob.id, { available_at: new Date().toISOString() });
+      const old = await bot.waitVersion(v1.versionId, ['failed', 'ready'], 40_000);
+
+      expect(old.status).toBe('failed');
+      expect(old.failure_code).toBe('SUPERSEDED');
+      expect(backend.calls).toBe(calls); // not one provider call for the old version
+      expect((await bot.usageEvents()).length).toBe(usageBefore);
+      expect(await bot.chunkIndexes(v1.versionId)).toEqual([]);
+      expect((await bot.waitJobDone(v1.versionId)).state).toBe('succeeded');
+      const doc = await bot.document(v1.documentId);
+      expect(doc.active_version_id).toBe(v2.versionId);
+      expect(doc.status).toBe('ready');
+      expect((await bot.version(v2.versionId)).status).toBe('ready');
+      expect(await bot.corpusVersion()).toBe(corpus);
+      expect((await bot.match('d8new')).every((r) => r.document_version_id === v2.versionId)).toBe(
+        true,
+      );
+    },
+  );
+
+  // ---- D9 -----------------------------------------------------------------------------------------
+  for (const stale of [true, false]) {
+    t(
+      stale
+        ? 'D9 admin_retry_version on a failed version with leftover chunks from another chunker: it re-indexes correctly with no mixed chunks'
+        : 'D9 admin_retry_version on a failed version with leftover chunks: it re-indexes to a complete, contiguous set',
+      async () => {
+        const marker = stale ? 'd9stale' : 'd9same';
+        const expected = await expectedChunks(marker);
+        const bot = await mkBot();
+        backend.failFrom(3, 'permanent'); // two batches embed and are written, then the version fails
+        await startRuntime();
+        const up = await bot.register({ bytes: utf8(makeText(marker)), mediaType: 'text/plain' });
+        const failed = await bot.waitVersion(up.versionId, ['failed', 'ready']);
+        expect(failed.status).toBe('failed');
+        expect(await bot.chunkIndexes(up.versionId)).toEqual(range(4)); // the leftovers
+        expect((await bot.waitJobDone(up.versionId)).state).toBe('succeeded');
+        backend.stopFailing();
+        const leftover = `leftover-${randomBytes(6).toString('hex')}`;
+        if (stale) {
+          // The leftovers come from an older chunker: different text, a different stored version.
+          await bot.setChunkContents(up.versionId, leftover);
+          await bot.patchVersion(up.versionId, { chunking_version: 'c0-stale' });
+        }
+
+        await h.adminRpcOk('admin_retry_version', { p_version_id: up.versionId });
+        const v = await bot.waitVersion(up.versionId, ['ready', 'failed'], 60_000);
+
+        expect(v.status, `failure_code ${String(v.failure_code)}`).toBe('ready');
+        expect(v.failure_code).toBeNull();
+        expect(await bot.chunkIndexes(up.versionId)).toEqual(range(expected));
+        const contents = await bot.chunkContents(up.versionId);
+        expect(contents.some((c) => c.includes(leftover))).toBe(false); // no leftover mixed in
+        expect(contents.every((c) => c.length > 0)).toBe(true);
+        expect(v.chunking_version).not.toBe('c0-stale');
+        expect(v.batches_done).toBe(Math.ceil(expected / 2));
+        const doc = await bot.document(up.documentId);
+        expect(doc.active_version_id).toBe(up.versionId);
+        expect(doc.status).toBe('ready');
+        const hits = await bot.match(`${marker}-section-0`);
+        expect(hits.length).toBeGreaterThan(0);
+        expect(hits.every((r) => r.document_version_id === up.versionId)).toBe(true);
+        if (stale) {
+          // Started over: the two leftover batches were embedded again.
+          expect(backend.completedCalls).toBe(2 + Math.ceil(expected / 2));
+        }
+      },
+    );
+  }
+
+  // ---- D10 ----------------------------------------------------------------------------------------
+  t(
+    'D10 extracted text over EXTRACT_MAX_CHARS (plain text and a PDF text layer) fails FILE_UNSUPPORTED with no provider call; text under the limit indexes',
+    async () => {
+      const bot = await mkBot();
+      await startRuntime({ EXTRACT_MAX_CHARS: '1000' });
+      const over = await bot.register({ bytes: utf8(makeText('d10')), mediaType: 'text/plain' });
+      const overPdf = await bot.register({
+        bytes: buildPdf({
+          pages: [
+            Array.from({ length: 40 }, (_, i) => `d10 pdf line ${String(i)} of synthetic words`),
+          ],
+        }),
+        mediaType: 'application/pdf',
+      });
+      await expectFailed(bot, over, 'FILE_UNSUPPORTED');
+      await expectFailed(bot, overPdf, 'FILE_UNSUPPORTED');
+      expect(backend.calls).toBe(0);
+      expect((await bot.document(over.documentId)).status).toBe('failed');
+
+      // The same runtime still indexes text that fits.
+      const under = await bot.register({
+        bytes: utf8(makeText('d10ok', 1)),
+        mediaType: 'text/plain',
+      });
+      expect((await bot.waitVersion(under.versionId, ['ready', 'failed'])).status).toBe('ready');
     },
   );
 });

@@ -34,6 +34,8 @@ function validEnv(): Record<string, string> {
     VISITOR_SESSION_GRACE_SECONDS: '3600',
     TERMINAL_JOB_RETENTION_DAYS: '30',
     ABANDONED_UPLOAD_HOURS: '24',
+    WORKER_MAX_DOWNLOAD_BYTES: '52428800',
+    MAX_CHUNKS_PER_VERSION: '5000',
     EXTRACT_MAX_CHARS: '5000000',
     EXTRACT_TIMEOUT_MS: '120000',
     EXTRACT_CHILD_MEMORY_MB: '512',
@@ -61,9 +63,12 @@ function refusal(env: Record<string, string | undefined>): ConfigError {
 describe('loadWorkerConfig: accept', () => {
   it('accepts a complete environment and maps every field', () => {
     const c = loadWorkerConfig({ ...validEnv(), WORKER_ID: 'w-1' });
+    expect(c.workerId).toMatch(/^w-1-[0-9a-f]{6}$/);
     expect(c).toMatchObject({
       supabaseUrl: 'http://127.0.0.1:54321',
-      workerId: 'w-1',
+      abandonedUploadHours: 24,
+      maxDownloadBytes: 52_428_800,
+      maxChunksPerVersion: 5000,
       concurrency: 2,
       leaseSeconds: 120,
       heartbeatIntervalMs: 30_000,
@@ -82,6 +87,18 @@ describe('loadWorkerConfig: accept', () => {
     });
     expect(c.ai.embedding.model).toBe('gemini-embedding-001');
     expect(c.ai.analysis.provider).toBe('gemini');
+  });
+
+  it('always adds a random suffix to the worker id, even when WORKER_ID is set', () => {
+    const a = loadWorkerConfig({ ...validEnv(), WORKER_ID: 'fixed-name' }).workerId;
+    const b = loadWorkerConfig({ ...validEnv(), WORKER_ID: 'fixed-name' }).workerId;
+    expect(a).toMatch(/^fixed-name-[0-9a-f]{6}$/);
+    expect(b).toMatch(/^fixed-name-[0-9a-f]{6}$/);
+    expect(a).not.toBe(b);
+    // The longest accepted base still gives an id within the 63 characters a lease owner may have.
+    const longest = loadWorkerConfig({ ...validEnv(), WORKER_ID: 'a'.repeat(56) }).workerId;
+    expect(longest).toHaveLength(63);
+    expect(refusal({ ...validEnv(), WORKER_ID: 'a'.repeat(57) }).variables).toContain('WORKER_ID');
   });
 
   it('generates a worker id with the process id when WORKER_ID is absent or empty', () => {
@@ -161,6 +178,12 @@ describe('loadWorkerConfig: refuse (fail closed, names only)', () => {
     ['EMBEDDING_PRICE_PER_MILLION_TOKENS', 'free'],
     ['EXTRACT_CHILD_MEMORY_MB', '4'],
     ['TERMINAL_JOB_RETENTION_DAYS', '0'],
+    ['ABANDONED_UPLOAD_HOURS', '23'],
+    ['ABANDONED_UPLOAD_HOURS', '0'],
+    ['WORKER_MAX_DOWNLOAD_BYTES', '0'],
+    ['WORKER_MAX_DOWNLOAD_BYTES', '2147483648'],
+    ['MAX_CHUNKS_PER_VERSION', '0'],
+    ['MAX_CHUNKS_PER_VERSION', '1000001'],
   ])('refuses %s=%s', (name, value) => {
     const err = refusal({ ...validEnv(), [name]: value });
     expect(err.variables).toContain(name);

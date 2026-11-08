@@ -1,6 +1,6 @@
 # ragbot_widget
 
-Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P4: shared contracts, migrations, tests and the API foundation (config, logging, health, visitor tokens). The public chat routes, worker and widget arrive in P5 to P8.
+Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P6: shared contracts, migrations and tests, the API foundation and visitor sessions (P4, P5), and the ingestion worker (P6). Chat routes and the widget arrive in P7 and P8.
 
 ## Project structure
 ```text
@@ -98,6 +98,7 @@ Database work goes through `make` (`make help`). `npm run test:integration` need
 ## Environment variables
 API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, `TRUSTED_PROXY_HOPS`, `BODY_LIMIT_BYTES`, `REQUEST_TIMEOUT_MS`, `CONNECTION_TIMEOUT_MS`, `READY_TIMEOUT_MS`, `DB_TIMEOUT_MS`, `VISITOR_TOKEN_TTL_SECONDS`, `CHAT_DEADLINE_MS`, `PROVIDER_MAX_ATTEMPTS`, optional `VISITOR_TOKEN_SECRET_PREVIOUS` for rotation, `RATE_LIMIT_KEY_SECRET`, `TURNSTILE_TIMEOUT_MS`, `SESSION_PREFLIGHT_PER_IP_LIMIT`, `SESSION_PREFLIGHT_WINDOW_SECONDS`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
 Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never give the worker the visitor-signing key.
+Worker (P6): `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, queue settings (`WORKER_CONCURRENCY`, `JOB_LEASE_SECONDS`, `JOB_HEARTBEAT_INTERVAL_SECONDS`, `JOB_POLL_INTERVAL_MS`, `JOB_BACKOFF_BASE_SECONDS`, `JOB_BACKOFF_MAX_SECONDS`, `SHUTDOWN_GRACE_MS`), maintenance and retention settings, extraction limits, `EMBEDDING_BATCH_SIZE`, `EMBEDDING_PRICE_PER_MILLION_TOKENS` and `CHAT_DEADLINE_MS` (must match the API's, so the stuck-run threshold stays above it). The full list with comments is in `worker/.env.example`. PDF text comes from `pdfjs-dist` (pinned), run in a separate process with time, memory and file-access limits; scanned PDFs are refused (ADR 0005).
 AI roles are provider-agnostic (ADR 0014): `<ROLE>_PROVIDER` (`gemini` | `openai` | `anthropic` | `openai_compatible`), `<ROLE>_MODEL`, optional `<ROLE>_API_KEY` (else `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), and `<ROLE>_BASE_URL` for `openai_compatible`. Missing values fail closed. Changing the embedding model requires a full reindex. See `api/.env.example` and `worker/.env.example`.
 Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.
 

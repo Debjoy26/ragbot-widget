@@ -3,7 +3,8 @@
 -- lock_timeout = '2s', EXECUTE for service_role only (the worker role). Nothing here is callable from a browser.
 -- SQLSTATEs (existing contract): RB010 document unknown or deleted, RB011 activation refused (from
 -- activate_document_version), RB013 lease not held (the job fence), RB030 wrong state, RB036 policy missing,
--- 22023 bad argument.
+-- 22023 bad argument; for the index budget also RB001 over the daily cap, RB002 settings or cap missing, RB003
+-- reservation not usable (P6-D2). A disabled bot can still index: knowledge goes in before launch.
 --
 -- THE FENCE. A worker writes only while it still owns the job. Every function marked "fenced" first checks, in
 -- public.index_job_fence: the job exists, state = 'running', locked_by = the caller, locked_until is still in the
@@ -82,7 +83,9 @@ $$;
 -- embedding_model is the bot's current model (what the worker must embed with). max_bytes and max_pages come
 -- from upload_policy and fail closed (RB036) when missing or out of range, like the admin functions.
 -- batches_done (the version's value) and written_chunks (how many chunk rows this version already has) let a
--- retried job resume instead of starting over; they are the last two columns.
+-- retried job resume instead of starting over. stored_chunking_version, stored_extraction_version and
+-- stored_embedding_model are the version row's own values (null before the worker has recorded them); the worker
+-- compares them with its current ones and starts over when any differs. These five are the last columns.
 -- ---------------------------------------------------------------------------
 create function public.get_index_job_context(p_job_id uuid, p_worker text, p_version_id uuid)
 returns table (
@@ -101,7 +104,10 @@ returns table (
   active_version_id     uuid,
   active_version_number integer,
   batches_done          integer,
-  written_chunks        integer
+  written_chunks        integer,
+  stored_chunking_version   text,
+  stored_extraction_version text,
+  stored_embedding_model    text
 )
 language plpgsql
 set search_path = ''
@@ -144,7 +150,7 @@ begin
 
   return query select v_bot, v_doc, v_ver.id, v_ver.version_number, v_ver.status, v_ver.storage_path, v_ver.media_type,
                       v_ver.byte_size, v_ver.upload_etag, v_model, v_bytes, v_pages, v_active, v_act_num,
-                      v_ver.batches_done, v_written;
+                      v_ver.batches_done, v_written, v_ver.chunking_version, v_ver.extraction_version, v_ver.embedding_model;
 end;
 $$;
 
@@ -752,6 +758,310 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- reset_version_chunks: starts the version's indexing over. Fenced. The version must still be in an active state
+-- (uploaded, extracting, embedding), else RB030, so a live or retired version's chunks can never be deleted here.
+-- Deletes all of the version's chunks, sets batches_done to 0 and clears batches_total. Returns the number of
+-- chunks deleted.
+-- ---------------------------------------------------------------------------
+create function public.reset_version_chunks(p_job_id uuid, p_worker text, p_version_id uuid)
+returns integer
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_status text;
+  v_n      integer;
+begin
+  perform 1 from public.index_job_fence(p_job_id, p_worker, p_version_id);
+
+  select v.status into v_status from public.document_versions v where v.id = p_version_id for update;
+  if v_status not in ('uploaded', 'extracting', 'embedding') then
+    raise exception 'reset_version_chunks: version is not being indexed' using errcode = 'RB030';
+  end if;
+
+  delete from public.document_chunks c where c.document_version_id = p_version_id;
+  get diagnostics v_n = row_count;
+
+  update public.document_versions v set batches_done = 0, batches_total = null where v.id = p_version_id;
+  return v_n;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- The index budget: the worker's reservation, settlement and release, keyed by the running index_document job.
+-- Replaces reserve_job_budget of 009 (dropped below); settle and release of 004 are not used for jobs any more.
+-- All three are fenced. Lock order: the fence first (document, job), then bot_profiles (SHARE, reserve only), then
+-- client_settings (UPDATE) as reserve_request_budget does, then the reservation row.
+--
+-- reserve_index_budget: EVERY call is a new attempt. A still-'reserved' row of the job is marked 'expired' first
+-- and keeps counting toward the daily cap (with settled rows, live reserved rows and every job row in 'expired',
+-- exactly the sum reserve_job_budget used), so reserving twice for one job needs room for both. A disabled bot is
+-- not refused: admins index knowledge before enabling a bot. RB002 when settings or the cap are
+-- missing, RB001 over the cap (the statement is rolled back, so nothing is marked expired by a refused call).
+-- Returns the new reservation's id.
+-- ---------------------------------------------------------------------------
+create function public.reserve_index_budget(
+  p_job_id      uuid,
+  p_worker      text,
+  p_version_id  uuid,
+  p_amount      numeric,
+  p_ttl_seconds integer
+)
+returns uuid
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_bot      uuid;
+  v_policy   jsonb;
+  v_cap_text text;
+  v_cap      numeric;
+  v_spent    numeric;
+  v_day      timestamptz := date_trunc('day', now() at time zone 'UTC') at time zone 'UTC';
+  v_id       uuid;
+begin
+  if p_amount is null or p_amount <= 0 or p_ttl_seconds is null or p_ttl_seconds < 1 or p_ttl_seconds > 86400 then
+    raise exception 'reserve_index_budget: positive amount and ttl (1..86400s) are required' using errcode = '22023';
+  end if;
+  select f.bot_id into v_bot from public.index_job_fence(p_job_id, p_worker, p_version_id) f;
+
+  -- No disabled-bot check here: knowledge is indexed before a bot is enabled. Chat start refuses a
+  -- disabled bot instead (begin_request_run, reserve_request_budget).
+
+  select cs.budget_policy into v_policy from public.client_settings cs where cs.bot_id = v_bot for update;
+  if not found then
+    raise exception 'reserve_index_budget: no client settings for bot' using errcode = 'RB002';
+  end if;
+  v_cap_text := v_policy ->> 'daily_cap_usd';
+  if v_cap_text is null or v_cap_text !~ '^[0-9]+(\.[0-9]+)?$' then
+    raise exception 'reserve_index_budget: daily cap is missing or invalid' using errcode = 'RB002';
+  end if;
+  v_cap := v_cap_text::numeric;
+
+  -- The settings row is locked, so no other reservation of this bot runs now.
+  update public.budget_reservations br set state = 'expired' where br.job_id = p_job_id and br.state = 'reserved';
+
+  select coalesce(sum(br.amount), 0) into v_spent
+    from public.budget_reservations br
+   where br.bot_id = v_bot
+     and br.created_at >= v_day
+     and (br.state = 'settled'
+          or (br.state = 'reserved' and br.expires_at > now())
+          -- A stale worker can still settle an expired job reservation, so it keeps counting until it is settled.
+          or (br.state = 'expired' and br.job_id is not null));
+
+  if v_spent + p_amount > v_cap then
+    raise exception 'reserve_index_budget: daily budget exceeded' using errcode = 'RB001';
+  end if;
+
+  insert into public.budget_reservations (bot_id, job_id, amount, state, expires_at)
+  values (v_bot, p_job_id, p_amount, 'reserved', now() + make_interval(secs => p_ttl_seconds))
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+-- settle_index_budget: reconciles a reservation of THIS job with the real cost (state 'reserved' or 'expired' ->
+-- 'settled', amount = p_actual). Another job's, an unknown, a settled or a released reservation is RB003.
+-- The version is read from the job's payload (the fence checks the payload names a real version of the job).
+create function public.settle_index_budget(p_job_id uuid, p_worker text, p_reservation_id uuid, p_actual numeric)
+returns void
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_ver text;
+  v_bot uuid;
+  v_res public.budget_reservations%rowtype;
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' or p_reservation_id is null
+     or p_actual is null or p_actual < 0 then
+    raise exception 'settle_index_budget: job, worker, reservation and a non-negative amount are required' using errcode = '22023';
+  end if;
+  select j.payload ->> 'version_id' into v_ver from public.jobs j where j.id = p_job_id;
+  if not found or v_ver is null or v_ver !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'index job: lease not held' using errcode = 'RB013';
+  end if;
+  select f.bot_id into v_bot from public.index_job_fence(p_job_id, p_worker, v_ver::uuid) f;
+
+  perform 1 from public.client_settings cs where cs.bot_id = v_bot for update;
+  if not found then
+    raise exception 'settle_index_budget: no client settings for bot' using errcode = 'RB002';
+  end if;
+
+  select * into v_res from public.budget_reservations br
+   where br.id = p_reservation_id and br.job_id = p_job_id and br.bot_id = v_bot for update;
+  if not found or v_res.state not in ('reserved', 'expired') then
+    raise exception 'settle_index_budget: reservation is not settleable' using errcode = 'RB003';
+  end if;
+
+  update public.budget_reservations br set state = 'settled', amount = p_actual where br.id = v_res.id;
+end;
+$$;
+
+-- release_index_budget: gives an active ('reserved') reservation of THIS job back. Anything else is RB003.
+create function public.release_index_budget(p_job_id uuid, p_worker text, p_reservation_id uuid)
+returns void
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_ver text;
+  v_bot uuid;
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' or p_reservation_id is null then
+    raise exception 'release_index_budget: job, worker and reservation are required' using errcode = '22023';
+  end if;
+  select j.payload ->> 'version_id' into v_ver from public.jobs j where j.id = p_job_id;
+  if not found or v_ver is null or v_ver !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'index job: lease not held' using errcode = 'RB013';
+  end if;
+  select f.bot_id into v_bot from public.index_job_fence(p_job_id, p_worker, v_ver::uuid) f;
+
+  perform 1 from public.client_settings cs where cs.bot_id = v_bot for update;
+  if not found then
+    raise exception 'release_index_budget: no client settings for bot' using errcode = 'RB002';
+  end if;
+
+  update public.budget_reservations br set state = 'released'
+   where br.id = p_reservation_id and br.job_id = p_job_id and br.bot_id = v_bot and br.state = 'reserved';
+  if not found then
+    raise exception 'release_index_budget: reservation is not active' using errcode = 'RB003';
+  end if;
+end;
+$$;
+
+-- reserve_job_budget of 009 had no fence and no disabled-bot check; nothing may call it any more.
+drop function public.reserve_job_budget(uuid, uuid, numeric, integer);
+
+-- ---------------------------------------------------------------------------
+-- fail_orphaned_index_versions: a version still being indexed (uploaded, extracting, embedding) whose NEWEST
+-- index_document job (by created_at, found through payload.version_id) is 'failed' or 'cancelled' will never be
+-- worked on again. Up to p_batch (1..1000) such versions, oldest first, become 'failed' with INDEXING_FAILED;
+-- documents.status follows the same rule as elsewhere (failed only with no active version, from draft or
+-- indexing). Versions whose newest job is queued, running or succeeded, versions without a job, and versions in any
+-- other state are left alone. Documents are locked first, in id order (lock order above); the condition is
+-- checked again under the lock. Returns the number of versions failed.
+-- ---------------------------------------------------------------------------
+create function public.fail_orphaned_index_versions(p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_ids uuid[];
+  v_n   integer;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 1000 then
+    raise exception 'fail_orphaned_index_versions: batch (1..1000) is required' using errcode = '22023';
+  end if;
+
+  select coalesce(array_agg(x.id), '{}'::uuid[]) into v_ids
+    from (select v.id
+            from public.document_versions v
+           where v.status in ('uploaded', 'extracting', 'embedding')
+             and (select j.state from public.jobs j
+                   where j.type = 'index_document' and j.payload ->> 'version_id' = v.id::text
+                   order by j.created_at desc, j.id desc limit 1) in ('failed', 'cancelled')
+           order by v.created_at, v.id
+           limit p_batch) x;
+
+  perform 1 from public.documents d
+   where d.id in (select v.document_id from public.document_versions v where v.id = any (v_ids))
+   order by d.id
+     for no key update;
+
+  with f as (
+    update public.document_versions v
+       set status = 'failed', failure_code = 'INDEXING_FAILED', completed_at = now()
+     where v.id = any (v_ids)
+       and v.status in ('uploaded', 'extracting', 'embedding')
+       and (select j.state from public.jobs j
+             where j.type = 'index_document' and j.payload ->> 'version_id' = v.id::text
+             order by j.created_at desc, j.id desc limit 1) in ('failed', 'cancelled')
+    returning v.id, v.document_id
+  ), d as (
+    update public.documents dd set status = 'failed'
+     where dd.id in (select f.document_id from f) and dd.active_version_id is null and dd.status in ('draft', 'indexing')
+    returning dd.id
+  )
+  select count(*)::integer into v_n from f;
+  return v_n;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- release_job_lease: a worker that is shutting down gives its running job back. Only the holder can: a running
+-- job whose locked_by is p_worker goes back to 'queued', lease cleared, available now, and attempts goes down by
+-- one (not below 0), because the claim that is being undone counted one. Returns true when it did, false when the
+-- job is unknown, not running, or held by another worker. Touches only the job row (like complete_job and
+-- fail_job), so it cannot take part in a lock cycle.
+-- ---------------------------------------------------------------------------
+create function public.release_job_lease(p_job_id uuid, p_worker text)
+returns boolean
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+begin
+  if p_job_id is null or p_worker is null or btrim(p_worker) = '' then
+    raise exception 'release_job_lease: job and worker id are required' using errcode = '22023';
+  end if;
+
+  update public.jobs j
+     set state = 'queued',
+         locked_by = null,
+         locked_until = null,
+         attempts = greatest(j.attempts - 1, 0),
+         available_at = now()
+   where j.id = p_job_id and j.state = 'running' and j.locked_by = p_worker;
+  return found;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- prune_superseded_chunks: deletes the chunks of 'superseded' versions, at most p_batch (1..1000) per call
+-- (skipping rows another transaction holds). Active, ready, in-progress and failed versions are never touched.
+-- Returns the number of chunks deleted.
+-- ---------------------------------------------------------------------------
+create function public.prune_superseded_chunks(p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_n integer;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 1000 then
+    raise exception 'prune_superseded_chunks: batch (1..1000) is required' using errcode = '22023';
+  end if;
+
+  delete from public.document_chunks c
+   where c.id in (
+     select x.id
+       from public.document_chunks x
+       join public.document_versions v on v.id = x.document_version_id
+      where v.status = 'superseded'
+      limit p_batch
+      for update of x skip locked);
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- schema_version: raised with every migration (220 compares it with the migration history).
 -- ---------------------------------------------------------------------------
 create or replace function public.schema_version()
@@ -778,6 +1088,13 @@ revoke all on function public.record_usage_event(uuid, uuid, text, text, text, i
 revoke all on function public.cleanup_document(uuid, integer) from public, anon, authenticated;
 revoke all on function public.cleanup_storage_targets(uuid) from public, anon, authenticated;
 revoke all on function public.expire_abandoned_uploads(integer, integer) from public, anon, authenticated;
+revoke all on function public.reset_version_chunks(uuid, text, uuid) from public, anon, authenticated;
+revoke all on function public.reserve_index_budget(uuid, text, uuid, numeric, integer) from public, anon, authenticated;
+revoke all on function public.settle_index_budget(uuid, text, uuid, numeric) from public, anon, authenticated;
+revoke all on function public.release_index_budget(uuid, text, uuid) from public, anon, authenticated;
+revoke all on function public.fail_orphaned_index_versions(integer) from public, anon, authenticated;
+revoke all on function public.release_job_lease(uuid, text) from public, anon, authenticated;
+revoke all on function public.prune_superseded_chunks(integer) from public, anon, authenticated;
 
 grant execute on function public.index_job_fence(uuid, text, uuid) to service_role;
 grant execute on function public.get_index_job_context(uuid, text, uuid) to service_role;
@@ -790,3 +1107,10 @@ grant execute on function public.record_usage_event(uuid, uuid, text, text, text
 grant execute on function public.cleanup_document(uuid, integer) to service_role;
 grant execute on function public.cleanup_storage_targets(uuid) to service_role;
 grant execute on function public.expire_abandoned_uploads(integer, integer) to service_role;
+grant execute on function public.reset_version_chunks(uuid, text, uuid) to service_role;
+grant execute on function public.reserve_index_budget(uuid, text, uuid, numeric, integer) to service_role;
+grant execute on function public.settle_index_budget(uuid, text, uuid, numeric) to service_role;
+grant execute on function public.release_index_budget(uuid, text, uuid) to service_role;
+grant execute on function public.fail_orphaned_index_versions(integer) to service_role;
+grant execute on function public.release_job_lease(uuid, text) to service_role;
+grant execute on function public.prune_superseded_chunks(integer) to service_role;

@@ -1,9 +1,14 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   CHUNK_OVERLAP_TOKENS,
   CHUNK_TARGET_TOKENS,
+  CHUNKING_FINGERPRINT,
   CHUNKING_VERSION,
+  ChunkLimitError,
   chunkDocument,
+  chunkDocumentAsync,
+  deriveChunkingVersion,
   estimateTokens,
   type Chunk,
 } from '../../../worker/src/lib/chunk.ts';
@@ -30,10 +35,74 @@ function checkInvariants(chunks: Chunk[]): void {
   });
 }
 
+const GOLDEN_COUNTS = [6, 3, 4];
+const GOLDEN_HASH = '69c308e50e67948fb36af8c5c21a18a3ba0d5f93bfd6b6458a6e318b59101101';
+const GOLDEN_VERSION = 'c1-350-50-63a5402b';
+
 describe('chunking config', () => {
-  it('has a versioned config constant derived from the sizes', () => {
-    expect(CHUNKING_VERSION).toBe(`c1-${CHUNK_TARGET_TOKENS}-${CHUNK_OVERLAP_TOKENS}`);
+  it('has a versioned config constant derived from the sizes, weights and patterns', () => {
+    expect(CHUNKING_VERSION).toMatch(
+      new RegExp(`^c1-${CHUNK_TARGET_TOKENS}-${CHUNK_OVERLAP_TOKENS}-[0-9a-f]{8}$`),
+    );
+    expect(deriveChunkingVersion(CHUNKING_FINGERPRINT)).toBe(CHUNKING_VERSION);
     expect(chunkDocument([], 'text/plain').version).toBe(CHUNKING_VERSION);
+  });
+
+  it('changes the version when a token weight, a size, a separator or a pattern changes', () => {
+    const base = CHUNKING_FINGERPRINT;
+    const variants = [
+      {
+        ...base,
+        weights: [...base.weights.slice(0, 1), base.weights[1]! + 1, ...base.weights.slice(2)],
+      },
+      { ...base, sizes: [...base.sizes.slice(0, 2), base.sizes[2]! + 1] },
+      { ...base, separators: ['\n\n\n'] },
+      { ...base, patterns: [...base.patterns.slice(0, 1), /\s*/, ...base.patterns.slice(2)] },
+      { ...base, patterns: [...base.patterns.slice(0, -1), /^#{1,5}/] },
+      { ...base, patterns: [...base.patterns.slice(0, 1), /^\s*/i, ...base.patterns.slice(2)] },
+    ];
+    const versions = new Set([CHUNKING_VERSION, ...variants.map(deriveChunkingVersion)]);
+    expect(versions.size).toBe(variants.length + 1);
+  });
+
+  // GOLDEN OUTPUT. If this test fails, the chunk output for a fixed input changed. That makes every
+  // stored chunk of every document stale. Bump the `c1` generation prefix in deriveChunkingVersion
+  // (so `chunking_version` changes and retried jobs re-chunk from 0) and then update the hashes
+  // below. A change to a weight, size or pattern changes the version string by itself, but the
+  // output hash must still be updated deliberately.
+  it('pins the chunk output for a fixed input (golden)', () => {
+    const markdown = [
+      '# Opening hours',
+      '',
+      prose(40),
+      '',
+      '## Contact',
+      '',
+      '```',
+      'code block line one',
+      '',
+      'code block line two',
+      '```',
+      '',
+      prose(30, 100),
+      '',
+      '\u65E5\u672C\u8A9E\u306E\u6587\u7AE0\u3067\u3059\u3002'.repeat(120),
+    ].join('\n');
+    const pdfPages = [
+      { number: 1, text: prose(35) },
+      { number: 2, text: `${prose(5)}\n\n${prose(60, 200)}` },
+    ];
+    const outputs = [
+      chunkDocument([{ number: 1, text: markdown }], 'text/markdown'),
+      chunkDocument([{ number: 1, text: prose(90, 300) }], 'text/plain'),
+      chunkDocument(pdfPages, 'application/pdf'),
+    ];
+    const hash = createHash('sha256')
+      .update(JSON.stringify(outputs.map((o) => o.chunks)))
+      .digest('hex');
+    expect(outputs.map((o) => o.chunks.length)).toEqual(GOLDEN_COUNTS);
+    expect(hash).toBe(GOLDEN_HASH);
+    expect(CHUNKING_VERSION).toBe(GOLDEN_VERSION);
   });
 
   it('estimates tokens with integer arithmetic', () => {
@@ -268,4 +337,70 @@ describe('chunkDocument: oversize and Unicode input', () => {
     );
     expect(chunks[0]?.content).toBe('One.\n\nTwo.\nStill two.');
   });
+});
+
+describe('chunkDocumentAsync', () => {
+  const text = (n: number): string => prose(n);
+
+  it('gives exactly the same output as chunkDocument', async () => {
+    const pages = [
+      { number: 1, text: `# Title\n\n${text(300)}\n\n## Part\n\n${text(200)}` },
+      { number: 2, text: text(150) },
+    ];
+    for (const type of ['text/markdown', 'text/plain', 'application/pdf'] as const) {
+      const sync = chunkDocument(pages, type);
+      const async = await chunkDocumentAsync(pages, type, { maxChunks: 10_000 });
+      expect(async).toEqual(sync);
+    }
+  });
+
+  it('lets the event loop run while it chunks a large document (heartbeats keep firing)', async () => {
+    const big = [
+      { number: 1, text: Array.from({ length: 60 }, (_, i) => text(1000 + i)).join('\n\n') },
+    ];
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+    }, 1);
+    try {
+      const result = await chunkDocumentAsync(big, 'text/plain', { maxChunks: 1_000_000 });
+      expect(result.chunks.length).toBeGreaterThan(100);
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThan(0);
+  });
+
+  it('stops with ChunkLimitError once the chunk cap would be passed, and allows exactly the cap', async () => {
+    const pages = [{ number: 1, text: text(600) }];
+    const total = chunkDocument(pages, 'text/plain').chunks.length;
+    expect(total).toBeGreaterThan(3);
+    await expect(
+      chunkDocumentAsync(pages, 'text/plain', { maxChunks: total - 1 }),
+    ).rejects.toBeInstanceOf(ChunkLimitError);
+    const ok = await chunkDocumentAsync(pages, 'text/plain', { maxChunks: total });
+    expect(ok.chunks).toHaveLength(total);
+  });
+
+  it('rejects with an AbortError when the signal aborts', async () => {
+    const controller = new AbortController();
+    const big = [
+      { number: 1, text: Array.from({ length: 80 }, (_, i) => text(1000 + i)).join('\n\n') },
+    ];
+    const pending = chunkDocumentAsync(big, 'text/plain', {
+      maxChunks: 1_000_000,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    'fails closed on an invalid maxChunks (%s)',
+    async (maxChunks) => {
+      await expect(
+        chunkDocumentAsync([{ number: 1, text: 'hello there' }], 'text/plain', { maxChunks }),
+      ).rejects.toBeInstanceOf(RangeError);
+    },
+  );
 });

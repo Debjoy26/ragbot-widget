@@ -92,6 +92,35 @@ describe('provider config — switching is env-only', () => {
     );
   });
 
+  it('accepts an IPv6 loopback base URL over http', () => {
+    const env = {
+      CHAT_PRIMARY_PROVIDER: 'openai_compatible',
+      CHAT_PRIMARY_MODEL: 'local-model',
+      CHAT_PRIMARY_API_KEY: 'x',
+      CHAT_PRIMARY_BASE_URL: 'http://[::1]:11434/v1',
+    };
+    expect(loadProviderConfig(env, 'chat_primary').baseUrl).toBe('http://[::1]:11434/v1');
+  });
+
+  it('refuses a base URL with a query or a fragment', () => {
+    const env = {
+      CHAT_PRIMARY_PROVIDER: 'openai_compatible',
+      CHAT_PRIMARY_MODEL: 'local-model',
+      CHAT_PRIMARY_API_KEY: 'x',
+    };
+    for (const url of [
+      'https://api.example-llm.com/v1?key=abc',
+      'https://api.example-llm.com/v1#frag',
+      'https://api.example-llm.com/v1?',
+      'https://api.example-llm.com/v1#',
+    ]) {
+      expectConfigError(
+        () => loadProviderConfig({ ...env, CHAT_PRIMARY_BASE_URL: url }, 'chat_primary'),
+        /query or a fragment/,
+      );
+    }
+  });
+
   it('per-role key overrides the provider key', () => {
     const cfg = loadProviderConfig(
       { ...geminiOnly, CHAT_PRIMARY_API_KEY: 'fake-role-key' },

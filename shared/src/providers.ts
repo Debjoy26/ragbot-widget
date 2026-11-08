@@ -120,12 +120,17 @@ function parseBaseUrl(name: string, raw: string): string {
   } catch {
     throw new ProviderConfigError(`${name} is not a valid URL`);
   }
-  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+  // WHATWG URL keeps the brackets on an IPv6 host name.
+  const local =
+    url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
     throw new ProviderConfigError(`${name} must use https (http allowed only for localhost)`);
   }
   if (url.username || url.password) {
     throw new ProviderConfigError(`${name} must not embed credentials`);
+  }
+  if (url.search !== '' || url.hash !== '' || raw.includes('?') || raw.includes('#')) {
+    throw new ProviderConfigError(`${name} must not carry a query or a fragment`);
   }
   return url.toString().replace(/\/$/, '');
 }

@@ -13,8 +13,10 @@ import { LOG_LEVELS, type LogLevel } from './logger.js';
 /**
  * Validated worker configuration (P6-QUEUE). Every limit and secret must be set explicitly: there
  * are no defaults for limits, so a missing value stops the process at start-up (handover section
- * 4.13). Errors name variables only, never their values. The one optional variable is WORKER_ID;
- * without it an id is generated from the host name, the process id and random bytes.
+ * 4.13). Errors name variables only, never their values. The one optional variable is WORKER_ID.
+ * The worker id is always `<base>-<random>`: the base is WORKER_ID, or the host name and process
+ * id, and the random suffix is new on every start, so two processes (or a restart) never share a
+ * lease owner name.
  */
 export interface WorkerConfig {
   readonly supabaseUrl: string;
@@ -46,7 +48,12 @@ export interface WorkerConfig {
   readonly chatDeadlineMs: number;
   readonly visitorSessionGraceSeconds: number;
   readonly terminalJobRetentionDays: number;
+  /** At least 24: an upload may legitimately take a while to be registered. */
   readonly abandonedUploadHours: number;
+  /** Hard cap on one object download, applied on top of the row's byte_size and max_bytes. */
+  readonly maxDownloadBytes: number;
+  /** Most chunks one document version may produce; more fails the version FILE_UNSUPPORTED. */
+  readonly maxChunksPerVersion: number;
   /** Extraction limits (agreed with the extraction module). max_bytes and max_pages come from the database. */
   readonly extraction: {
     readonly maxExtractedChars: number;
@@ -118,10 +125,17 @@ const supabaseUrl = nonEmpty.transform((raw, ctx) => {
 
 /** Logged on every line and sent to the database as a lease owner: a short, plain token. */
 const WORKER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,62}$/;
+/** WORKER_ID is the base of the id; `-` and 6 hex characters are added, and the id stays within 63. */
+const WORKER_ID_SUFFIX_LENGTH = 7;
+const WORKER_ID_BASE_MAX = 63 - WORKER_ID_SUFFIX_LENGTH;
 
 const optionalWorkerId = z.preprocess(
   (v) => (v === '' ? undefined : v),
-  z.string().regex(WORKER_ID).optional(),
+  z
+    .string()
+    .regex(WORKER_ID)
+    .refine((v) => v.length <= WORKER_ID_BASE_MAX)
+    .optional(),
 );
 
 const envSchema = z.object({
@@ -150,7 +164,9 @@ const envSchema = z.object({
   // expire_visitor_sessions accepts a grace of 1..86400; purge_terminal_jobs 1..3650 days.
   VISITOR_SESSION_GRACE_SECONDS: integer(1, 86_400),
   TERMINAL_JOB_RETENTION_DAYS: integer(1, 3650),
-  ABANDONED_UPLOAD_HOURS: integer(1, 8760),
+  ABANDONED_UPLOAD_HOURS: integer(24, 8760),
+  WORKER_MAX_DOWNLOAD_BYTES: integer(1, MAX_INT32),
+  MAX_CHUNKS_PER_VERSION: integer(1, 1_000_000),
   EXTRACT_MAX_CHARS: integer(1, MAX_INT32),
   EXTRACT_TIMEOUT_MS: integer(1, 3_600_000),
   EXTRACT_CHILD_MEMORY_MB: integer(16, 16_384),
@@ -198,13 +214,18 @@ function hideApiKey<T extends { readonly apiKey: string }>(role: T): T {
   return Object.freeze(copy) as unknown as T;
 }
 
-/** `host-pid-random`, reduced to the characters a worker id may carry. */
-export function generateWorkerId(): string {
+/** `host-pid`, reduced to the characters a worker id may carry. */
+function defaultWorkerIdBase(): string {
   const host = hostname()
     .replace(/[^A-Za-z0-9.-]/g, '-')
     .slice(0, 30);
   const base = host.length > 0 && /^[A-Za-z0-9]/.test(host) ? host : 'worker';
-  return `${base}-${String(process.pid)}-${randomBytes(3).toString('hex')}`;
+  return `${base}-${String(process.pid)}`;
+}
+
+/** `<base>-<6 random hex>`. Always random, even when the operator names the worker. */
+export function generateWorkerId(base: string = defaultWorkerIdBase()): string {
+  return `${base}-${randomBytes(3).toString('hex')}`;
 }
 
 /** Validates the environment and returns a deeply frozen config. Throws ConfigError (or the env guard's Error). */
@@ -259,7 +280,7 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
   const config = {
     supabaseUrl: v.SUPABASE_URL,
     logLevel: v.LOG_LEVEL,
-    workerId: v.WORKER_ID ?? generateWorkerId(),
+    workerId: v.WORKER_ID === undefined ? generateWorkerId() : generateWorkerId(v.WORKER_ID),
     dbTimeoutMs: v.DB_TIMEOUT_MS,
     storageTimeoutMs: v.STORAGE_TIMEOUT_MS,
     concurrency: v.WORKER_CONCURRENCY,
@@ -277,6 +298,8 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     visitorSessionGraceSeconds: v.VISITOR_SESSION_GRACE_SECONDS,
     terminalJobRetentionDays: v.TERMINAL_JOB_RETENTION_DAYS,
     abandonedUploadHours: v.ABANDONED_UPLOAD_HOURS,
+    maxDownloadBytes: v.WORKER_MAX_DOWNLOAD_BYTES,
+    maxChunksPerVersion: v.MAX_CHUNKS_PER_VERSION,
     extraction: {
       maxExtractedChars: v.EXTRACT_MAX_CHARS,
       timeoutMs: v.EXTRACT_TIMEOUT_MS,

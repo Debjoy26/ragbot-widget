@@ -40,6 +40,8 @@ const EXPECTED = [
   'purge_expired_data_entries',
   'purge_expired_usage_records',
   'purge_terminal_jobs',
+  'fail_orphaned_index_versions',
+  'prune_superseded_chunks',
   'expire_abandoned_uploads',
 ];
 
@@ -101,6 +103,8 @@ describe('maintenance tasks', () => {
     expect(by['purge_expired_usage_records']).toEqual({ p_batch: 20 });
     expect(by['purge_terminal_jobs']).toEqual({ p_older_than_days: 30, p_batch: 10 });
     expect(by['expire_abandoned_uploads']).toEqual({ p_older_than_hours: 24, p_batch: 10 });
+    expect(by['fail_orphaned_index_versions']).toEqual({ p_batch: 10 });
+    expect(by['prune_superseded_chunks']).toEqual({ p_batch: 10 });
     expect(
       s.calls.every((c) => (c.options as { retryOnContention?: boolean }).retryOnContention),
     ).toBe(true);
@@ -236,6 +240,30 @@ describe('expire_abandoned_uploads: object removal', () => {
     expect(call?.args['p_batch']).toBe(1000);
     const other = s.calls.find((c) => c.name === 'purge_expired_conversations');
     expect(other?.args['p_batch']).toBe(5000);
+  });
+
+  it('caps the index maintenance batches at the function limit of 1000', async () => {
+    const s = setup();
+    await runMaintenance({ ...config, retentionBatchSize: 5000 } as WorkerConfig, s.deps, live);
+    for (const name of ['fail_orphaned_index_versions', 'prune_superseded_chunks']) {
+      expect(s.calls.find((c) => c.name === name)?.args['p_batch']).toBe(1000);
+    }
+  });
+
+  it('isolates the index tasks: one failing does not stop the other or the rest', async () => {
+    const s = setup({
+      fail_orphaned_index_versions: () => {
+        throw new DbError('http', 400, 'XX000');
+      },
+    });
+    const results = await runMaintenance(config, s.deps, live);
+    expect(results.find((r) => r.task === 'fail_orphaned_index_versions')).toMatchObject({
+      ok: false,
+      code: 'XX000',
+    });
+    expect(results.find((r) => r.task === 'prune_superseded_chunks')?.ok).toBe(true);
+    expect(results.find((r) => r.task === 'expire_abandoned_uploads')?.ok).toBe(true);
+    expect(results).toHaveLength(EXPECTED.length);
   });
 
   it('does not call storage when nothing expired', async () => {

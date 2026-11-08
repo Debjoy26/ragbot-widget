@@ -207,6 +207,9 @@ export function workerEnv(o: WorkerEnvOptions): Record<string, string> {
     TERMINAL_JOB_RETENTION_DAYS: '30',
     ABANDONED_UPLOAD_HOURS: '24',
     EXTRACT_MAX_CHARS: '5000000',
+    // P6-D2-W required limits (board INTERFACE of P6-D2-W): the largest download and chunk count.
+    WORKER_MAX_DOWNLOAD_BYTES: '52428800',
+    MAX_CHUNKS_PER_VERSION: '5000',
     EXTRACT_TIMEOUT_MS: '30000',
     EXTRACT_CHILD_MEMORY_MB: '512',
     EMBEDDING_BATCH_SIZE: '2',
@@ -419,6 +422,8 @@ export class IngestionHarness {
       allowed_languages: ['en'],
       embedding_model: this.model,
       embedding_dimensions: 1536,
+      // reserve_index_budget refuses a disabled bot (RB039), so an indexing bot must be enabled.
+      enabled: true,
     })) as { id: string }[];
     if (bot === undefined) throw new Error('bot insert returned nothing');
     const big = { limit: 5000, window_seconds: 3600 };
@@ -775,6 +780,45 @@ export class TestBot {
     await this.rest.patch(`client_settings?bot_id=eq.${this.id}`, {
       upload_policy: { ...current, ...patch },
     });
+  }
+
+  /** Replaces budget_policy.daily_cap_usd, keeping the rest of the policy. */
+  async setDailyCap(usd: number): Promise<void> {
+    const rows = (await this.rest.get(
+      `client_settings?bot_id=eq.${this.id}&select=budget_policy`,
+    )) as { budget_policy: Record<string, unknown> }[];
+    const current = rows[0]?.budget_policy;
+    if (current === undefined) throw new Error('settings not found');
+    await this.rest.patch(`client_settings?bot_id=eq.${this.id}`, {
+      budget_policy: { ...current, daily_cap_usd: usd },
+    });
+  }
+
+  async patchJob(jobId: string, patch: Record<string, unknown>): Promise<void> {
+    await this.rest.patch(`jobs?id=eq.${jobId}`, patch);
+  }
+
+  /**
+   * Simulates a lost lease: another worker id now owns the job until `forMs` from now. The real holder's
+   * next fenced call is refused (RB013); claim_jobs hands the job out again once the time has passed.
+   */
+  async stealLease(jobId: string, forMs: number): Promise<void> {
+    await this.patchJob(jobId, {
+      locked_by: `thief-${this.h.run}`,
+      locked_until: new Date(Date.now() + forMs).toISOString(),
+    });
+  }
+
+  /** Overwrites the content of every chunk of a version (to tell leftover chunks from new ones). */
+  async setChunkContents(versionId: string, content: string): Promise<void> {
+    await this.rest.patch(`document_chunks?document_version_id=eq.${versionId}`, { content });
+  }
+
+  async chunkContents(versionId: string): Promise<string[]> {
+    const rows = (await this.rest.get(
+      `document_chunks?document_version_id=eq.${versionId}&select=content&order=chunk_index`,
+    )) as { content: string }[];
+    return rows.map((r) => r.content);
   }
 
   async setEmbeddingModel(model: string): Promise<void> {

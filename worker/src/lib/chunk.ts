@@ -1,5 +1,7 @@
 // Deterministic chunking (P6, TECH_SPECS §6/§7). Same input, same output, byte for byte: no
 // locale, ICU, clock or randomness is involved. Sizes are estimated tokens, not a model tokenizer.
+import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type { ExtractedPage } from './extract.js';
 import type { KnowledgeMediaType } from './sniff.js';
 
@@ -7,8 +9,6 @@ import type { KnowledgeMediaType } from './sniff.js';
 export const CHUNK_TARGET_TOKENS = 350;
 /** Approximate overlap carried into the next chunk, in estimated tokens. */
 export const CHUNK_OVERLAP_TOKENS = 50;
-/** Stored as `chunking_version`. Change the prefix when the algorithm changes, not just the sizes. */
-export const CHUNKING_VERSION = `c1-${CHUNK_TARGET_TOKENS}-${CHUNK_OVERLAP_TOKENS}`;
 /** Longest section label kept, in code points. */
 export const MAX_SECTION_CHARS = 200;
 
@@ -32,12 +32,14 @@ export interface ChunkResult {
 const Q_ASCII = 1;
 const Q_ALPHABETIC = 2;
 const Q_WIDE = 4;
+const ASCII_LIMIT = 0x80;
+const ALPHABETIC_LIMIT = 0x2e80;
 
 function quarterTokens(text: string): number {
   let q = 0;
   for (const ch of text) {
     const cp = ch.codePointAt(0) as number;
-    q += cp < 0x80 ? Q_ASCII : cp < 0x2e80 ? Q_ALPHABETIC : Q_WIDE;
+    q += cp < ASCII_LIMIT ? Q_ASCII : cp < ALPHABETIC_LIMIT ? Q_ALPHABETIC : Q_WIDE;
   }
   return q;
 }
@@ -63,17 +65,25 @@ interface Piece {
   sep: string;
 }
 
+// Every pattern and weight below shapes the chunk boundaries, so CHUNKING_VERSION hashes them all.
+const SENTENCE_BOUNDARY =
+  /[.!?\u2026]+["'\u201D\u2019)\]]*(?=\s)|[\u3002\uFF01\uFF1F\uFF0E]+[\u300D\u300F\uFF09]*/gu;
+const LEADING_WHITESPACE = /^\s*/;
+const WORD_SEPARATOR = /\s+/g;
+const PARAGRAPH_SEPARATOR = /\n[ \t]*\n/;
+/** Separator between atoms that came from different blocks. */
+const BLOCK_SEPARATOR = '\n\n';
+
 /** Split into sentences, keeping the whitespace between them. */
 function splitSentences(text: string): Piece[] {
-  const boundary =
-    /[.!?\u2026]+["'\u201D\u2019)\]]*(?=\s)|[\u3002\uFF01\uFF1F\uFF0E]+[\u300D\u300F\uFF09]*/gu;
+  const boundary = SENTENCE_BOUNDARY;
   const pieces: Piece[] = [];
   let pos = 0;
   let sep = '';
   for (const m of text.matchAll(boundary)) {
     const end = m.index + m[0].length;
     pieces.push({ text: text.slice(pos, end), sep });
-    const ws = /^\s*/.exec(text.slice(end))?.[0] ?? '';
+    const ws = LEADING_WHITESPACE.exec(text.slice(end))?.[0] ?? '';
     sep = ws;
     pos = end + ws.length;
   }
@@ -85,7 +95,7 @@ function splitWords(text: string): Piece[] {
   const pieces: Piece[] = [];
   let sep = '';
   let pos = 0;
-  for (const m of text.matchAll(/\s+/g)) {
+  for (const m of text.matchAll(WORD_SEPARATOR)) {
     if (m.index > pos) pieces.push({ text: text.slice(pos, m.index), sep });
     sep = m[0];
     pos = m.index + m[0].length;
@@ -128,8 +138,13 @@ function splitHard(text: string): Piece[] {
   return pieces;
 }
 
+/** A generator step the async driver may use to hand control back to the event loop. */
+type Steps<T> = Generator<void, T, void>;
+/** How many sentences or atoms are processed between two yield points. */
+const YIELD_EVERY = 256;
+
 /** Break a block of text into atoms that each fit the cap. */
-function toAtoms(text: string, sep: string, section: string | null): Atom[] {
+function* toAtoms(text: string, sep: string, section: string | null): Steps<Atom[]> {
   const atoms: Atom[] = [];
   const push = (piece: Piece, forceSep?: string): void => {
     const q = quarterTokens(piece.text);
@@ -143,7 +158,10 @@ function toAtoms(text: string, sep: string, section: string | null): Atom[] {
     }
     return piece.sep;
   };
+  let seen = 0;
   for (const sentence of splitSentences(text)) {
+    seen += 1;
+    if (seen % YIELD_EVERY === 0) yield;
     if (quarterTokens(sentence.text) <= CAP_Q) {
       push(sentence, sepFor(sentence));
       continue;
@@ -166,6 +184,52 @@ function toAtoms(text: string, sep: string, section: string | null): Atom[] {
 
 const FENCE = /^\s{0,3}(```|~~~)/;
 const HEADING = /^\s{0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+
+/** Everything that shapes the chunk boundaries, hashed into CHUNKING_VERSION. */
+export interface ChunkingFingerprint {
+  readonly weights: readonly number[];
+  readonly sizes: readonly number[];
+  readonly separators: readonly string[];
+  readonly patterns: readonly RegExp[];
+}
+
+export const CHUNKING_FINGERPRINT: ChunkingFingerprint = {
+  weights: [Q_ASCII, Q_ALPHABETIC, Q_WIDE, ASCII_LIMIT, ALPHABETIC_LIMIT],
+  sizes: [CHUNK_TARGET_TOKENS, CHUNK_OVERLAP_TOKENS, MAX_SECTION_CHARS],
+  separators: [BLOCK_SEPARATOR],
+  patterns: [
+    SENTENCE_BOUNDARY,
+    LEADING_WHITESPACE,
+    WORD_SEPARATOR,
+    PARAGRAPH_SEPARATOR,
+    COMBINING,
+    FENCE,
+    HEADING,
+  ],
+};
+
+/**
+ * The version string for a fingerprint: `c1-<target>-<overlap>-<8 hex of a SHA-256 over every
+ * weight, size, separator and pattern>`. `c1` is the algorithm generation: change it when the code
+ * changes what it does without touching a weight or pattern.
+ */
+export function deriveChunkingVersion(fingerprint: ChunkingFingerprint): string {
+  const digest = createHash('sha256')
+    .update(
+      JSON.stringify({
+        weights: fingerprint.weights,
+        sizes: fingerprint.sizes,
+        separators: fingerprint.separators,
+        patterns: fingerprint.patterns.map((re) => `${re.source}/${re.flags}`),
+      }),
+    )
+    .digest('hex')
+    .slice(0, 8);
+  return `c1-${CHUNK_TARGET_TOKENS}-${CHUNK_OVERLAP_TOKENS}-${digest}`;
+}
+
+/** Stored as `chunking_version`. Editing a size, a token weight or a pattern changes it by itself. */
+export const CHUNKING_VERSION = deriveChunkingVersion(CHUNKING_FINGERPRINT);
 
 function sectionLabel(raw: string): string | null {
   const label = Array.from(raw.trim()).slice(0, MAX_SECTION_CHARS).join('');
@@ -216,13 +280,26 @@ function markdownBlocks(text: string): { text: string; section: string | null }[
 
 function plainBlocks(text: string): { text: string; section: string | null }[] {
   return text
-    .split(/\n[ \t]*\n/)
+    .split(PARAGRAPH_SEPARATOR)
     .map((p) => p.trim())
     .filter((p) => p !== '')
     .map((p) => ({ text: p, section: null }));
 }
 
-function packAtoms(atoms: Atom[], pageNumber: number | null, out: Chunk[]): void {
+/** Raised when the document would produce more chunks than the caller allows. */
+export class ChunkLimitError extends Error {
+  constructor() {
+    super('document produces too many chunks');
+    this.name = 'ChunkLimitError';
+  }
+}
+
+function* packAtoms(
+  atoms: Atom[],
+  pageNumber: number | null,
+  out: Chunk[],
+  maxChunks: number,
+): Steps<void> {
   let cur: Atom[] = [];
   let curQ = 0;
 
@@ -230,6 +307,7 @@ function packAtoms(atoms: Atom[], pageNumber: number | null, out: Chunk[]): void
   const emit = (): void => {
     const content = cur.map((a, i) => (i === 0 ? a.text : a.sep + a.text)).join('');
     if (content.trim() === '') return;
+    if (out.length >= maxChunks) throw new ChunkLimitError();
     out.push({
       chunk_index: out.length,
       content,
@@ -241,7 +319,10 @@ function packAtoms(atoms: Atom[], pageNumber: number | null, out: Chunk[]): void
   const total = (list: Atom[]): number =>
     list.reduce((sum, a, i) => sum + (i === 0 ? a.q : quarterTokens(a.sep) + a.q), 0);
 
+  let seen = 0;
   for (const atom of atoms) {
+    seen += 1;
+    if (seen % YIELD_EVERY === 0) yield;
     if (cur.length > 0 && curQ + addCost(atom) > CAP_Q) {
       emit();
       // Carry the longest tail of the emitted chunk that fits the overlap budget.
@@ -269,25 +350,84 @@ function packAtoms(atoms: Atom[], pageNumber: number | null, out: Chunk[]): void
   if (cur.length > 0) emit();
 }
 
-/**
- * Chunk extracted pages. PDF chunks never span pages, so every chunk has one `page_number`.
- * Markdown chunks carry the nearest preceding heading as `section`. `chunk_index` runs from 0
- * without gaps across the whole document. Empty or whitespace-only pages produce no chunks.
- */
-export function chunkDocument(pages: ExtractedPage[], mediaType: KnowledgeMediaType): ChunkResult {
+function* chunkSteps(
+  pages: ExtractedPage[],
+  mediaType: KnowledgeMediaType,
+  maxChunks: number,
+): Steps<ChunkResult> {
   const chunks: Chunk[] = [];
   const isPdf = mediaType === 'application/pdf';
   const isMarkdown = mediaType === 'text/markdown';
 
   for (const page of pages) {
     const blocks = isMarkdown ? markdownBlocks(page.text) : plainBlocks(page.text);
+    yield;
     const atoms: Atom[] = [];
     for (const block of blocks) {
-      for (const atom of toAtoms(block.text, '\n\n', isMarkdown ? block.section : null)) {
+      for (const atom of yield* toAtoms(
+        block.text,
+        BLOCK_SEPARATOR,
+        isMarkdown ? block.section : null,
+      )) {
         atoms.push(atom);
       }
     }
-    packAtoms(atoms, isPdf ? page.number : null, chunks);
+    yield* packAtoms(atoms, isPdf ? page.number : null, chunks, maxChunks);
   }
   return { chunks, version: CHUNKING_VERSION };
+}
+
+/**
+ * Chunk extracted pages. PDF chunks never span pages, so every chunk has one `page_number`.
+ * Markdown chunks carry the nearest preceding heading as `section`. `chunk_index` runs from 0
+ * without gaps across the whole document. Empty or whitespace-only pages produce no chunks.
+ * Synchronous and unbounded: for tests and small inputs. The worker uses `chunkDocumentAsync`.
+ */
+export function chunkDocument(pages: ExtractedPage[], mediaType: KnowledgeMediaType): ChunkResult {
+  const steps = chunkSteps(pages, mediaType, Number.POSITIVE_INFINITY);
+  for (;;) {
+    const step = steps.next();
+    if (step.done === true) return step.value;
+  }
+}
+
+export interface ChunkOptions {
+  /** Throws ChunkLimitError as soon as a chunk beyond this count would be produced. */
+  readonly maxChunks: number;
+  /** Aborts chunking with an AbortError at the next yield point. */
+  readonly signal?: AbortSignal;
+}
+
+/** Longest stretch of chunking work before control goes back to the event loop (heartbeats). */
+export const YIELD_SLICE_MS = 5;
+
+/**
+ * Same output as `chunkDocument`, byte for byte, but it hands control back to the event loop every
+ * few milliseconds so the job's heartbeat timer keeps firing on a very large document, it stops at
+ * `maxChunks`, and it honours an abort.
+ */
+export async function chunkDocumentAsync(
+  pages: ExtractedPage[],
+  mediaType: KnowledgeMediaType,
+  options: ChunkOptions,
+): Promise<ChunkResult> {
+  const { maxChunks, signal } = options;
+  if (!Number.isInteger(maxChunks) || maxChunks < 1) {
+    throw new RangeError('maxChunks must be a positive integer');
+  }
+  const steps = chunkSteps(pages, mediaType, maxChunks);
+  let sliceStart = performance.now();
+  for (;;) {
+    const step = steps.next();
+    if (step.done === true) return step.value;
+    if (performance.now() - sliceStart >= YIELD_SLICE_MS) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (signal?.aborted === true) {
+        const err = new Error('chunking aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      sliceStart = performance.now();
+    }
+  }
 }

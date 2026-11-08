@@ -1,1 +1,10 @@
-dist child ok: pdf_text x1-pdfjs-6.4.299 pages 2 chars 156
+file:///home/kali/Desktop/rag-bot/ragbot-widget/worker/dist/lib/extract.js:58
+            throw new RangeError(`extract limit ${key} must be a positive integer`);
+                  ^
+
+RangeError: extract limit maxChars must be a positive integer
+    at assertLimits (file:///home/kali/Desktop/rag-bot/ragbot-widget/worker/dist/lib/extract.js:58:19)
+    at extractText (file:///home/kali/Desktop/rag-bot/ragbot-widget/worker/dist/lib/extract.js:268:5)
+    at file:///home/kali/Desktop/rag-bot/ragbot-widget/docs/evidence/P6/dist-extract-check.mjs:10:19
+
+Node.js v24.22.2

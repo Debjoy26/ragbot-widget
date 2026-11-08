@@ -2,6 +2,7 @@
 // Markdown and text are decoded in-process. PDF parsing runs in a child process with a memory cap
 // and a hard timeout. This module never logs document text, and its errors carry no document text.
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -11,8 +12,27 @@ import {
   type KnowledgeMediaType,
 } from './sniff.js';
 
-/** Bump when extraction output changes for the same input. Stored as `extraction_version`. */
-export const EXTRACTION_VERSION = 'x1-pdfjs-6.4.299';
+const requireFromHere = createRequire(import.meta.url);
+
+/** The directory of the installed pdfjs-dist package (the one place the PDF child may read besides its script). */
+function pdfjsPackageDir(): string {
+  return dirname(requireFromHere.resolve('pdfjs-dist/package.json'));
+}
+
+function pdfjsVersion(): string {
+  const pkg = requireFromHere('pdfjs-dist/package.json') as { version?: unknown };
+  if (typeof pkg.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+    throw new Error('cannot determine the pdfjs-dist version');
+  }
+  return pkg.version;
+}
+
+/**
+ * Stored as `extraction_version`. The prefix changes when our own extraction code changes output;
+ * the pdfjs part is read from the installed (pinned) package at run time, so upgrading the parser
+ * changes the version and makes a retried attempt re-extract instead of resuming.
+ */
+export const EXTRACTION_VERSION = `x1-pdfjs-${pdfjsVersion()}`;
 
 /** A PDF with fewer non-whitespace characters than this in total has no usable text layer. */
 export const MIN_PDF_TEXT_CHARS = 20;
@@ -34,6 +54,7 @@ export type ExtractFailureReason =
   | 'timeout'
   | 'memory'
   | 'output_too_large'
+  | 'too_much_text'
   | 'child_failed'
   | 'no_text_layer';
 
@@ -49,6 +70,20 @@ export class ExtractError extends Error {
   }
 }
 
+/**
+ * The extraction child could not be started (or died of an infrastructure fault such as a bad
+ * option). This is a property of the worker, not of the document, so callers retry instead of
+ * failing the version.
+ */
+export class ExtractSpawnError extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(`extraction child could not run (${code})`);
+    this.name = 'ExtractSpawnError';
+    this.code = /^[A-Za-z0-9_]{1,32}$/.test(code) ? code : 'SPAWN_FAILED';
+  }
+}
+
 export interface ExtractLimits {
   /** Wall-clock budget for PDF parsing; the child is killed at this point. */
   timeoutMs: number;
@@ -56,6 +91,8 @@ export interface ExtractLimits {
   maxMemoryMb: number;
   /** Maximum number of pages (ADR 0007). */
   maxPages: number;
+  /** Maximum extracted text, in UTF-16 code units, summed over all pages (EXTRACT_MAX_CHARS). */
+  maxChars: number;
 }
 
 export interface ExtractedPage {
@@ -75,7 +112,7 @@ export interface ExtractOptions {
 }
 
 function assertLimits(limits: ExtractLimits): void {
-  for (const key of ['timeoutMs', 'maxMemoryMb', 'maxPages'] as const) {
+  for (const key of ['timeoutMs', 'maxMemoryMb', 'maxPages', 'maxChars'] as const) {
     const value = limits[key];
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
       throw new RangeError(`extract limit ${key} must be a positive integer`);
@@ -97,9 +134,14 @@ export function normalizeText(input: string): string {
     .replace(/\uFEFF/g, '');
 }
 
-function extractPlain(bytes: Uint8Array, mediaType: 'text/markdown' | 'text/plain'): ExtractResult {
+function extractPlain(
+  bytes: Uint8Array,
+  mediaType: 'text/markdown' | 'text/plain',
+  maxChars: number,
+): ExtractResult {
   const decoded = decodeUtf8Strict(bytes);
   if (decoded === null) throw new ExtractError('FILE_UNSUPPORTED', 'invalid_utf8');
+  if (decoded.length > maxChars) throw new ExtractError('FILE_UNSUPPORTED', 'too_much_text');
   if (!hasLowControlRatio(decoded)) throw new ExtractError('FILE_UNSUPPORTED', 'type_mismatch');
   const text = normalizeText(decoded);
   if (text.trim() === '') throw new ExtractError('FILE_UNSUPPORTED', 'empty');
@@ -108,6 +150,22 @@ function extractPlain(bytes: Uint8Array, mediaType: 'text/markdown' | 'text/plai
     method: mediaType === 'text/markdown' ? 'markdown' : 'plain_text',
     version: EXTRACTION_VERSION,
   };
+}
+
+/**
+ * Node flags that confine the PDF child (permission model): it may read its own script and the
+ * pdfjs package directory and nothing else (no other files, no /proc, no child processes, no
+ * worker threads, no native addons), and it cannot compile code from strings. The memory cap goes
+ * first. The script path and its arguments are appended by the caller.
+ */
+export function confinementArgs(maxMemoryMb: number, scriptPath: string): string[] {
+  return [
+    `--max-old-space-size=${maxMemoryMb}`,
+    '--permission',
+    `--allow-fs-read=${scriptPath}`,
+    `--allow-fs-read=${pdfjsPackageDir()}`,
+    '--disallow-code-generation-from-strings',
+  ];
 }
 
 /** Where the child script lives: the compiled sibling, or the `.ts` source when run from source. */
@@ -119,6 +177,7 @@ function childScriptPath(): string {
 
 type ChildOutcome =
   | { kind: 'pages'; pages: unknown }
+  | { kind: 'spawn_failed'; code: string }
   | { kind: 'refused'; reason: 'encrypted' | 'too_many_pages' | 'corrupt' }
   | { kind: 'failed'; reason: ExtractFailureReason };
 
@@ -136,7 +195,12 @@ function runPdfChild(
     }
     const child = spawn(
       process.execPath,
-      [`--max-old-space-size=${limits.maxMemoryMb}`, childScriptPath(), String(limits.maxPages)],
+      [
+        ...confinementArgs(limits.maxMemoryMb, childScriptPath()),
+        childScriptPath(),
+        String(limits.maxPages),
+        pdfjsPackageDir(),
+      ],
       // Empty environment: the child never sees the worker's keys.
       { stdio: ['pipe', 'pipe', 'pipe'], env: {}, windowsHide: true },
     );
@@ -170,7 +234,10 @@ function runPdfChild(
       fn();
     };
 
-    child.on('error', () => finish(() => resolve({ kind: 'failed', reason: 'child_failed' })));
+    // ENOENT, EACCES, EAGAIN...: the child never ran. Not the document's fault.
+    child.on('error', (err: NodeJS.ErrnoException) =>
+      finish(() => resolve({ kind: 'spawn_failed', code: err.code ?? 'SPAWN_FAILED' })),
+    );
     child.stdin.on('error', () => undefined); // EPIPE when the child dies early
     child.stdout.on('data', (chunk: Buffer) => {
       outBytes += chunk.length;
@@ -186,7 +253,7 @@ function runPdfChild(
       errTail = (errTail + chunk.toString('latin1')).slice(-4096);
     });
 
-    child.on('close', (_code, sig) => {
+    child.on('close', (code, sig) => {
       finish(() => {
         if (aborted) return reject(abortError());
         if (timedOut) return resolve({ kind: 'failed', reason: 'timeout' });
@@ -208,6 +275,11 @@ function runPdfChild(
         } catch {
           // fall through to the crash classification below
         }
+        // Exit 2 (bad arguments), 3 (the child's own start-up failed) and 9 (a Node option was
+        // refused) are infrastructure faults; a hostile document cannot produce them.
+        if (code === 2 || code === 3 || code === 9) {
+          return resolve({ kind: 'spawn_failed', code: `EXIT_${String(code)}` });
+        }
         const oom = sig === 'SIGABRT' || OOM_PATTERN.test(errTail);
         return resolve({ kind: 'failed', reason: oom ? 'memory' : 'child_failed' });
       });
@@ -223,12 +295,13 @@ function abortError(): Error {
   return err;
 }
 
-function validatePages(raw: unknown, maxPages: number): ExtractedPage[] {
+function validatePages(raw: unknown, maxPages: number, maxChars: number): ExtractedPage[] {
   if (!Array.isArray(raw) || raw.length > maxPages) {
     throw new ExtractError('FILE_UNSUPPORTED', 'child_failed');
   }
   const pages: ExtractedPage[] = [];
   let previous = 0;
+  let total = 0;
   for (const entry of raw as unknown[]) {
     const rec = entry as { number?: unknown; text?: unknown } | null;
     if (
@@ -243,6 +316,8 @@ function validatePages(raw: unknown, maxPages: number): ExtractedPage[] {
       throw new ExtractError('FILE_UNSUPPORTED', 'child_failed');
     }
     previous = rec.number;
+    total += rec.text.length;
+    if (total > maxChars) throw new ExtractError('FILE_UNSUPPORTED', 'too_much_text');
     const text = normalizeText(rec.text).trim();
     if (text !== '') pages.push({ number: rec.number, text });
   }
@@ -256,10 +331,11 @@ async function extractPdf(
 ): Promise<ExtractResult> {
   if (!isPdfBytes(bytes)) throw new ExtractError('FILE_UNSUPPORTED', 'type_mismatch');
   const outcome = await runPdfChild(bytes, limits, signal);
+  if (outcome.kind === 'spawn_failed') throw new ExtractSpawnError(outcome.code);
   if (outcome.kind === 'failed') throw new ExtractError('FILE_UNSUPPORTED', outcome.reason);
   if (outcome.kind === 'refused') throw new ExtractError('FILE_UNSUPPORTED', outcome.reason);
 
-  const pages = validatePages(outcome.pages, limits.maxPages);
+  const pages = validatePages(outcome.pages, limits.maxPages, limits.maxChars);
   let chars = 0;
   for (const page of pages) chars += page.text.replace(/\s/g, '').length;
   if (chars < MIN_PDF_TEXT_CHARS) throw new ExtractError('OCR_REQUIRED', 'no_text_layer');
@@ -269,7 +345,9 @@ async function extractPdf(
 /**
  * Extract text from validated content. Throws `ExtractError` with code `FILE_UNSUPPORTED` (wrong or
  * unreadable content, encrypted, too many pages, timeout, memory) or `OCR_REQUIRED` (no text layer).
- * Throws `RangeError` for invalid limits (fail closed) and an `AbortError` when `signal` aborts.
+ * Text over `maxChars` is `FILE_UNSUPPORTED`. Throws `ExtractSpawnError` when the child cannot run
+ * (transient: retry), `RangeError` for invalid limits (fail closed) and an `AbortError` when
+ * `signal` aborts.
  * Content that does not fit `mediaType` is `FILE_UNSUPPORTED`, even if the caller already sniffed it.
  */
 export async function extractText(
@@ -285,7 +363,7 @@ export async function extractText(
     case 'text/markdown':
     case 'text/plain':
       if (isPdfBytes(bytes)) throw new ExtractError('FILE_UNSUPPORTED', 'type_mismatch');
-      return extractPlain(bytes, mediaType);
+      return extractPlain(bytes, mediaType, limits.maxChars);
     default:
       throw new ExtractError('FILE_UNSUPPORTED', 'type_mismatch');
   }

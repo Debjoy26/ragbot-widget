@@ -14,7 +14,8 @@
 /** The one bucket the worker reads and removes from (migration 003). */
 export const KNOWLEDGE_BUCKET = 'knowledge';
 
-export type StorageErrorReason = 'http' | 'network' | 'timeout' | 'too_large' | 'invalid_response';
+export type StorageErrorReason =
+  'http' | 'network' | 'timeout' | 'too_large' | 'invalid_response' | 'etag_mismatch';
 
 export class StorageError extends Error {
   readonly reason: StorageErrorReason;
@@ -36,12 +37,27 @@ export interface DownloadedObject {
   readonly contentType: string | null;
 }
 
+export interface DownloadOptions {
+  /**
+   * The eTag the object must have (compared with normalizeEtag). It is checked against the
+   * response headers BEFORE the body is read: a missing or different eTag cancels the response and
+   * throws StorageError('etag_mismatch'), so an object that is not the registered upload is never
+   * downloaded.
+   */
+  readonly expectedEtag?: string;
+}
+
 export interface Storage {
   /**
    * Reads one object, at most `maxBytes`. Throws StorageError('too_large') when the object is
    * larger, StorageError('http', 404) when it does not exist.
    */
-  download(path: string, maxBytes: number, signal?: AbortSignal): Promise<DownloadedObject>;
+  download(
+    path: string,
+    maxBytes: number,
+    signal?: AbortSignal,
+    options?: DownloadOptions,
+  ): Promise<DownloadedObject>;
   /** Removes objects. A path that does not exist is not an error. Returns how many were requested. */
   remove(paths: readonly string[], signal?: AbortSignal): Promise<number>;
 }
@@ -152,7 +168,7 @@ export function createStorage(options: CreateStorageOptions): Storage {
   }
 
   return {
-    async download(path, maxBytes, signal) {
+    async download(path, maxBytes, signal, options) {
       const safe = checkPath(path);
       if (!Number.isInteger(maxBytes) || maxBytes < 1) {
         throw new TypeError('maxBytes must be a positive integer');
@@ -170,6 +186,14 @@ export function createStorage(options: CreateStorageOptions): Storage {
           await res.body?.cancel();
           throw new StorageError('http', res.status);
         }
+        const etag = res.headers.get('etag');
+        if (
+          options?.expectedEtag !== undefined &&
+          (etag === null || normalizeEtag(etag) !== normalizeEtag(options.expectedEtag))
+        ) {
+          await res.body?.cancel();
+          throw new StorageError('etag_mismatch');
+        }
         const declared = res.headers.get('content-length');
         if (declared !== null && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
           await res.body?.cancel();
@@ -178,7 +202,7 @@ export function createStorage(options: CreateStorageOptions): Storage {
         const bytes = await readCapped(res, maxBytes);
         return {
           bytes,
-          etag: res.headers.get('etag'),
+          etag,
           contentType: res.headers.get('content-type'),
         };
       } catch (err) {

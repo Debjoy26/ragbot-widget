@@ -565,7 +565,10 @@ describe('every browser-callable RPC over /rest/v1/rpc, for every principal', ()
       ],
       ['admin_consume_quota', { p_bot_id: botId, p_kind: 'register' }],
       ['admin_policy_int', { p_bot_id: botId, p_key: 'max_bytes', p_min: 1, p_max: 100 }],
-      ['reserve_job_budget', { p_bot_id: botId, p_job_id: NOBODY, p_amount: 1, p_ttl_seconds: 60 }],
+      [
+        'reserve_index_budget',
+        { p_job_id: NOBODY, p_worker: 'w', p_version_id: NOBODY, p_amount: 1, p_ttl_seconds: 60 },
+      ],
     ] as const) {
       const r = await rpc(stack, owner.aal2Token, name, args);
       expect(r.status, name).toBeGreaterThanOrEqual(400);
@@ -2163,78 +2166,9 @@ describe('analyst reads of message_sources and conversation_analysis', () => {
   });
 });
 
-describe('job budget across attempts through SQL (S-1, C-1)', () => {
-  async function reserveJob(bot: string, job: string, amount: number): Promise<HttpResult> {
-    return svc('POST', '/rest/v1/rpc/reserve_job_budget', {
-      p_bot_id: bot,
-      p_job_id: job,
-      p_amount: amount,
-      p_ttl_seconds: 3600,
-    });
-  }
-  const setJob = (id: string, state: string) =>
-    svc('PATCH', `/rest/v1/jobs?id=eq.${id}`, {
-      state,
-      ...(state === 'queued' ? { locked_by: null, locked_until: null } : {}),
-    });
-
-  it('reserve, release, requeue, reserve works; a settled attempt counts toward the cap; a repeat is idempotent', async () => {
-    const bot = await makeBot('budget', { write: { limit: 5, window_seconds: 3600 } }); // cap 5.0
-    const [job] = rows(
-      await svc('POST', '/rest/v1/jobs', {
-        type: 'index_document',
-        payload: { bot_id: bot },
-        state: 'running',
-        max_attempts: 3,
-      }),
-    );
-    const jobId = String(job?.['id']);
-
-    const r1 = await reserveJob(bot, jobId, 1);
-    expectOk(r1);
-    const id1 = String(r1.body);
-    const repeat = await reserveJob(bot, jobId, 1);
-    expectOk(repeat);
-    expect(String(repeat.body)).toBe(id1);
-
-    expectOk(
-      await svc('POST', '/rest/v1/rpc/release_budget_reservation', {
-        p_bot_id: bot,
-        p_reservation_id: id1,
-      }),
-    );
-    expectOk(await setJob(jobId, 'queued'));
-    expectCode(await reserveJob(bot, jobId, 1), 'RB004'); // a queued job cannot reserve
-    expectOk(await setJob(jobId, 'running'));
-    const r2 = await reserveJob(bot, jobId, 1);
-    expectOk(r2);
-    const id2 = String(r2.body);
-    expect(id2).not.toBe(id1);
-
-    // Attempt 2 settles 4.5; attempt 3 may add at most 0.5 under the 5.0 cap.
-    expectOk(
-      await svc('POST', '/rest/v1/rpc/settle_budget_reservation', {
-        p_bot_id: bot,
-        p_reservation_id: id2,
-        p_actual_amount: 4.5,
-      }),
-    );
-    expectOk(await setJob(jobId, 'queued'));
-    expectOk(await setJob(jobId, 'running'));
-    expectCode(await reserveJob(bot, jobId, 0.6), 'RB001');
-    const r3 = await reserveJob(bot, jobId, 0.5);
-    expectOk(r3);
-    const states = rows(
-      await svc(
-        'GET',
-        `/rest/v1/budget_reservations?job_id=eq.${jobId}&select=state&order=created_at`,
-      ),
-    )
-      .map((x) => x['state'])
-      .sort();
-    expect(states).toEqual(['released', 'reserved', 'settled']);
-  });
-});
+// The job-budget-across-attempts block moved in P6-D2: reserve_job_budget was dropped in migration 012.
+// Its behaviour now belongs to the lease-fenced reserve_index_budget, settle_index_budget and
+// release_index_budget, covered by pgTAP 210 (section 15e) and 250, and end-to-end tests D3 and A10.
 
 // ---------------------------------------------------------------------------
 // (d) Revocation

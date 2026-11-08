@@ -26,8 +26,14 @@ import {
 export const EMBEDDING_REQUEST_TIMEOUT_MS = 60_000;
 /** batchEmbedContents accepts at most 100 requests per call; larger inputs are split. */
 export const GEMINI_MAX_BATCH = 100;
-/** A response larger than this is refused (200 vectors of 1536 numbers is about 6 MB of JSON). */
-export const MAX_RESPONSE_CHARS = 32 * 1024 * 1024;
+/** A response larger than this many bytes is refused (200 vectors of 1536 numbers is about 6 MB of JSON). */
+export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+/**
+ * No vector component may exceed this in absolute value. Real embeddings sit within about +-1 (a
+ * few models are unnormalised but stay far below this); the bound is far under the float4 limit
+ * (3.4e38) so a hostile or broken provider cannot push the database into an overflow.
+ */
+export const MAX_VECTOR_COMPONENT_ABS = 1e6;
 const GEMINI_HOST = 'https://generativelanguage.googleapis.com';
 const OPENAI_HOST = 'https://api.openai.com';
 const MAX_RETRY_AFTER_SECONDS = 3600;
@@ -66,6 +72,52 @@ function parseRetryAfter(res: Response): number | undefined {
   const seconds = Number(raw);
   if (!Number.isFinite(seconds) || seconds < 0) return undefined;
   return Math.min(MAX_RETRY_AFTER_SECONDS, Math.ceil(seconds));
+}
+
+/**
+ * Reads a response body as UTF-8 text, never holding more than MAX_RESPONSE_BYTES: a declared
+ * content-length over the cap is refused before reading, and a stream that passes the cap is
+ * cancelled. Throws ProviderError('permanent') for an oversized body.
+ */
+async function readCappedText(res: Response): Promise<string> {
+  const declared = res.headers.get('content-length');
+  const tooLarge = (): ProviderError =>
+    new ProviderError('permanent', 'embedding response is too large');
+  if (declared !== null && /^\d+$/.test(declared) && Number(declared) > MAX_RESPONSE_BYTES) {
+    await res.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  const body = res.body;
+  if (body === null) throw new Error('no response body');
+  const reader = body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw tooLarge();
+      }
+      parts.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder('utf-8', { fatal: false }).decode(Buffer.concat(parts));
+}
+
+/** Throws a permanent ProviderError when any component is not finite or is beyond the bound. */
+export function assertVectorBounds(vectors: readonly (readonly number[])[]): void {
+  for (const v of vectors) {
+    for (const n of v) {
+      if (typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > MAX_VECTOR_COMPONENT_ABS) {
+        throw new ProviderError('permanent', 'embedding provider returned an invalid vector');
+      }
+    }
+  }
 }
 
 /** POSTs JSON and returns the parsed body. Throws only ProviderError or an abort error. */
@@ -109,14 +161,12 @@ async function postJson(
 
   let text: string;
   try {
-    text = await res.text();
-  } catch {
+    text = await readCappedText(res);
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
     if (callerSignal !== undefined && callerAborted()) throw abortError(callerSignal);
     if (timeout.aborted) throw new ProviderError('transient', 'embedding request timed out');
     throw new ProviderError('transient', 'embedding response could not be read');
-  }
-  if (text.length > MAX_RESPONSE_CHARS) {
-    throw new ProviderError('permanent', 'embedding response is too large');
   }
   try {
     return JSON.parse(text) as unknown;
@@ -184,6 +234,7 @@ function createGemini(
         const group = texts.slice(i, i + GEMINI_MAX_BATCH);
         const part = await embedGroup(group, options);
         assertEmbeddingShape(part, group.length);
+        assertVectorBounds(part);
         vectors.push(...part);
       }
       assertEmbeddingShape(vectors, texts.length);
@@ -246,6 +297,7 @@ function createOpenAiStyle(
         vectors[index] = numberArray(item['embedding']);
       }
       assertEmbeddingShape(vectors, texts.length);
+      assertVectorBounds(vectors);
 
       let inputTokens: number | null = null;
       const usage = json['usage'];

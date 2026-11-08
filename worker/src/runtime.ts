@@ -14,8 +14,9 @@
 //    dead-letters the job. An unexpected error is reduced to the code `handler_error`; its message
 //    is never logged or stored.
 //  * A lease lost mid-job (heartbeat refused) aborts the signal and the runtime touches nothing
-//    afterwards: another worker owns the job. A shutdown abort likewise leaves the job to lease
-//    expiry.
+//    afterwards: another worker owns the job. A shutdown abort gives the job back with
+//    release_job_lease (best effort, so the attempt is not burnt); if that call fails the job is
+//    left to lease expiry.
 // Nothing here logs payloads, document text or keys: only ids, counts and codes.
 import { JOB_TYPES, type JobType } from '@ragbot/shared';
 import type { WorkerConfig } from './lib/config.js';
@@ -77,6 +78,8 @@ export class ShutdownError extends Error {
 }
 
 const SAFE_CODE = /^[a-z0-9_]{1,64}$/;
+/** release_job_lease during shutdown must end well inside ABORT_SETTLE_MS. */
+export const RELEASE_LEASE_TIMEOUT_MS = 1500;
 /** After the grace period expires and handlers are aborted, how long we wait for them to settle. */
 export const ABORT_SETTLE_MS = 2000;
 export const UNKNOWN_JOB_TYPE_CODE = 'unknown_job_type';
@@ -256,6 +259,21 @@ export function startRuntime(
       }, config.heartbeatIntervalMs);
     };
 
+    // Shutdown abort only: hands the job back (queued again, attempt not counted). Best effort; a
+    // failure leaves the job to lease expiry. Never called after a lost lease.
+    const releaseLease = async (): Promise<void> => {
+      try {
+        await db.rpc<unknown>(
+          'release_job_lease',
+          { p_job_id: job.id, p_worker: config.workerId },
+          AbortSignal.timeout(RELEASE_LEASE_TIMEOUT_MS),
+        );
+        log.info('job_lease_released');
+      } catch (err) {
+        log.warn('job_lease_release_failed', { code: errorCode(err) });
+      }
+    };
+
     const ctx: JobContext = {
       db,
       storage,
@@ -296,9 +314,9 @@ export function startRuntime(
         // lost) returned early: it did not finish its work. Completing would hide that, so the job
         // is left to lease expiry.
         if (controller.signal.aborted) {
-          log.warn('job_abandoned', {
-            reason: controller.signal.reason instanceof ShutdownError ? 'shutdown' : 'aborted',
-          });
+          const shutdown = controller.signal.reason instanceof ShutdownError;
+          log.warn('job_abandoned', { reason: shutdown ? 'shutdown' : 'aborted' });
+          if (shutdown) await releaseLease();
           return;
         }
         await db.rpc<unknown>(
@@ -313,6 +331,7 @@ export function startRuntime(
       const reason: unknown = controller.signal.reason;
       if (controller.signal.aborted && reason instanceof ShutdownError) {
         log.warn('job_abandoned', { reason: 'shutdown' });
+        await releaseLease();
         return;
       }
       const err = outcome.error;

@@ -2,12 +2,14 @@
 -- every fenced function (wrong worker, expired lease, other job type, other version, terminal job, unknown job,
 -- deleted document); progress validation; chunk writes (idempotent, bounded, shape-checked); activation through the
 -- job; failing a version; retry with a delay and the dead-letter step; usage events; cleanup in batches; storage
--- targets; expiring abandoned uploads; grants; lock_timeout; schema_version. All fixtures are synthetic.
+-- targets; expiring abandoned uploads; grants; lock_timeout; schema_version. P6-D2 adds the index budget (reserve, settle,
+-- release), reset_version_chunks, the context's stored_ columns, fail_orphaned_index_versions, release_job_lease and
+-- prune_superseded_chunks. All fixtures are synthetic.
 -- Sequential only: the real two-connection races are in scripts/race-db.sh.
 --
 -- Ids end in 000000000250: bots bN, documents dN, versions eN/cN, jobs fN/aN. Worker ids are 'w1' (the holder) and 'w2'.
 begin;
-select plan(227);
+select plan(346);
 
 -- A valid embedding (1536 numbers) and a short one (1535), kept as transaction-local settings so every role can use them.
 select set_config('p6.emb', (select jsonb_agg(0.01)::text from generate_series(1, 1536)), true);
@@ -460,6 +462,272 @@ select results_eq($q$select (select status from public.document_versions where i
 select is((select count(*)::int from public.expire_abandoned_uploads(1, 10)), 0, 'expire: nothing is left to expire, a repeat returns no rows');
 select is((select status from public.document_versions where id = 'e1000000-0000-4000-8000-000000000250'), 'embedding', 'expire: versions in other states are never touched');
 
+-- ===========================================================================
+-- P6-D2 (migration 012 changes): the index budget, reset_version_chunks, the new context columns,
+-- fail_orphaned_index_versions, release_job_lease and prune_superseded_chunks.
+-- Fixtures (ids end in 000000000250): bots b5 (enabled) and b6 (disabled), both with a 5.0 daily cap.
+-- Documents d1a/d2a (budget), d5a (reset), d6a (disabled bot), d7a (ready version), d3a/d4a/d9a (orphans),
+-- d8a (versions that must be left alone), dba (prune). Jobs f1a/f2a/f5a/f6a/f7a run for 'w1'. Lease jobs ba1a..ba5a.
+-- ===========================================================================
+reset role;
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
+  ('b5000000-0000-4000-8000-000000000250', 'p6-d2-on',  'x', array['en'], 'm', 1536, true),
+  ('b6000000-0000-4000-8000-000000000250', 'p6-d2-off', 'x', array['en'], 'm', 1536, false);
+insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
+  ('b5000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}'),
+  ('b6000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}');
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('d1a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd1a', 'indexing', 'public_answer'),
+  ('d2a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd2a', 'indexing', 'public_answer'),
+  ('d3a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd3a', 'indexing', 'public_answer'),
+  ('d4a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd4a', 'ready',    'public_answer'),
+  ('d5a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd5a', 'indexing', 'public_answer'),
+  ('d6a00000-0000-4000-8000-000000000250', 'b6000000-0000-4000-8000-000000000250', 'd6a', 'indexing', 'public_answer'),
+  ('d7a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd7a', 'ready',    'public_answer'),
+  ('d8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd8a', 'ready',    'public_answer'),
+  ('d9a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd9a', 'indexing', 'public_answer'),
+  ('dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'dba', 'ready',    'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status, failure_code, created_at)
+  select x.id::uuid, x.doc::uuid, x.n, format('%s/%s/%s/original.txt', x.bot, x.doc, x.id), 'text/plain', 100, x.st, x.fc, now() - x.age::interval
+    from (values
+      ('e1a00000-0000-4000-8000-000000000250', 'd1a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'embedding',      null,        '9 hours'),
+      ('e2a00000-0000-4000-8000-000000000250', 'd2a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'embedding',      null,        '9 hours'),
+      ('e5a00000-0000-4000-8000-000000000250', 'd5a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'embedding',      null,        '9 hours'),
+      ('e8a00000-0000-4000-8000-000000000250', 'd5a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 2, 'embedding',      null,        '9 hours'),
+      ('e6a00000-0000-4000-8000-000000000250', 'd6a00000-0000-4000-8000-000000000250', 'b6000000-0000-4000-8000-000000000250', 1, 'embedding',      null,        '9 hours'),
+      ('e7a00000-0000-4000-8000-000000000250', 'd7a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'ready',          null,        '9 hours'),
+      ('0a1a0000-0000-4000-8000-000000000250', 'd3a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'uploaded',       null,        '8 hours'),
+      ('0a2a0000-0000-4000-8000-000000000250', 'd3a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 2, 'extracting',     null,        '7 hours'),
+      ('0a3a0000-0000-4000-8000-000000000250', 'd3a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 3, 'embedding',      null,        '6 hours'),
+      ('0a4a0000-0000-4000-8000-000000000250', 'd4a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'ready',          null,        '9 hours'),
+      ('0a5a0000-0000-4000-8000-000000000250', 'd4a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 2, 'embedding',      null,        '5 hours'),
+      ('0a6a0000-0000-4000-8000-000000000250', 'd9a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'embedding',      null,        '4 hours'),
+      ('0b1a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'ready',          null,        '9 hours'),
+      ('0b2a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 2, 'superseded',     null,        '9 hours'),
+      ('0b3a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 3, 'embedding',      null,        '9 hours'),
+      ('0b4a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 4, 'uploaded',       null,        '9 hours'),
+      ('0b5a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 5, 'embedding',      null,        '9 hours'),
+      ('0b6a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 6, 'extracting',     null,        '9 hours'),
+      ('0b7a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 7, 'pending_upload', null,        '9 hours'),
+      ('0b8a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 8, 'extracting',     null,        '9 hours'),
+      ('0b9a0000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 9, 'failed',         'OCR_REQUIRED', '9 hours'),
+      ('0c1a0000-0000-4000-8000-000000000250', 'dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 1, 'superseded',     null,        '9 hours'),
+      ('0c2a0000-0000-4000-8000-000000000250', 'dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 2, 'superseded',     null,        '9 hours'),
+      ('0c3a0000-0000-4000-8000-000000000250', 'dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 3, 'ready',          null,        '9 hours'),
+      ('0c4a0000-0000-4000-8000-000000000250', 'dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 4, 'embedding',      null,        '9 hours'),
+      ('0c5a0000-0000-4000-8000-000000000250', 'dba00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 5, 'failed',         'INDEXING_FAILED', '9 hours')
+    ) x(id, doc, bot, n, st, fc, age);
+update public.document_versions set batches_done = 2, batches_total = 5, chunking_version = 'chunk-v1', extraction_version = 'extract-v1', embedding_model = 'model-x'
+ where id = 'e5a00000-0000-4000-8000-000000000250';
+update public.documents set active_version_id = 'e7a00000-0000-4000-8000-000000000250' where id = 'd7a00000-0000-4000-8000-000000000250';
+update public.documents set active_version_id = '0a4a0000-0000-4000-8000-000000000250' where id = 'd4a00000-0000-4000-8000-000000000250';
+update public.documents set active_version_id = '0b1a0000-0000-4000-8000-000000000250' where id = 'd8a00000-0000-4000-8000-000000000250';
+update public.documents set active_version_id = '0c3a0000-0000-4000-8000-000000000250' where id = 'dba00000-0000-4000-8000-000000000250';
+-- Chunks: e5a three (reset), e8a one (must survive the reset of e5a), e7a one (ready: reset refused), prune fixtures.
+insert into public.document_chunks (document_version_id, chunk_index, content, embedding)
+  select x.v::uuid, g, 'c-' || g, (select array_agg(0.1::real) from generate_series(1, 1536))::extensions.vector
+    from (values ('e5a00000-0000-4000-8000-000000000250', 3), ('e8a00000-0000-4000-8000-000000000250', 1), ('e7a00000-0000-4000-8000-000000000250', 1),
+                 ('0c1a0000-0000-4000-8000-000000000250', 3), ('0c2a0000-0000-4000-8000-000000000250', 1), ('0c3a0000-0000-4000-8000-000000000250', 1),
+                 ('0c4a0000-0000-4000-8000-000000000250', 1), ('0c5a0000-0000-4000-8000-000000000250', 1)) x(v, n)
+    cross join lateral generate_series(0, x.n - 1) g;
+-- Held jobs.
+insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until)
+  select x.j::uuid, 'index_document', jsonb_build_object('bot_id', x.bot, 'document_id', x.doc, 'version_id', x.ver), 'running', 1, 3, 'w1', now() + interval '1 hour'
+    from (values
+      ('f1a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd1a00000-0000-4000-8000-000000000250', 'e1a00000-0000-4000-8000-000000000250'),
+      ('f2a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd2a00000-0000-4000-8000-000000000250', 'e2a00000-0000-4000-8000-000000000250'),
+      ('f5a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd5a00000-0000-4000-8000-000000000250', 'e5a00000-0000-4000-8000-000000000250'),
+      ('f6a00000-0000-4000-8000-000000000250', 'b6000000-0000-4000-8000-000000000250', 'd6a00000-0000-4000-8000-000000000250', 'e6a00000-0000-4000-8000-000000000250'),
+      ('f7a00000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd7a00000-0000-4000-8000-000000000250', 'e7a00000-0000-4000-8000-000000000250'),
+      ('0b3a1000-0000-4000-8000-000000000250', 'b5000000-0000-4000-8000-000000000250', 'd8a00000-0000-4000-8000-000000000250', '0b3a0000-0000-4000-8000-000000000250')) x(j, bot, doc, ver);
+-- Jobs of the orphan check: (version, state, age). A version with two rows has an older and a newest job.
+insert into public.jobs (type, payload, state, attempts, max_attempts, created_at)
+  select 'index_document', jsonb_build_object('bot_id', 'b5000000-0000-4000-8000-000000000250', 'version_id', x.ver), x.st, 1, 3, now() - x.age::interval
+    from (values
+      ('0a1a0000-0000-4000-8000-000000000250', 'failed',    '8 hours'),
+      ('0a2a0000-0000-4000-8000-000000000250', 'cancelled', '7 hours'),
+      ('0a3a0000-0000-4000-8000-000000000250', 'failed',    '6 hours'),
+      ('0a5a0000-0000-4000-8000-000000000250', 'failed',    '5 hours'),
+      ('0a6a0000-0000-4000-8000-000000000250', 'succeeded', '5 hours'),
+      ('0a6a0000-0000-4000-8000-000000000250', 'failed',    '4 hours'),
+      ('0b1a0000-0000-4000-8000-000000000250', 'failed',    '3 hours'),
+      ('0b2a0000-0000-4000-8000-000000000250', 'failed',    '3 hours'),
+      ('0b4a0000-0000-4000-8000-000000000250', 'queued',    '3 hours'),
+      ('0b5a0000-0000-4000-8000-000000000250', 'succeeded', '3 hours'),
+      ('0b7a0000-0000-4000-8000-000000000250', 'failed',    '3 hours'),
+      ('0b8a0000-0000-4000-8000-000000000250', 'failed',    '3 hours'),
+      ('0b8a0000-0000-4000-8000-000000000250', 'queued',    '2 hours'),
+      ('0b9a0000-0000-4000-8000-000000000250', 'failed',    '3 hours')) x(ver, st, age);
+-- Lease jobs (a type no other fixture uses, so claim_jobs with that type sees only these).
+insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until) values
+  ('ba1a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'running',   2, 3, 'w1', now() + interval '1 hour'),
+  ('ba2a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'running',   0, 3, 'w1', now() + interval '1 hour'),
+  ('ba3a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'running',   1, 3, 'w1', now() + interval '1 hour'),
+  ('ba4a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'queued',    1, 3, null, null),
+  ('ba5a0000-0000-4000-8000-000000000250', 'warm_answer_cache', '{}', 'succeeded', 1, 3, null, null);
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
+-- ===== reserve_index_budget / settle_index_budget / release_index_budget =====
+-- Attempt 1 of job f1a (b5, cap 5.0): a reservation of the job, 3600 s.
+select set_config('t.x1', public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 2.0, 3600)::text, true);
+select results_eq($q$select bot_id, request_id, job_id, amount, state, expires_at = now() + interval '3600 seconds' from public.budget_reservations where id = current_setting('t.x1')::uuid$q$,
+  $q$values ('b5000000-0000-4000-8000-000000000250'::uuid, null::uuid, 'f1a00000-0000-4000-8000-000000000250'::uuid, 2.000000::numeric, 'reserved'::text, true)$q$,
+  'index budget: reserve returns the id of a reserved row of the job, owned by the bot of the version, with the requested ttl');
+-- Attempt 2 of the same job: the first row becomes expired and keeps counting (2.0 + 2.0 of 5.0).
+select set_config('t.x2', public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 2.0, 3600)::text, true);
+select isnt(current_setting('t.x2')::uuid, current_setting('t.x1')::uuid, 'index budget: a second reserve for the job is a new reservation, not an idempotent return');
+select is((select state from public.budget_reservations where id = current_setting('t.x1')::uuid), 'expired', 'index budget: the earlier reserved row of the job became expired');
+select is((select state from public.budget_reservations where id = current_setting('t.x2')::uuid), 'reserved', 'index budget: and the new one is reserved');
+-- The previous attempt's row counts: 2.0 (expired) + 2.0 + 1.5 is over the cap, so a third attempt is refused and changes nothing.
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 1.5, 3600)$q$, 'RB001', null,
+  'index budget: a further attempt is refused when the expired row, the live row and the new amount together exceed the cap');
+select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'f1a00000-0000-4000-8000-000000000250'), array['expired', 'reserved'], 'index budget: the refused call changed no row (the rollback keeps the live row reserved)');
+-- Another job of the bot: 1.0 fits exactly (5.0 of 5.0), one cent more does not.
+select set_config('t.x3', public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 1.0, 600)::text, true);
+select throws_ok($q$select public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 0.01, 600)$q$, 'RB001', null, 'index budget: one cent over the cap (the job''s own earlier row counts) is refused');
+-- A reservation of another job can be neither settled nor released.
+select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 1.0)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: settle refuses another job''s reservation');
+select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: release refuses another job''s reservation');
+select throws_ok($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid(), 1.0)$q$, 'RB003', null, 'index budget: settle refuses an unknown reservation');
+select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid())$q$, 'RB003', null, 'index budget: release refuses an unknown reservation');
+select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'reserved', 'index budget: the other job''s reservation is untouched by the refusals');
+-- A stale worker can settle the expired row of the earlier attempt; the real amount replaces it.
+select lives_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x1')), 'index budget: settle works on an expired reservation of the job');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x1')), $q$values ('settled'::text, 0.500000::numeric)$q$, 'index budget: the row is settled with the actual amount');
+select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: a settled reservation cannot be settled again');
+select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: a settled reservation cannot be released');
+select lives_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x2')), 'index budget: release gives back the live reservation');
+select is((select state from public.budget_reservations where id = current_setting('t.x2')::uuid), 'released', 'index budget: the row is released');
+select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a released reservation cannot be released again');
+select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a released reservation cannot be settled');
+-- Spend now: settled 0.5 + the other job's 1.0 = 1.5, so 3.5 fits exactly and 3.51 does not.
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: released spend is free again but settled and live spend still count (3.51 over)');
+select isnt(public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.5, 3600), null, 'index budget: 3.5 fits the cap exactly');
+-- Argument checks.
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 0, 3600)$q$, '22023', null, 'index budget: amount 0 -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', null, 3600)$q$, '22023', null, 'index budget: null amount -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 1, 0)$q$, '22023', null, 'index budget: ttl 0 -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 1, 86401)$q$, '22023', null, 'index budget: ttl 86401 -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 1, null)$q$, '22023', null, 'index budget: null ttl -> 22023');
+select throws_ok($q$select public.reserve_index_budget(null, 'w1', 'e1a00000-0000-4000-8000-000000000250', 1, 60)$q$, '22023', null, 'index budget: null job -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', '', 'e1a00000-0000-4000-8000-000000000250', 1, 60)$q$, '22023', null, 'index budget: empty worker -> 22023');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', null, 1, 60)$q$, '22023', null, 'index budget: null version -> 22023');
+select throws_ok($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid(), -0.01)$q$, '22023', null, 'index budget: settle with a negative amount -> 22023');
+select throws_ok($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', null, 1)$q$, '22023', null, 'index budget: settle with a null reservation -> 22023');
+select throws_ok($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid(), null)$q$, '22023', null, 'index budget: settle with a null amount -> 22023');
+select throws_ok($q$select public.settle_index_budget(null, 'w1', gen_random_uuid(), 1)$q$, '22023', null, 'index budget: settle with a null job -> 22023');
+select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', null)$q$, '22023', null, 'index budget: release with a null reservation -> 22023');
+select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', '  ', gen_random_uuid())$q$, '22023', null, 'index budget: release with a blank worker -> 22023');
+-- The disabled bot: indexing is still allowed, because knowledge is indexed before a bot is enabled.
+select lives_ok($q$select public.reserve_index_budget('f6a00000-0000-4000-8000-000000000250', 'w1', 'e6a00000-0000-4000-8000-000000000250', 1.0, 3600)$q$, 'index budget: a disabled bot can still reserve for indexing (knowledge goes in before launch)');
+select is((select count(*)::int from public.budget_reservations where bot_id = 'b6000000-0000-4000-8000-000000000250' and state = 'reserved'), 1, 'index budget: the disabled bot''s indexing reservation exists');
+-- The fence for all three, and for reset_version_chunks (the matrix of the first section: same fixtures).
+select throws_ok(format(f.call, c.job, c.worker, c.ver), c.code::char(5), null::text, f.name || ': ' || c.label)
+  from (values
+    ('reserve_index_budget',   $f$select public.reserve_index_budget(%L, %L, %L, 0.5, 60)$f$),
+    ('reset_version_chunks',   $f$select public.reset_version_chunks(%L, %L, %L)$f$)
+  ) f(name, call)
+  cross join (values
+    ('wrong worker',     'fa000000-0000-4000-8000-000000000250', 'w2', 'ec000000-0000-4000-8000-000000000250', 'RB013'),
+    ('expired lease',    'fb000000-0000-4000-8000-000000000250', 'w1', 'ec000000-0000-4000-8000-000000000250', 'RB013'),
+    ('other job type',   'fc000000-0000-4000-8000-000000000250', 'w1', 'ec000000-0000-4000-8000-000000000250', 'RB013'),
+    ('other version',    'fa000000-0000-4000-8000-000000000250', 'w1', 'ed000000-0000-4000-8000-000000000250', 'RB013'),
+    ('terminal job',     'fd000000-0000-4000-8000-000000000250', 'w1', 'ec000000-0000-4000-8000-000000000250', 'RB013'),
+    ('unknown job',      'f1111111-0000-4000-8000-000000000250', 'w1', 'ec000000-0000-4000-8000-000000000250', 'RB013'),
+    ('deleted document', 'fe000000-0000-4000-8000-000000000250', 'w1', 'ee000000-0000-4000-8000-000000000250', 'RB010')
+  ) c(label, job, worker, ver, code);
+select throws_ok(format(f.call, c.job, c.worker), c.code::char(5), null::text, f.name || ': ' || c.label)
+  from (values
+    ('settle_index_budget',  $f$select public.settle_index_budget(%L, %L, gen_random_uuid(), 0.1)$f$),
+    ('release_index_budget', $f$select public.release_index_budget(%L, %L, gen_random_uuid())$f$)
+  ) f(name, call)
+  cross join (values
+    ('wrong worker',     'fa000000-0000-4000-8000-000000000250', 'w2', 'RB013'),
+    ('expired lease',    'fb000000-0000-4000-8000-000000000250', 'w1', 'RB013'),
+    ('other job type',   'fc000000-0000-4000-8000-000000000250', 'w1', 'RB013'),
+    ('terminal job',     'fd000000-0000-4000-8000-000000000250', 'w1', 'RB013'),
+    ('unknown job',      'f1111111-0000-4000-8000-000000000250', 'w1', 'RB013'),
+    ('deleted document', 'fe000000-0000-4000-8000-000000000250', 'w1', 'RB010')
+  ) c(label, job, worker, code);
+
+-- ===== reset_version_chunks =====
+select is(public.reset_version_chunks('f5a00000-0000-4000-8000-000000000250', 'w1', 'e5a00000-0000-4000-8000-000000000250'), 3, 'reset: returns the number of chunks deleted');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e5a00000-0000-4000-8000-000000000250'), 0, 'reset: the version has no chunks left');
+select results_eq($q$select batches_done, batches_total, status from public.document_versions where id = 'e5a00000-0000-4000-8000-000000000250'$q$, $q$values (0, null::integer, 'embedding'::text)$q$, 'reset: batches_done is 0, batches_total is cleared, the status is kept');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e8a00000-0000-4000-8000-000000000250'), 1, 'reset: another version of the same document keeps its chunks');
+select is(public.reset_version_chunks('f5a00000-0000-4000-8000-000000000250', 'w1', 'e5a00000-0000-4000-8000-000000000250'), 0, 'reset: a repeat deletes nothing');
+select throws_ok($q$select public.reset_version_chunks('f7a00000-0000-4000-8000-000000000250', 'w1', 'e7a00000-0000-4000-8000-000000000250')$q$, 'RB030', null, 'reset: a ready version is refused (RB030)');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e7a00000-0000-4000-8000-000000000250'), 1, 'reset: and the ready version keeps its chunk');
+select throws_ok($q$select public.reset_version_chunks(null, 'w1', 'e5a00000-0000-4000-8000-000000000250')$q$, '22023', null, 'reset: null job -> 22023');
+
+-- ===== get_index_job_context: the stored values =====
+select results_eq($q$select stored_chunking_version, stored_extraction_version, stored_embedding_model from public.get_index_job_context('f5a00000-0000-4000-8000-000000000250', 'w1', 'e5a00000-0000-4000-8000-000000000250')$q$,
+  $q$values ('chunk-v1'::text, 'extract-v1'::text, 'model-x'::text)$q$, 'context: stored_chunking_version, stored_extraction_version and stored_embedding_model are the version row''s values');
+select results_eq($q$select stored_chunking_version, stored_extraction_version, stored_embedding_model from public.get_index_job_context('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250')$q$,
+  $q$values (null::text, null::text, null::text)$q$, 'context: they are null before the worker has recorded anything');
+select is((select pg_get_function_result('public.get_index_job_context(uuid,text,uuid)'::regprocedure)),
+  'TABLE(bot_id uuid, document_id uuid, version_id uuid, version_number integer, status text, storage_path text, media_type text, byte_size bigint, upload_etag text, embedding_model text, max_bytes bigint, max_pages bigint, active_version_id uuid, active_version_number integer, batches_done integer, written_chunks integer, stored_chunking_version text, stored_extraction_version text, stored_embedding_model text)',
+  'context: the result columns are the earlier sixteen followed by the three stored_ columns');
+
+-- ===== fail_orphaned_index_versions =====
+select throws_ok($q$select public.fail_orphaned_index_versions(0)$q$, '22023', null, 'orphans: batch 0 -> 22023');
+select throws_ok($q$select public.fail_orphaned_index_versions(1001)$q$, '22023', null, 'orphans: batch 1001 -> 22023');
+select throws_ok($q$select public.fail_orphaned_index_versions(null)$q$, '22023', null, 'orphans: null batch -> 22023');
+select is(public.fail_orphaned_index_versions(1), 1, 'orphans: a batch of 1 fails one version');
+select results_eq($q$select id, status, failure_code, completed_at is not null from public.document_versions where id = '0a1a0000-0000-4000-8000-000000000250'$q$,
+  $q$values ('0a1a0000-0000-4000-8000-000000000250'::uuid, 'failed'::text, 'INDEXING_FAILED'::text, true)$q$, 'orphans: the oldest orphan (uploaded, job failed) failed with INDEXING_FAILED');
+select is((select status from public.document_versions where id = '0a2a0000-0000-4000-8000-000000000250'), 'extracting', 'orphans: the next one waited for the next batch');
+select is(public.fail_orphaned_index_versions(100), 4, 'orphans: the next call fails the other four (extracting/cancelled, embedding/failed, embedding of a ready document, embedding with an older succeeded job)');
+select results_eq($q$select status, failure_code from public.document_versions where id in ('0a2a0000-0000-4000-8000-000000000250', '0a3a0000-0000-4000-8000-000000000250', '0a5a0000-0000-4000-8000-000000000250', '0a6a0000-0000-4000-8000-000000000250') order by id$q$,
+  $q$values ('failed'::text, 'INDEXING_FAILED'::text), ('failed', 'INDEXING_FAILED'), ('failed', 'INDEXING_FAILED'), ('failed', 'INDEXING_FAILED')$q$, 'orphans: extracting, embedding, embedding of a live document and the version whose newest job failed are all failed');
+select is(public.fail_orphaned_index_versions(100), 0, 'orphans: a repeat finds nothing');
+select results_eq($q$select id, status, failure_code from public.document_versions where document_id = 'd8a00000-0000-4000-8000-000000000250' order by version_number$q$,
+  $q$values ('0b1a0000-0000-4000-8000-000000000250'::uuid, 'ready'::text, null::text), ('0b2a0000-0000-4000-8000-000000000250', 'superseded', null), ('0b3a0000-0000-4000-8000-000000000250', 'embedding', null),
+            ('0b4a0000-0000-4000-8000-000000000250', 'uploaded', null), ('0b5a0000-0000-4000-8000-000000000250', 'embedding', null), ('0b6a0000-0000-4000-8000-000000000250', 'extracting', null),
+            ('0b7a0000-0000-4000-8000-000000000250', 'pending_upload', null), ('0b8a0000-0000-4000-8000-000000000250', 'extracting', null), ('0b9a0000-0000-4000-8000-000000000250', 'failed', 'OCR_REQUIRED')$q$,
+  'orphans: ready, superseded, in-flight (running, queued, newest queued over an older failed), succeeded, no-job, pending_upload and already failed versions were left alone');
+select results_eq($q$select (select status from public.documents where id = 'd3a00000-0000-4000-8000-000000000250'),
+                          (select status from public.documents where id = 'd9a00000-0000-4000-8000-000000000250'),
+                          (select status from public.documents where id = 'd4a00000-0000-4000-8000-000000000250'),
+                          (select status from public.documents where id = 'd8a00000-0000-4000-8000-000000000250')$q$,
+  $q$values ('failed'::text, 'failed'::text, 'ready'::text, 'ready'::text)$q$, 'orphans: a document with no active version becomes failed; one with an active version stays ready');
+select is((select status from public.document_versions where id = '0a4a0000-0000-4000-8000-000000000250'), 'ready', 'orphans: the active version of d4a is untouched');
+
+-- ===== release_job_lease =====
+select is(public.release_job_lease('ba1a0000-0000-4000-8000-000000000250', 'w1'), true, 'lease: the holder gets its running job back (true)');
+select results_eq($q$select state, locked_by, locked_until, attempts, available_at <= now() from public.jobs where id = 'ba1a0000-0000-4000-8000-000000000250'$q$,
+  $q$values ('queued'::text, null::text, null::timestamptz, 1, true)$q$, 'lease: the job is queued, lease cleared, attempts decremented by one, available now');
+select is(public.release_job_lease('ba2a0000-0000-4000-8000-000000000250', 'w1'), true, 'lease: a job with 0 attempts is released too');
+select is((select attempts from public.jobs where id = 'ba2a0000-0000-4000-8000-000000000250'), 0, 'lease: attempts never go below 0');
+select is(public.release_job_lease('ba3a0000-0000-4000-8000-000000000250', 'w2'), false, 'lease: another worker cannot release the job (false)');
+select results_eq($q$select state, locked_by, attempts from public.jobs where id = 'ba3a0000-0000-4000-8000-000000000250'$q$, $q$values ('running'::text, 'w1'::text, 1)$q$, 'lease: and the job is unchanged');
+select is(public.release_job_lease('ba4a0000-0000-4000-8000-000000000250', 'w1'), false, 'lease: a queued job is not released (false)');
+select is(public.release_job_lease('ba5a0000-0000-4000-8000-000000000250', 'w1'), false, 'lease: a finished job is not released (false)');
+select results_eq($q$select state, attempts from public.jobs where id in ('ba4a0000-0000-4000-8000-000000000250', 'ba5a0000-0000-4000-8000-000000000250') order by id$q$, $q$values ('queued'::text, 1), ('succeeded', 1)$q$, 'lease: and neither changed');
+select is(public.release_job_lease('f1111111-0000-4000-8000-000000000250', 'w1'), false, 'lease: an unknown job -> false');
+select throws_ok($q$select public.release_job_lease(null, 'w1')$q$, '22023', null, 'lease: null job -> 22023');
+select throws_ok($q$select public.release_job_lease('ba1a0000-0000-4000-8000-000000000250', null)$q$, '22023', null, 'lease: null worker -> 22023');
+select throws_ok($q$select public.release_job_lease('ba1a0000-0000-4000-8000-000000000250', ' ')$q$, '22023', null, 'lease: blank worker -> 22023');
+-- A released job can be claimed again and its attempt count is back to what it was (2 -> released 1 -> claimed 2).
+select results_eq($q$select id, attempts, locked_by from public.claim_jobs('w3', 10, 60, array['warm_answer_cache']) order by id$q$,
+  $q$values ('ba1a0000-0000-4000-8000-000000000250'::uuid, 2, 'w3'::text), ('ba2a0000-0000-4000-8000-000000000250', 1, 'w3'), ('ba4a0000-0000-4000-8000-000000000250', 2, 'w3')$q$,
+  'lease: claim_jobs picks the released jobs up again; attempts are restored to their pre-claim values plus this claim');
+
+-- ===== prune_superseded_chunks =====
+select throws_ok($q$select public.prune_superseded_chunks(0)$q$, '22023', null, 'prune: batch 0 -> 22023');
+select throws_ok($q$select public.prune_superseded_chunks(1001)$q$, '22023', null, 'prune: batch 1001 -> 22023');
+select throws_ok($q$select public.prune_superseded_chunks(null)$q$, '22023', null, 'prune: null batch -> 22023');
+-- Four chunks sit on this section's superseded versions; one more is the chunk of a version the activation tests above superseded.
+select is((select count(*)::int from public.document_chunks c join public.document_versions v on v.id = c.document_version_id where v.status = 'superseded'), 5, 'prune: fixture check, five chunks sit on superseded versions (four of this section, one left by the activation tests)');
+select is((select count(*)::int from public.document_chunks c join public.document_versions v on v.id = c.document_version_id where v.status = 'superseded' and v.document_id <> 'dba00000-0000-4000-8000-000000000250' and v.document_id <> 'd8a00000-0000-4000-8000-000000000250'), 1, 'prune: fixture check, the extra superseded chunk belongs to another document');
+select is(public.prune_superseded_chunks(3), 3, 'prune: a batch of 3 deletes 3 chunks');
+select is(public.prune_superseded_chunks(100), 2, 'prune: the next call deletes the two remaining superseded chunks');
+select is(public.prune_superseded_chunks(100), 0, 'prune: a repeat deletes nothing');
+select is((select count(*)::int from public.document_chunks where document_version_id in ('0c1a0000-0000-4000-8000-000000000250', '0c2a0000-0000-4000-8000-000000000250')), 0, 'prune: no chunk of the superseded versions is left');
+select is((select count(*)::int from public.document_chunks where document_version_id in ('0c3a0000-0000-4000-8000-000000000250', '0c4a0000-0000-4000-8000-000000000250', '0c5a0000-0000-4000-8000-000000000250')), 3, 'prune: the active (ready), in-progress (embedding) and failed versions keep their chunks');
+select is((select count(*)::int from public.document_versions where document_id = 'dba00000-0000-4000-8000-000000000250'), 5, 'prune: version rows are kept');
+
 -- ===== grants, lock_timeout, search_path =====
 reset role;
 select is(
@@ -469,9 +737,13 @@ select is(
                     'public.activate_version_for_job(uuid,text,uuid,integer)'::regprocedure, 'public.fail_document_version(uuid,text,uuid,text)'::regprocedure,
                     'public.retry_job_later(uuid,text,text,integer)'::regprocedure, 'public.record_usage_event(uuid,uuid,text,text,text,integer,numeric,integer)'::regprocedure,
                     'public.cleanup_document(uuid,integer)'::regprocedure, 'public.cleanup_storage_targets(uuid)'::regprocedure,
-                    'public.expire_abandoned_uploads(integer,integer)'::regprocedure, 'public.schema_version()'::regprocedure)
+                    'public.expire_abandoned_uploads(integer,integer)'::regprocedure, 'public.schema_version()'::regprocedure,
+                    'public.reset_version_chunks(uuid,text,uuid)'::regprocedure, 'public.reserve_index_budget(uuid,text,uuid,numeric,integer)'::regprocedure,
+                    'public.settle_index_budget(uuid,text,uuid,numeric)'::regprocedure, 'public.release_index_budget(uuid,text,uuid)'::regprocedure,
+                    'public.fail_orphaned_index_versions(integer)'::regprocedure, 'public.release_job_lease(uuid,text)'::regprocedure,
+                    'public.prune_superseded_chunks(integer)'::regprocedure)
       and 'lock_timeout=2s' = any (p.proconfig) and 'search_path=""' = any (p.proconfig) and not p.prosecdef),
-  12, 'proconfig: all twelve functions of migration 012 set lock_timeout = 2s and an empty search_path, and are SECURITY INVOKER');
+  19, 'proconfig: all nineteen functions of migration 012 set lock_timeout = 2s and an empty search_path, and are SECURITY INVOKER');
 select is(
   (select count(*)::int from pg_proc p
     where p.oid in ('public.index_job_fence(uuid,text,uuid)'::regprocedure, 'public.get_index_job_context(uuid,text,uuid)'::regprocedure,
@@ -479,11 +751,15 @@ select is(
                     'public.activate_version_for_job(uuid,text,uuid,integer)'::regprocedure, 'public.fail_document_version(uuid,text,uuid,text)'::regprocedure,
                     'public.retry_job_later(uuid,text,text,integer)'::regprocedure, 'public.record_usage_event(uuid,uuid,text,text,text,integer,numeric,integer)'::regprocedure,
                     'public.cleanup_document(uuid,integer)'::regprocedure, 'public.cleanup_storage_targets(uuid)'::regprocedure,
-                    'public.expire_abandoned_uploads(integer,integer)'::regprocedure)
+                    'public.expire_abandoned_uploads(integer,integer)'::regprocedure,
+                    'public.reset_version_chunks(uuid,text,uuid)'::regprocedure, 'public.reserve_index_budget(uuid,text,uuid,numeric,integer)'::regprocedure,
+                    'public.settle_index_budget(uuid,text,uuid,numeric)'::regprocedure, 'public.release_index_budget(uuid,text,uuid)'::regprocedure,
+                    'public.fail_orphaned_index_versions(integer)'::regprocedure, 'public.release_job_lease(uuid,text)'::regprocedure,
+                    'public.prune_superseded_chunks(integer)'::regprocedure)
       and has_function_privilege('service_role', p.oid, 'EXECUTE')
       and not has_function_privilege('anon', p.oid, 'EXECUTE') and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
       and not exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee = 0)),
-  11, 'grants: the eleven new functions are executable by service_role only (not anon, authenticated or PUBLIC)');
+  18, 'grants: the eighteen new functions are executable by service_role only (not anon, authenticated or PUBLIC)');
 select is(public.schema_version(), 12, 'schema_version: 12');
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the history');
 select ok(has_function_privilege('authenticated', 'public.schema_version()', 'EXECUTE') and not has_function_privilege('anon', 'public.schema_version()', 'EXECUTE'), 'schema_version: the grants of 010 are kept (authenticated yes, anon no)');
@@ -494,6 +770,8 @@ select set_config('request.jwt.claims', '{"role":"anon"}', true);
 select throws_ok($q$select * from public.cleanup_document(gen_random_uuid(), 1)$q$, '42501', null, 'anon: cleanup_document -> permission denied');
 select throws_ok($q$select * from public.get_index_job_context(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'anon: get_index_job_context -> permission denied');
 select throws_ok($q$select * from public.index_job_fence(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'anon: index_job_fence -> permission denied');
+select throws_ok($q$select public.reserve_index_budget(gen_random_uuid(), 'w', gen_random_uuid(), 1, 60)$q$, '42501', null, 'anon: reserve_index_budget -> permission denied');
+select throws_ok($q$select public.release_job_lease(gen_random_uuid(), 'w')$q$, '42501', null, 'anon: release_job_lease -> permission denied');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated"}', true);
@@ -501,6 +779,11 @@ select throws_ok($q$select public.retry_job_later(gen_random_uuid(), 'w', 'x', 1
 select throws_ok($q$select public.write_document_chunks(gen_random_uuid(), 'w', gen_random_uuid(), '[]')$q$, '42501', null, 'authenticated: write_document_chunks -> permission denied');
 select throws_ok($q$select * from public.expire_abandoned_uploads(1, 1)$q$, '42501', null, 'authenticated: expire_abandoned_uploads -> permission denied');
 select throws_ok($q$select public.record_usage_event(gen_random_uuid(), null, 'p', 'm', 'chat', 1, 0, 1)$q$, '42501', null, 'authenticated: record_usage_event -> permission denied');
+select throws_ok($q$select public.settle_index_budget(gen_random_uuid(), 'w', gen_random_uuid(), 1)$q$, '42501', null, 'authenticated: settle_index_budget -> permission denied');
+select throws_ok($q$select public.release_index_budget(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'authenticated: release_index_budget -> permission denied');
+select throws_ok($q$select public.reset_version_chunks(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'authenticated: reset_version_chunks -> permission denied');
+select throws_ok($q$select public.fail_orphaned_index_versions(1)$q$, '42501', null, 'authenticated: fail_orphaned_index_versions -> permission denied');
+select throws_ok($q$select public.prune_superseded_chunks(1)$q$, '42501', null, 'authenticated: prune_superseded_chunks -> permission denied');
 reset role;
 
 -- ===== reindex carries the source version's etag and checksum (P6-D1) =====

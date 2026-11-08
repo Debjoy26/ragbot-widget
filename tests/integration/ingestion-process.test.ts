@@ -341,7 +341,57 @@ describe('worker process against the local stack', () => {
   );
 
   t(
-    'C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, leaves it to lease expiry and exits 0 within the bound',
+    'D6 SIGTERM during a job (the only attempt): the job goes back to queued with its attempt restored, the next worker finishes it, the version is never failed',
+    async () => {
+      await fixture();
+      // One attempt only: without the restored attempt the next worker could not take the job at all.
+      const bot = await h.createBot({ indexMaxAttempts: 1 });
+      bots.push(bot);
+      const marker = `d6${randomBytes(4).toString('hex')}`;
+      const hold = backend.holdCall(1); // never released before the exit
+
+      const w = spawnWorker(env({ WORKER_ID: `d6-abort-${h.run}`, SHUTDOWN_GRACE_MS: '1500' }));
+      await w.waitForLine(/"event":"worker_started"/);
+      const up = await bot.register({ bytes: utf8(makeText(marker)), mediaType: 'text/plain' });
+      await hold.reached;
+      const running = await bot.indexJob(up.versionId);
+      expect(running.state).toBe('running');
+      expect(running.attempts).toBe(1);
+
+      w.kill('SIGTERM');
+      const exit = await withTimeout(
+        w.exited,
+        12_000,
+        'worker exit after SIGTERM with a stuck job',
+      );
+      expect(exit).toEqual({ code: 0, signal: null });
+
+      const back = await bot.indexJob(up.versionId);
+      expect(back.state).toBe('queued');
+      expect(back.attempts).toBe(0); // the attempt the shutdown cut short is not counted
+      expect(back.locked_by).toBeNull();
+      expect(back.locked_until).toBeNull();
+      expect(Date.parse(back.available_at)).toBeLessThanOrEqual(Date.now()); // available now
+      const midway = await bot.version(up.versionId);
+      expect(['uploaded', 'extracting', 'embedding']).toContain(midway.status);
+      expectCleanOutput(w.output(), [marker]);
+
+      hold.release();
+      const next = spawnWorker(env({ WORKER_ID: `d6-after-${h.run}` }));
+      await next.waitForLine(/"event":"worker_started"/);
+      expect((await bot.waitVersion(up.versionId, ['ready', 'failed'], 60_000)).status).toBe(
+        'ready',
+      );
+      const done = await bot.waitJobDone(up.versionId, 30_000);
+      expect(done.state).toBe('succeeded');
+      expect(done.attempts).toBe(1); // one counted attempt in all
+      next.kill('SIGTERM');
+      expect((await withTimeout(next.exited, 20_000, 'second worker exit')).code).toBe(0);
+    },
+  );
+
+  t(
+    'C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, hands the job back queued and exits 0 within the bound',
     async () => {
       await fixture();
       const bot = await h.createBot();
@@ -365,14 +415,14 @@ describe('worker process against the local stack', () => {
       expect(exit).toEqual({ code: 0, signal: null });
       expect(Date.now() - signalled).toBeLessThan(12_000);
 
-      // Not completed, not failed: the job is left running under its lease for another worker.
-      expect((await bot.indexJob(up.versionId)).state).toBe('running');
+      // Not completed, not failed: the job is handed back (P6-D2 fix D6) for another worker.
+      expect((await bot.indexJob(up.versionId)).state).toBe('queued');
       expect((await bot.version(up.versionId)).status).not.toBe('ready');
       expect((await bot.version(up.versionId)).status).not.toBe('failed');
       expect(w.output()).toContain('worker_stopped');
       expectCleanOutput(w.output(), [marker]);
 
-      // Another worker picks the job up after the lease and finishes it.
+      // Another worker picks the job up and finishes it.
       hold.release();
       const next = spawnWorker(env({ WORKER_ID: `c2-after-${h.run}` }));
       await next.waitForLine(/"event":"worker_started"/);

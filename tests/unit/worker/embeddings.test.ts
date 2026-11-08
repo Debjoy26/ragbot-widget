@@ -8,9 +8,12 @@ import {
 } from '@ragbot/shared';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assertVectorBounds,
   createEmbeddingProvider,
   GEMINI_MAX_BATCH,
   kindForStatus,
+  MAX_RESPONSE_BYTES,
+  MAX_VECTOR_COMPONENT_ABS,
 } from '../../../worker/src/lib/embeddings.ts';
 
 // P6-INDEX: embedding adapters against a labelled FAKE fetch. No network, no real provider.
@@ -434,5 +437,106 @@ describe('kindForStatus', () => {
     expect(kindForStatus(500)).toBe('transient');
     expect(kindForStatus(599)).toBe('transient');
     expect(kindForStatus(429)).toBe('rate_limited');
+  });
+});
+
+describe('vector component bound', () => {
+  it('names a bound far below the float4 limit', () => {
+    expect(MAX_VECTOR_COMPONENT_ABS).toBeLessThan(3.4e38 / 1e20);
+    expect(() => assertVectorBounds([vec()])).not.toThrow();
+  });
+
+  it.each([MAX_VECTOR_COMPONENT_ABS * 2, -MAX_VECTOR_COMPONENT_ABS * 2, 3.3e38, -1e30])(
+    'gemini rejects a component of %s as permanent',
+    async (value) => {
+      const bad = vec();
+      bad[10] = value;
+      const { fetchImpl } = fakeFetch(() => json({ embeddings: [{ values: bad }] }));
+      const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+      const err = await failure(p.embed(['a'], { taskType: 'document' }));
+      expect(err).toBeInstanceOf(ProviderError);
+      expect((err as ProviderError).kind).toBe('permanent');
+    },
+  );
+
+  it.each([MAX_VECTOR_COMPONENT_ABS * 2, -3.3e38])(
+    'openai rejects a component of %s as permanent',
+    async (value) => {
+      const bad = vec();
+      bad[0] = value;
+      const { fetchImpl } = fakeFetch(() => json({ data: [{ index: 0, embedding: bad }] }));
+      const p = createEmbeddingProvider(config('openai'), { fetchImpl });
+      const err = await failure(p.embed(['a'], { taskType: 'document' }));
+      expect((err as ProviderError).kind).toBe('permanent');
+    },
+  );
+
+  it('accepts components exactly at the bound', async () => {
+    const edge = vec();
+    edge[0] = MAX_VECTOR_COMPONENT_ABS;
+    edge[1] = -MAX_VECTOR_COMPONENT_ABS;
+    const { fetchImpl } = fakeFetch(() => json({ embeddings: [{ values: edge }] }));
+    const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+    const out = await p.embed(['a'], { taskType: 'document' });
+    expect(out.vectors[0]?.[0]).toBe(MAX_VECTOR_COMPONENT_ABS);
+  });
+});
+
+describe('response size cap (bytes, streamed)', () => {
+  it.each(['gemini', 'openai'] as const)(
+    '%s refuses a declared content-length over the cap without reading the body',
+    async (kind) => {
+      let pulled = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(new Uint8Array(10));
+        },
+      });
+      const { fetchImpl } = fakeFetch(
+        () =>
+          new Response(body, {
+            status: 200,
+            headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) },
+          }),
+      );
+      const p = createEmbeddingProvider(config(kind), { fetchImpl });
+      const err = await failure(p.embed(['a'], { taskType: 'document' }));
+      expect(err).toBeInstanceOf(ProviderError);
+      expect((err as ProviderError).kind).toBe('permanent');
+      expect(pulled).toBeLessThanOrEqual(1);
+    },
+  );
+
+  it('cancels a stream that passes the cap even when it lies about its size', async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(8 * 1024 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { fetchImpl } = fakeFetch(() => new Response(body, { status: 200 }));
+    const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+    const err = await failure(p.embed(['a'], { taskType: 'document' }));
+    expect((err as ProviderError).kind).toBe('permanent');
+    expect(cancelled).toBe(true);
+    // 4 chunks of 8 MiB cross 32 MiB on the fifth; an unbounded read would never end.
+    expect(pulled).toBeLessThanOrEqual(8);
+  });
+
+  it('never calls res.text() (the whole body in one string)', async () => {
+    const { fetchImpl } = fakeFetch(() => {
+      const res = json(geminiBody(1));
+      vi.spyOn(res, 'text').mockRejectedValue(new Error('text() must not be used'));
+      return res;
+    });
+    const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+    expect((await p.embed(['a'], { taskType: 'document' })).vectors).toHaveLength(1);
   });
 });

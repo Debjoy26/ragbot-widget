@@ -686,6 +686,119 @@ describe('runtime: graceful shutdown', () => {
     expect(h.named('fail_job')).toHaveLength(0);
   });
 
+  it('gives the job back with release_job_lease when it is aborted for shutdown', async () => {
+    const j = row();
+    const h = harness({ queue: [j], config: { shutdownGraceMs: 5000 } });
+    const rt = h.start({
+      index_document: (_job, ctx) =>
+        new Promise<void>((_res, rej) => {
+          ctx.signal.addEventListener('abort', () => {
+            rej(new Error('aborted'));
+          });
+        }),
+    });
+    await tick(0);
+    let result: { drained: boolean; aborted: number } | undefined;
+    void rt.shutdown().then((r) => (result = r));
+    await tick(5000);
+    await tick(0);
+    expect(result).toEqual({ drained: false, aborted: 1 });
+    expect(h.named('release_job_lease')).toHaveLength(1);
+    expect(h.named('release_job_lease')[0]?.args).toEqual({
+      p_job_id: j['id'],
+      p_worker: 'w-test',
+    });
+    expect(h.named('complete_job')).toHaveLength(0);
+    expect(h.named('retry_job_later')).toHaveLength(0);
+  });
+
+  it('also releases when the handler resolves early after the shutdown abort', async () => {
+    const h = harness({ queue: [row()], config: { shutdownGraceMs: 5000 } });
+    const rt = h.start({
+      index_document: (_j, ctx) =>
+        new Promise<void>((resolve) => {
+          ctx.signal.addEventListener('abort', () => {
+            resolve();
+          });
+        }),
+    });
+    await tick(0);
+    void rt.shutdown();
+    await tick(5000);
+    await tick(0);
+    expect(h.named('release_job_lease')).toHaveLength(1);
+    expect(h.named('complete_job')).toHaveLength(0);
+  });
+
+  it('a failing release_job_lease is best effort: logged by code, shutdown still ends', async () => {
+    const h = harness({
+      queue: [row()],
+      config: { shutdownGraceMs: 5000 },
+      impl: {
+        release_job_lease: () => {
+          throw new DbError('network');
+        },
+      },
+    });
+    const rt = h.start({
+      index_document: (_j, ctx) =>
+        new Promise<void>((_res, rej) => {
+          ctx.signal.addEventListener('abort', () => {
+            rej(new Error('aborted'));
+          });
+        }),
+    });
+    await tick(0);
+    let result: { drained: boolean; aborted: number } | undefined;
+    void rt.shutdown().then((r) => (result = r));
+    await tick(5000);
+    await tick(0);
+    expect(result).toEqual({ drained: false, aborted: 1 });
+    expect(h.named('release_job_lease')).toHaveLength(1);
+    expect(h.lines.some((l) => l.includes('job_lease_release_failed'))).toBe(true);
+  });
+
+  it('does not release a job whose lease was lost, or one that finished or failed normally', async () => {
+    // Lease lost (heartbeat refused), then a shutdown abort: another worker owns the job.
+    const lost = harness({
+      queue: [row()],
+      config: { shutdownGraceMs: 5000 },
+      impl: {
+        heartbeat_job: () => {
+          throw new DbError('http', 400, 'RB013');
+        },
+      },
+    });
+    const rt = lost.start({
+      index_document: (_j, ctx) =>
+        new Promise<void>((_res, rej) => {
+          ctx.signal.addEventListener('abort', () => {
+            rej(new Error('aborted'));
+          });
+        }),
+    });
+    await tick(0);
+    await tick(30_000);
+    void rt.shutdown();
+    await tick(5000);
+    await tick(0);
+    expect(lost.named('release_job_lease')).toHaveLength(0);
+
+    const ok = harness({ queue: [row()] });
+    const rt2 = ok.start({ index_document: () => Promise.resolve() });
+    await tick(0);
+    await rt2.shutdown();
+    expect(ok.named('complete_job')).toHaveLength(1);
+    expect(ok.named('release_job_lease')).toHaveLength(0);
+
+    const bad = harness({ queue: [row()] });
+    const rt3 = bad.start({ index_document: () => Promise.reject(new Error('boom')) });
+    await tick(0);
+    await rt3.shutdown();
+    expect(bad.named('retry_job_later')).toHaveLength(1);
+    expect(bad.named('release_job_lease')).toHaveLength(0);
+  });
+
   it('still completes a job that resolves normally inside the grace period', async () => {
     const gate = deferred();
     const h = harness({ queue: [row()], config: { shutdownGraceMs: 5000 } });
@@ -770,6 +883,10 @@ describe('runtime: nothing sensitive is logged', () => {
 });
 
 describe('logger field sanitising', () => {
+  it('keeps the numeric resume offset (the old field name resumed_from_chunk was redacted)', () => {
+    expect(sanitizeFields({ resume_offset: 4 })).toEqual({ resume_offset: 4 });
+  });
+
   it('redacts sensitive names, omits objects, keeps counts and ids', () => {
     const out = sanitizeFields({
       job_id: 'abc',

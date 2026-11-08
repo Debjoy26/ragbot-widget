@@ -8,7 +8,7 @@ begin;
 -- Fixture bots here predate migration 011, which refuses disabled bots. Create them enabled; the
 -- change is rolled back with the transaction.
 alter table public.bot_profiles alter column enabled set default true;
-select plan(364);
+select plan(365);
 
 insert into auth.users (id, aud, role, email) values
   ('a1000000-0000-4000-8000-000000000210', 'authenticated', 'authenticated', 'p35-owner@example.test'),
@@ -687,62 +687,90 @@ select ok(not exists (select 1 from public.audit_logs a cross join lateral jsonb
 select ok(not exists (select 1 from public.audit_logs a where a.action like 'document.%' and a.safe_metadata::text ~* 'Owner doc|Admin doc|Plain doc|Limit doc|secret title'), 'audit: no document title appears in any audit row');
 
 -- ===========================================================================
--- 13. Job-based budget reservations (service_role): same cap, never exceeded, idempotent, bound to a running job of the bot
+-- 13. Job-based budget reservations (service_role): same cap, never exceeded, bound to the job the caller holds.
+--     Moved in P6-D2 from reserve_job_budget (dropped in 012) to the fenced reserve_index_budget /
+--     settle_index_budget / release_index_budget: the caller is worker 'w1' holding a running index_document job
+--     whose payload names a real version. Every call is a new attempt (no idempotent return), and the bot comes
+--     from the version's document, so "job of another bot" is now "a version the job does not name" (RB013).
 -- ===========================================================================
-insert into public.jobs (id, type, payload, state, max_attempts) values
-  ('c1000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c2000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c3000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c4000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'queued', 3),
-  ('c5000000-0000-4000-8000-000000000210', 'cleanup', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c6000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b1000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c7000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210"}', 'succeeded', 3);
+-- Documents dN (2c00000N) and versions vN (1c00000N) for jobs cN. c1-c7 belong to b6; c6 names a b1 document.
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('2c000001-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj1', 'indexing', 'public_answer'),
+  ('2c000002-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj2', 'indexing', 'public_answer'),
+  ('2c000003-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj3', 'indexing', 'public_answer'),
+  ('2c000004-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj4', 'indexing', 'public_answer'),
+  ('2c000005-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj5', 'indexing', 'public_answer'),
+  ('2c000006-0000-4000-8000-000000000210', 'b1000000-0000-4000-8000-000000000210', 'bj6', 'indexing', 'public_answer'),
+  ('2c000007-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'bj7', 'indexing', 'public_answer'),
+  ('2c000008-0000-4000-8000-000000000210', 'b7000000-0000-4000-8000-000000000210', 'bj8', 'indexing', 'public_answer'),
+  ('2c000009-0000-4000-8000-000000000210', 'b8000000-0000-4000-8000-000000000210', 'bj9', 'indexing', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status) values
+  ('1c000001-0000-4000-8000-000000000210', '2c000001-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000001-0000-4000-8000-000000000210/1c000001-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000002-0000-4000-8000-000000000210', '2c000002-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000002-0000-4000-8000-000000000210/1c000002-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000003-0000-4000-8000-000000000210', '2c000003-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000003-0000-4000-8000-000000000210/1c000003-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000004-0000-4000-8000-000000000210', '2c000004-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000004-0000-4000-8000-000000000210/1c000004-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000005-0000-4000-8000-000000000210', '2c000005-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000005-0000-4000-8000-000000000210/1c000005-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000006-0000-4000-8000-000000000210', '2c000006-0000-4000-8000-000000000210', 1, 'b1000000-0000-4000-8000-000000000210/2c000006-0000-4000-8000-000000000210/1c000006-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000007-0000-4000-8000-000000000210', '2c000007-0000-4000-8000-000000000210', 1, 'b6000000-0000-4000-8000-000000000210/2c000007-0000-4000-8000-000000000210/1c000007-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000008-0000-4000-8000-000000000210', '2c000008-0000-4000-8000-000000000210', 1, 'b7000000-0000-4000-8000-000000000210/2c000008-0000-4000-8000-000000000210/1c000008-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c000009-0000-4000-8000-000000000210', '2c000009-0000-4000-8000-000000000210', 1, 'b8000000-0000-4000-8000-000000000210/2c000009-0000-4000-8000-000000000210/1c000009-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding');
+insert into public.jobs (id, type, payload, state, max_attempts, locked_by, locked_until) values
+  ('c1000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000001-0000-4000-8000-000000000210", "version_id": "1c000001-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c2000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000002-0000-4000-8000-000000000210", "version_id": "1c000002-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c3000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000003-0000-4000-8000-000000000210", "version_id": "1c000003-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c4000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000004-0000-4000-8000-000000000210", "version_id": "1c000004-0000-4000-8000-000000000210"}', 'queued', 3, null, null),
+  ('c5000000-0000-4000-8000-000000000210', 'cleanup', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000005-0000-4000-8000-000000000210", "version_id": "1c000005-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c6000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b1000000-0000-4000-8000-000000000210", "document_id": "2c000006-0000-4000-8000-000000000210", "version_id": "1c000006-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c7000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b6000000-0000-4000-8000-000000000210", "document_id": "2c000007-0000-4000-8000-000000000210", "version_id": "1c000007-0000-4000-8000-000000000210"}', 'succeeded', 3, null, null),
+  ('ca000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b7000000-0000-4000-8000-000000000210", "document_id": "2c000008-0000-4000-8000-000000000210", "version_id": "1c000008-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('cb000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "b8000000-0000-4000-8000-000000000210", "document_id": "2c000009-0000-4000-8000-000000000210", "version_id": "1c000009-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour');
 insert into public.visitor_sessions (id, bot_id, expires_at) values ('f1000000-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', now() + interval '1 hour');
 insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash, state) values ('f2000000-0000-4000-8000-000000000210', 'b6000000-0000-4000-8000-000000000210', 'f1000000-0000-4000-8000-000000000210', '00000000-0000-4000-8000-000000000210', repeat('a', 64), 'running');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select ok(public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c1000000-0000-4000-8000-000000000210', 1.0, 3600) is not null, 'job budget: a running index_document job of the bot reserves 1.0 of the 2.0 cap');
+select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000001-0000-4000-8000-000000000210', 1.0, 3600) is not null, 'job budget: a running index_document job of the bot reserves 1.0 of the 2.0 cap');
 reset role;
 select set_config('t.r1', (select id from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000210')::text, true);
 select is((select row(bot_id, request_id, job_id, amount, state) from public.budget_reservations where id = current_setting('t.r1')::uuid), row('b6000000-0000-4000-8000-000000000210'::uuid, null::uuid, 'c1000000-0000-4000-8000-000000000210'::uuid, 1.000000::numeric, 'reserved'::text), 'job budget: the reservation belongs to the job, not to a request');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select is(public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c1000000-0000-4000-8000-000000000210', 1.0, 3600), current_setting('t.r1')::uuid, 'job budget: a retry returns the same reservation');
-select ok(public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c2000000-0000-4000-8000-000000000210', 1.0, 3600) is not null, 'job budget: a second job reserves up to the cap exactly (2.0 of 2.0)');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'job budget: one cent over the cap is refused');
+select ok(public.reserve_index_budget('c2000000-0000-4000-8000-000000000210', 'w1', '1c000002-0000-4000-8000-000000000210', 1.0, 3600) is not null, 'job budget: a second job reserves up to the cap exactly (2.0 of 2.0)');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'job budget: one cent over the cap is refused');
 select throws_ok($q$select public.reserve_request_budget('b6000000-0000-4000-8000-000000000210', 'f2000000-0000-4000-8000-000000000210', 0.5, 3600)$q$, 'RB001', null, 'job budget: job reservations count toward the request cap too (same sum)');
+-- Replaces "a retry returns the same reservation": every call is a new attempt, and the earlier row keeps counting.
+select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000001-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'job budget: a second reserve for the same job counts its first reservation too (1.0 + 1.0 + 0.01 over the cap)');
 reset role;
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'b6000000-0000-4000-8000-000000000210' and state = 'reserved'), 2.000000::numeric, 'job budget: reserved total never exceeds the cap');
-select is((select count(*)::int from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000210'), 1, 'job budget: the retry did not add spend or a second row');
+select is((select array_agg(state) from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000210'), array['reserved'], 'job budget: the refused second reserve added no row and left the first reserved');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c4000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB004', null, 'job budget: a queued job is refused (not running)');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c7000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB004', null, 'job budget: a finished job is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c5000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB004', null, 'job budget: a job of another type is refused');
-select throws_ok($q$select public.reserve_job_budget('b1000000-0000-4000-8000-000000000210', 'c1000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB004', null, 'job budget: a job of another bot is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c6000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB004', null, 'job budget: a job whose payload names another bot is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', gen_random_uuid(), 0.1, 3600)$q$, 'RB004', null, 'job budget: an unknown job is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0, 3600)$q$, '22023', null, 'job budget: amount 0 is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.1, 0)$q$, '22023', null, 'job budget: ttl 0 is refused');
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', null, 0.1, 3600)$q$, '22023', null, 'job budget: a null job is refused');
-select throws_ok($q$select public.reserve_job_budget('b7000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB002', null, 'job budget: a bot with no settings fails closed');
-select throws_ok($q$select public.reserve_job_budget('b8000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB002', null, 'job budget: a bot with no daily cap fails closed');
-select lives_ok($q$select public.settle_budget_reservation('b6000000-0000-4000-8000-000000000210', current_setting('t.r1')::uuid, 0.75)$q$, 'job budget: settle works unchanged on a job reservation');
-select lives_ok($q$select public.release_budget_reservation('b6000000-0000-4000-8000-000000000210', (select id from public.budget_reservations where job_id = 'c2000000-0000-4000-8000-000000000210'))$q$, 'job budget: release works unchanged on a job reservation');
-select ok(public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 1.25, 3600) is not null, 'job budget: settled 0.75 plus new 1.25 fits the cap (released spend is free again)');
+select throws_ok($q$select public.reserve_index_budget('c4000000-0000-4000-8000-000000000210', 'w1', '1c000004-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: a queued job is refused (not running)');
+select throws_ok($q$select public.reserve_index_budget('c7000000-0000-4000-8000-000000000210', 'w1', '1c000007-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: a finished job is refused');
+select throws_ok($q$select public.reserve_index_budget('c5000000-0000-4000-8000-000000000210', 'w1', '1c000005-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: a job of another type is refused');
+select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000006-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: a version (of another bot) that the job does not name is refused');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w2', '1c000003-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: a worker that does not hold the job is refused');
+select throws_ok($q$select public.reserve_index_budget(gen_random_uuid(), 'w1', '1c000003-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB013', null, 'job budget: an unknown job is refused');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0, 3600)$q$, '22023', null, 'job budget: amount 0 is refused');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0.1, 0)$q$, '22023', null, 'job budget: ttl 0 is refused');
+select throws_ok($q$select public.reserve_index_budget(null, 'w1', '1c000003-0000-4000-8000-000000000210', 0.1, 3600)$q$, '22023', null, 'job budget: a null job is refused');
+select throws_ok($q$select public.reserve_index_budget('ca000000-0000-4000-8000-000000000210', 'w1', '1c000008-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB002', null, 'job budget: a bot with no settings fails closed');
+select throws_ok($q$select public.reserve_index_budget('cb000000-0000-4000-8000-000000000210', 'w1', '1c000009-0000-4000-8000-000000000210', 0.1, 3600)$q$, 'RB002', null, 'job budget: a bot with no daily cap fails closed');
+select lives_ok($q$select public.settle_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', current_setting('t.r1')::uuid, 0.75)$q$, 'job budget: settle_index_budget settles a job reservation');
+select lives_ok($q$select public.release_index_budget('c2000000-0000-4000-8000-000000000210', 'w1', (select id from public.budget_reservations where job_id = 'c2000000-0000-4000-8000-000000000210'))$q$, 'job budget: release_index_budget releases a job reservation');
+select ok(public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 1.25, 3600) is not null, 'job budget: settled 0.75 plus new 1.25 fits the cap (released spend is free again)');
 reset role;
-update public.jobs set state = 'succeeded' where id = 'c1000000-0000-4000-8000-000000000210';
+update public.jobs set state = 'succeeded', locked_by = null, locked_until = null where id = 'c1000000-0000-4000-8000-000000000210';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c1000000-0000-4000-8000-000000000210', 1.0, 3600)$q$, 'RB004', null, 'job budget: after settling, a call for a job that is no longer running is refused (a new attempt needs a running job)');
+select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000001-0000-4000-8000-000000000210', 1.0, 3600)$q$, 'RB013', null, 'job budget: after settling, a call for a job that is no longer running is refused (a new attempt needs a running job)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000210","aal":"aal2","role":"authenticated"}', true);
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, '42501', null, 'job budget: owner (authenticated) cannot execute reserve_job_budget');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0.1, 3600)$q$, '42501', null, 'job budget: owner (authenticated) cannot execute reserve_index_budget');
 reset role;
 set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
-select throws_ok($q$select public.reserve_job_budget('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 0.1, 3600)$q$, '42501', null, 'job budget: anon cannot execute reserve_job_budget');
+select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0.1, 3600)$q$, '42501', null, 'job budget: anon cannot execute reserve_index_budget');
 reset role;
 select throws_ok($q$insert into public.budget_reservations (bot_id, request_id, job_id, amount, expires_at) values ('b6000000-0000-4000-8000-000000000210', 'f2000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 1, now() + interval '1 hour')$q$, '23514', null, 'job budget: a reservation cannot belong to both a request and a job');
 select throws_ok($q$insert into public.budget_reservations (bot_id, job_id, amount, expires_at) values ('b6000000-0000-4000-8000-000000000210', 'c3000000-0000-4000-8000-000000000210', 1, now() + interval '1 hour')$q$, '23505', null, 'job budget: one ACTIVE (reserved) reservation per job (unique)');
@@ -866,52 +894,60 @@ select is((select deleted_at is null from public.documents where id = current_se
 select is((select count(*)::int from public.audit_logs where action in ('document.download', 'document.delete') and safe_metadata ->> 'bot_id' = 'b9000000-0000-4000-8000-000000000210'), 0, 'write quota: and the refused calls wrote no audit row');
 
 -- 15e. Job budget across attempts: reserve, release, requeue, reserve; settled and expired reservations are history.
+--      Moved in P6-D2 to the fenced index budget functions (see section 13). A repeat reserve is a new attempt now,
+--      so "returns the same reservation" became "counts the first reservation and is refused over the cap".
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
   ('ba000000-0000-4000-8000-000000000210', 'p35-attempts', 'x', array['en'], 'm', 1536);
 insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
   ('ba000000-0000-4000-8000-000000000210', array['https://e.test'], '{}', '{"daily_cap_usd": 2}', '{}', '{}', '{}', '{}');
-insert into public.jobs (id, type, payload, state, max_attempts) values
-  ('c8000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "ba000000-0000-4000-8000-000000000210"}', 'running', 3),
-  ('c9000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "ba000000-0000-4000-8000-000000000210"}', 'running', 3);
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('2c0000a8-0000-4000-8000-000000000210', 'ba000000-0000-4000-8000-000000000210', 'ba8', 'indexing', 'public_answer'),
+  ('2c0000a9-0000-4000-8000-000000000210', 'ba000000-0000-4000-8000-000000000210', 'ba9', 'indexing', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status) values
+  ('1c0000a8-0000-4000-8000-000000000210', '2c0000a8-0000-4000-8000-000000000210', 1, 'ba000000-0000-4000-8000-000000000210/2c0000a8-0000-4000-8000-000000000210/1c0000a8-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding'),
+  ('1c0000a9-0000-4000-8000-000000000210', '2c0000a9-0000-4000-8000-000000000210', 1, 'ba000000-0000-4000-8000-000000000210/2c0000a9-0000-4000-8000-000000000210/1c0000a9-0000-4000-8000-000000000210/original.txt', 'text/plain', 100, 'embedding');
+insert into public.jobs (id, type, payload, state, max_attempts, locked_by, locked_until) values
+  ('c8000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "ba000000-0000-4000-8000-000000000210", "document_id": "2c0000a8-0000-4000-8000-000000000210", "version_id": "1c0000a8-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour'),
+  ('c9000000-0000-4000-8000-000000000210', 'index_document', '{"bot_id": "ba000000-0000-4000-8000-000000000210", "document_id": "2c0000a9-0000-4000-8000-000000000210", "version_id": "1c0000a9-0000-4000-8000-000000000210"}', 'running', 3, 'w1', now() + interval '1 hour');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select set_config('t.ra1', public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 1.0, 3600)::text, true);
-select lives_ok($q$select public.release_budget_reservation('ba000000-0000-4000-8000-000000000210', current_setting('t.ra1')::uuid)$q$, 'attempts: attempt 1 releases its reservation');
+select set_config('t.ra1', public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.0, 3600)::text, true);
+select lives_ok($q$select public.release_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', current_setting('t.ra1')::uuid)$q$, 'attempts: attempt 1 releases its reservation');
 reset role;
 update public.jobs set state = 'queued', locked_by = null, locked_until = null where id = 'c8000000-0000-4000-8000-000000000210';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 1.0, 3600)$q$, 'RB004', null, 'attempts: a requeued (not running) job cannot reserve');
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.0, 3600)$q$, 'RB013', null, 'attempts: a requeued (not running) job cannot reserve');
 reset role;
-update public.jobs set state = 'running' where id = 'c8000000-0000-4000-8000-000000000210';
+update public.jobs set state = 'running', locked_by = 'w1', locked_until = now() + interval '1 hour' where id = 'c8000000-0000-4000-8000-000000000210';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select set_config('t.ra2', public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 1.0, 3600)::text, true);
+select set_config('t.ra2', public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.0, 3600)::text, true);
 select isnt(current_setting('t.ra2')::uuid, current_setting('t.ra1')::uuid, 'attempts: reserve, release, requeue, reserve gives a NEW reservation');
-select is(public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 1.0, 3600), current_setting('t.ra2')::uuid, 'attempts: a repeat during attempt 2 returns the same active reservation (idempotent)');
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.5, 3600)$q$, 'RB001', null, 'attempts: a repeat during attempt 2 is a new attempt that counts the first (1.0 + 1.5 over the 2.0 cap)');
 reset role;
 select is((select array_agg(state order by created_at, state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved'], 'attempts: the released row is kept as history next to the active one');
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state = 'reserved'), 1.000000::numeric, 'attempts: only attempt 2 holds budget');
--- settle attempt 2, requeue, attempt 3: the settled spend counts and the new spend is checked against the cap (2.0)
+-- settle attempt 2, attempt 3: the settled spend counts and the new spend is checked against the cap (2.0)
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select lives_ok($q$select public.settle_budget_reservation('ba000000-0000-4000-8000-000000000210', current_setting('t.ra2')::uuid, 1.5)$q$, 'attempts: attempt 2 settles 1.5');
-select throws_ok($q$select public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.6, 3600)$q$, 'RB001', null, 'attempts: settled 1.5 plus a new 0.6 exceeds the 2.0 cap, so attempt 3 is refused');
-select ok(public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.5, 3600) is not null, 'attempts: settled 1.5 plus a new 0.5 fits the cap exactly, so attempt 3 reserves');
+select lives_ok($q$select public.settle_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', current_setting('t.ra2')::uuid, 1.5)$q$, 'attempts: attempt 2 settles 1.5');
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.6, 3600)$q$, 'RB001', null, 'attempts: settled 1.5 plus a new 0.6 exceeds the 2.0 cap, so attempt 3 is refused');
+select ok(public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.5, 3600) is not null, 'attempts: settled 1.5 plus a new 0.5 fits the cap exactly, so attempt 3 reserves');
 reset role;
 select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved', 'settled'], 'attempts: three attempts, three rows (released, settled, reserved)');
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state in ('settled', 'reserved')), 2.000000::numeric, 'attempts: the counted spend is exactly the cap');
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c9000000-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'attempts: another job of the bot is refused at the cap (one cent over)');
+select throws_ok($q$select public.reserve_index_budget('c9000000-0000-4000-8000-000000000210', 'w1', '1c0000a9-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'attempts: another job of the bot is refused at the cap (one cent over)');
 reset role;
 -- an expired but still 'reserved' row keeps counting, because a stale worker can still settle it (R3-3)
 update public.budget_reservations set expires_at = now() - interval '1 minute' where job_id = 'c8000000-0000-4000-8000-000000000210' and state = 'reserved';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.4, 3600)$q$, 'RB001', null, 'attempts: an expired reservation still counts, so the next attempt is refused at the cap');
-select public.settle_budget_reservation('ba000000-0000-4000-8000-000000000210', (select id from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210' and state = 'reserved'), 0.1);
-select set_config('t.ra4', public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.4, 3600)::text, true);
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.4, 3600)$q$, 'RB001', null, 'attempts: an expired reservation still counts, so the next attempt is refused at the cap');
+select public.settle_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', (select id from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210' and state = 'reserved'), 0.1);
+select set_config('t.ra4', public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.4, 3600)::text, true);
 reset role;
 select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved', 'settled', 'settled'], 'attempts: settling the stale row frees the difference for the next attempt');
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state in ('settled', 'reserved') and (state = 'settled' or expires_at > now())), 2.000000::numeric, 'attempts: the expired row is not counted, so the replacement fits the cap');
@@ -919,16 +955,17 @@ select is((select coalesce(sum(amount), 0) from public.budget_reservations where
 update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.ra4')::uuid;
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.6, 3600)$q$, 'RB001', null, 'attempts: after expiry the new attempt still respects the cap (settled 1.5 plus 0.6)');
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.6, 3600)$q$, 'RB001', null, 'attempts: after expiry the new attempt still respects the cap (settled 1.5 plus 0.6)');
 reset role;
 select is((select state from public.budget_reservations where id = current_setting('t.ra4')::uuid), 'reserved', 'attempts: the cap refusal rolled back, so the old row is unchanged');
--- the active-reservation rule also covers a finished job: a reserved, unexpired row is returned even then
-update public.budget_reservations set expires_at = now() + interval '1 hour' where id = current_setting('t.ra4')::uuid;
-update public.jobs set state = 'succeeded' where id = 'c8000000-0000-4000-8000-000000000210';
+-- Replaces "an active unexpired reservation is returned idempotently even after the job finished": a finished job is
+-- refused at the fence and nothing is returned or changed.
+update public.jobs set state = 'succeeded', locked_by = null, locked_until = null where id = 'c8000000-0000-4000-8000-000000000210';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select is(public.reserve_job_budget('ba000000-0000-4000-8000-000000000210', 'c8000000-0000-4000-8000-000000000210', 0.5, 3600), current_setting('t.ra4')::uuid, 'attempts: an active unexpired reservation is returned idempotently even after the job finished');
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.5, 3600)$q$, 'RB013', null, 'attempts: after the job finished, a reserve is refused at the fence');
 reset role;
+select is((select state from public.budget_reservations where id = current_setting('t.ra4')::uuid), 'reserved', 'attempts: and the refused call left the earlier reservation as it was');
 
 -- ===========================================================================
 -- 14. Catalog

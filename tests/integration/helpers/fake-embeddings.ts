@@ -99,6 +99,11 @@ export class FakeEmbeddingBackend {
   private readonly holds: PendingHold[] = [];
   /** Extra latency per call, milliseconds. */
   delayMs = 0;
+  /**
+   * Multiplies the input tokens the fake provider REPORTS (not what the texts really cost), so a test
+   * can make the provider claim far more than the worker estimated (overspend).
+   */
+  tokenFactor = 1;
 
   constructor(readonly model: string) {}
 
@@ -190,7 +195,7 @@ export class FakeEmbeddingBackend {
     const failure = this.failureFor(callNumber);
     if (failure !== null) throw new FakeBackendFailure(failure);
 
-    const inputTokens = fakeTokensFor(texts);
+    const inputTokens = fakeTokensFor(texts) * this.tokenFactor;
     this.completedCalls += 1;
     this.tokensReported += inputTokens;
     return { vectors: texts.map((t) => fakeVectorFor(t)), inputTokens };

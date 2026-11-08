@@ -26,17 +26,26 @@ select is((select enabled from public.bot_profiles where id = 'b1000000-0000-400
 select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000-000000000230', (select settings_version from public.bot_profiles where id = 'b1000000-0000-4000-8000-000000000230'), true)$q$, 'RB034', null, 'R3-2: enabling again is still limited');
 
 -- R3-3
+-- Moved in P6-D2 from reserve_job_budget (dropped in 012) to the fenced reserve_index_budget / settle_index_budget.
+-- The fence needs a document, a version and a running job held by worker 'w' whose payload names that version, and
+-- the bot must be enabled for this section only (R3-2 left it disabled; reserve_index_budget refuses a disabled bot).
+insert into public.documents (id, bot_id, title, status) values
+  ('d2000000-0000-4000-8000-000000000230', 'b1000000-0000-4000-8000-000000000230', 'Doc3', 'indexing');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, status) values
+  ('e2000000-0000-4000-8000-000000000230', 'd2000000-0000-4000-8000-000000000230', 1,
+   'b1000000-0000-4000-8000-000000000230/d2000000-0000-4000-8000-000000000230/e2000000-0000-4000-8000-000000000230/original.txt', 'text/plain', 'embedding');
 insert into public.jobs (id, type, dedupe_key, payload, state, max_attempts, locked_by, locked_until) values
-  ('c1000000-0000-4000-8000-000000000230', 'index_document', 'd2:job1', '{"bot_id": "b1000000-0000-4000-8000-000000000230", "document_id": "d1000000-0000-4000-8000-000000000230", "version_id": "e1000000-0000-4000-8000-000000000230"}', 'running', 3, 'w', now() + interval '1 hour');
-select set_config('t.r1', public.reserve_job_budget('b1000000-0000-4000-8000-000000000230', 'c1000000-0000-4000-8000-000000000230', 1.5, 3600)::text, true);
+  ('c1000000-0000-4000-8000-000000000230', 'index_document', 'd2:job1', '{"bot_id": "b1000000-0000-4000-8000-000000000230", "document_id": "d2000000-0000-4000-8000-000000000230", "version_id": "e2000000-0000-4000-8000-000000000230"}', 'running', 3, 'w', now() + interval '1 hour');
+update public.bot_profiles set enabled = true where id = 'b1000000-0000-4000-8000-000000000230';
+select set_config('t.r1', public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.5, 3600)::text, true);
 update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.r1')::uuid;
-select throws_ok($q$select public.reserve_job_budget('b1000000-0000-4000-8000-000000000230', 'c1000000-0000-4000-8000-000000000230', 1.0, 3600)$q$, 'RB001', null, 'R3-3: an expired job reservation still counts toward the cap');
+select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.0, 3600)$q$, 'RB001', null, 'R3-3: an expired job reservation still counts toward the cap');
 update public.budget_reservations set state = 'expired' where id = current_setting('t.r1')::uuid;
-select lives_ok($q$select public.settle_budget_reservation('b1000000-0000-4000-8000-000000000230', current_setting('t.r1')::uuid, 0.25)$q$, 'R3-3: a stale worker can settle it');
-select ok(public.reserve_job_budget('b1000000-0000-4000-8000-000000000230', 'c1000000-0000-4000-8000-000000000230', 1.0, 3600) is not null, 'R3-3: settling frees the difference');
+select lives_ok($q$select public.settle_index_budget('c1000000-0000-4000-8000-000000000230', 'w', current_setting('t.r1')::uuid, 0.25)$q$, 'R3-3: a stale worker can settle it');
+select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.0, 3600) is not null, 'R3-3: settling frees the difference');
 
 update public.budget_reservations set expires_at = now() - interval '1 minute' where job_id = 'c1000000-0000-4000-8000-000000000230' and state = 'reserved';
-select ok(public.reserve_job_budget('b1000000-0000-4000-8000-000000000230', 'c1000000-0000-4000-8000-000000000230', 0.5, 3600) is not null, 'R3-3: with room under the cap, the next attempt replaces an expired row');
+select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 0.5, 3600) is not null, 'R3-3: with room under the cap, the next attempt replaces an expired row');
 select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000230'), array['expired', 'reserved', 'settled'], 'R3-3: the replaced row is marked expired');
 
 -- R3-8

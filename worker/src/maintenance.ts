@@ -31,6 +31,9 @@ interface Task {
 
 const RETRY = { retryOnContention: true } as const;
 
+/** fail_orphaned_index_versions and prune_superseded_chunks accept a batch of 1..1000 (migration 012). */
+export const INDEX_MAINTENANCE_MAX_BATCH = 1000;
+
 /** expire_abandoned_uploads accepts a batch of 1..1000 (migration 012), tighter than the other tasks. */
 export const ABANDONED_UPLOAD_MAX_BATCH = 1000;
 
@@ -98,6 +101,18 @@ export const MAINTENANCE_TASKS: readonly Task[] = [
     run: call('purge_terminal_jobs', (c) => ({
       p_older_than_days: c.terminalJobRetentionDays,
       p_batch: c.retentionBatchSize,
+    })),
+  },
+  {
+    name: 'fail_orphaned_index_versions',
+    run: call('fail_orphaned_index_versions', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
+    })),
+  },
+  {
+    name: 'prune_superseded_chunks',
+    run: call('prune_superseded_chunks', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
     })),
   },
   {

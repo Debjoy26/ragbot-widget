@@ -169,6 +169,36 @@ describe('Storage.download', () => {
     expect(pulled).toBeLessThanOrEqual(5);
   });
 
+  it('checks the expected eTag on the headers before reading the body', async () => {
+    for (const headers of [{ etag: '"someone-else"' }, {} as Record<string, string>]) {
+      let pulled = 0;
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(new Uint8Array(10));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      const { storage } = setup(() => new Response(body, { headers }));
+      const err = await failure(storage.download(PATH, 1000, undefined, { expectedEtag: '"abc"' }));
+      expect(err.reason).toBe('etag_mismatch');
+      expect(cancelled).toBe(true);
+      // The body was never consumed (at most the stream's initial pull).
+      expect(pulled).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('accepts a matching expected eTag after normalising (weak marker, quotes)', async () => {
+    const { storage } = setup(
+      () => new Response(new Uint8Array([1, 2, 3]), { headers: { etag: 'W/"abc"' } }),
+    );
+    const out = await storage.download(PATH, 100, undefined, { expectedEtag: '"abc"' });
+    expect(out.bytes).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
   it('reports a missing object as http 404 and an error body is not copied', async () => {
     const { storage } = setup(
       () => new Response(JSON.stringify({ message: `secret ${KEY}` }), { status: 404 }),
