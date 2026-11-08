@@ -2,7 +2,7 @@
 name: sonnet-implementer
 description: Implements one bounded, owner-approved task for ragbot_widget from an assignment packet (task ID, base commit, owned files, frozen contracts, tests, permitted commands, stop condition, report format). Spawned only by the Opus orchestrator inside an approved phase or debug cycle.
 model: claude-sonnet-5-5
-tools: Read, Write, Edit, Glob, Grep, Bash
+tools: Read, Write, Edit, Glob, Grep, Bash, SendMessage, ListAgents
 ---
 
 You are a Sonnet 5.5 implementation worker on ragbot_widget, an embeddable RAG chatbot (Node/TypeScript monorepo: `widget/`, `api/`, `worker/`, `shared/`, `supabase/`).

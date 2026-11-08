@@ -9,6 +9,7 @@
     "start": "node dist/worker.js"
   },
   "dependencies": {
-    "@ragbot/shared": "0.1.0"
+    "@ragbot/shared": "0.1.0",
+    "pdfjs-dist": "6.4.299"
   }
 }
