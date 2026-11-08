@@ -1,0 +1,52 @@
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'vitest' run --project integration tests/integration/ingestion-e2e.test.ts tests/integration/ingestion-process.test.ts
+
+ RUN  v5.1.0 /home/kali/Desktop/rag-bot/ragbot-widget
+
+ ❯ |integration| tests/integration/ingestion-e2e.test.ts (36 tests | 1 failed) 42360ms
+   ❯ B. plan cases (20)
+     × B9 a reindex shares the original storage path and indexes to ready 682ms
+ ❯ |integration| tests/integration/ingestion-process.test.ts (9 tests | 1 failed) 57220ms
+   ❯ worker process against the local stack (3)
+     × C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, leaves it to lease expiry and exits 0 within the bound 1864ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |integration| tests/integration/ingestion-e2e.test.ts > B. plan cases > B9 a reindex shares the original storage path and indexes to ready
+AssertionError: failure_code FILE_UNSUPPORTED: expected 'failed' to be 'ready' // Object.is equality
+
+Expected: "ready"
+Received: "failed"
+
+ ❯ tests/integration/ingestion-e2e.test.ts:697:74
+    695|     const re = await bot.reindex(v1.documentId);
+    696|     const second = await bot.waitVersion(re.versionId, ['ready', 'fail…
+    697|     expect(second.status, `failure_code ${String(second.failure_code)}…
+       |                                                                          ^
+    698|     expect(second.storage_path).toBe(v1.path); // the reindex reuses t…
+    699|     expect((await bot.version(v1.versionId)).status).toBe('superseded'…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |integration| tests/integration/ingestion-process.test.ts > worker process against the local stack > C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, leaves it to lease expiry and exits 0 within the bound
+AssertionError: expected 'succeeded' to be 'running' // Object.is equality
+
+Expected: "running"
+Received: "succeeded"
+
+ ❯ tests/integration/ingestion-process.test.ts:369:56
+    367|
+    368|       // Not completed, not failed: the job is left running under its …
+    369|       expect((await bot.indexJob(up.versionId)).state).toBe('running');
+       |                                                        ^
+    370|       expect((await bot.version(up.versionId)).status).not.toBe('ready…
+    371|       expect((await bot.version(up.versionId)).status).not.toBe('faile…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  2 failed | 43 passed (45)
+   Start at  09:26:20
+   Duration  57.54s (tests 100%)
+

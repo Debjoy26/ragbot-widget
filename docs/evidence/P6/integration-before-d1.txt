@@ -1,0 +1,68 @@
+npm notice run ragbot-widget@0.1.0 test:integration
+npm notice run vitest run --project integration
+
+ RUN  v5.1.0 /home/kali/Desktop/rag-bot/ragbot-widget
+
+ ❯ |integration| tests/integration/admin-real-session.test.ts (245 tests | 1 failed) 11589ms
+   ❯ document upload path (27)
+     × retry refuses a version that is not failed (RB030) and the status page validates 12ms
+ ❯ |integration| tests/integration/ingestion-e2e.test.ts (36 tests | 1 failed) 43142ms
+   ❯ B. plan cases (20)
+     × B9 a reindex shares the original storage path and indexes to ready 681ms
+ ❯ |integration| tests/integration/ingestion-process.test.ts (9 tests | 1 failed) 58214ms
+   ❯ worker process against the local stack (3)
+     × C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, leaves it to lease expiry and exits 0 within the bound 1864ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |integration| tests/integration/admin-real-session.test.ts > document upload path > retry refuses a version that is not failed (RB030) and the status page validates
+AssertionError: HTTP status for RB030: expected 200 to be greater than or equal to 400
+ ❯ expectCode tests/integration/admin-real-session.test.ts:137:47
+    135|
+    136| function expectCode(r: HttpResult, code: string): void {
+    137|   expect(r.status, `HTTP status for ${code}`).toBeGreaterThanOrEqual(4…
+       |                                               ^
+    138|   expect(sqlstateOf(r)).toBe(code);
+    139| }
+ ❯ tests/integration/admin-real-session.test.ts:923:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |integration| tests/integration/ingestion-e2e.test.ts > B. plan cases > B9 a reindex shares the original storage path and indexes to ready
+AssertionError: failure_code FILE_UNSUPPORTED: expected 'failed' to be 'ready' // Object.is equality
+
+Expected: "ready"
+Received: "failed"
+
+ ❯ tests/integration/ingestion-e2e.test.ts:697:74
+    695|     const re = await bot.reindex(v1.documentId);
+    696|     const second = await bot.waitVersion(re.versionId, ['ready', 'fail…
+    697|     expect(second.status, `failure_code ${String(second.failure_code)}…
+       |                                                                          ^
+    698|     expect(second.storage_path).toBe(v1.path); // the reindex reuses t…
+    699|     expect((await bot.version(v1.versionId)).status).toBe('superseded'…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |integration| tests/integration/ingestion-process.test.ts > worker process against the local stack > C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, leaves it to lease expiry and exits 0 within the bound
+AssertionError: expected 'succeeded' to be 'running' // Object.is equality
+
+Expected: "running"
+Received: "succeeded"
+
+ ❯ tests/integration/ingestion-process.test.ts:369:56
+    367|
+    368|       // Not completed, not failed: the job is left running under its …
+    369|       expect((await bot.indexJob(up.versionId)).state).toBe('running');
+       |                                                        ^
+    370|       expect((await bot.version(up.versionId)).status).not.toBe('ready…
+    371|       expect((await bot.version(up.versionId)).status).not.toBe('faile…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  3 failed | 10 passed (13)
+      Tests  3 failed | 661 passed (664)
+   Start at  09:27:57
+   Duration  58.50s (tests 99%, import 1%)
+

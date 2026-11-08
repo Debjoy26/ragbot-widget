@@ -1,20 +1,18 @@
 // Worker entry point (P6-QUEUE): wires config, clients, the job runtime and the maintenance
-// scheduler. Job handlers are injected: wave 2 registers `index_document` and `cleanup` in
-// `JOB_HANDLERS` below. With none registered the runtime claims nothing, but maintenance still runs.
+// scheduler. Job handlers come from `buildHandlers` (index_document and cleanup); a caller may
+// inject its own map (tests). With none registered the runtime claims nothing, but maintenance still runs.
 import { pathToFileURL } from 'node:url';
 import { loadWorkerConfig } from './lib/config.js';
 import { createDb } from './lib/db.js';
 import { createLogger, errorCode } from './lib/logger.js';
 import { createStorage } from './lib/storage.js';
+import { buildHandlers } from './handlers.js';
 import { startMaintenance } from './maintenance.js';
 import { startRuntime, type JobHandlers } from './runtime.js';
 
 export function workerName(): string {
   return 'ragbot-worker';
 }
-
-/** Registered job handlers. Wave 2 (INDEX) adds `index_document` and `cleanup` here. */
-export const JOB_HANDLERS: JobHandlers = {};
 
 export interface WorkerHandle {
   /** Stops claiming, drains running jobs up to SHUTDOWN_GRACE_MS, aborts the rest, stops maintenance. */
@@ -27,9 +25,10 @@ export interface WorkerHandle {
  */
 export function startWorker(
   env: Record<string, string | undefined> = process.env,
-  handlers: JobHandlers = JOB_HANDLERS,
+  handlersOverride?: JobHandlers,
 ): WorkerHandle {
   const config = loadWorkerConfig(env);
+  const handlers = handlersOverride ?? buildHandlers(config);
   const log = createLogger({ level: config.logLevel });
   const db = createDb({
     url: config.supabaseUrl,
