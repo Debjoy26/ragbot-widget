@@ -11,6 +11,7 @@ const out = await extractText(pdf, 'application/pdf', {
   timeoutMs: 15000,
   maxMemoryMb: 256,
   maxPages: 300,
+  maxChars: 1000000,
 });
 console.log(
   'dist child ok:',
