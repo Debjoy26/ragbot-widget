@@ -43,6 +43,8 @@ jobs:
       - run: npm run build
       - name: API smoke test (built output against the local stack)
         run: node scripts/api-smoke.mjs
+      - name: Worker PDF extraction from the build (P6)
+        run: node scripts/worker-dist-check.mjs
       - name: Stop local Supabase stack
         if: always()
         run: npx supabase stop --no-backup

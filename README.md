@@ -95,6 +95,15 @@ npm run build
 ```
 Database work goes through `make` (`make help`). `npm run test:integration` needs the local stack running. `npm run test:e2e` is not a gate until P8.
 
+## CI
+One job, `.github/workflows/ci.yml`, runs on every push to `main` and on pull requests (about 10 minutes):
+1. Secret scan and its self-test, then `npm ci`, lint, format check, typecheck and unit tests.
+2. Local Supabase stack: migrations and pgTAP tests, database lint, race checks, Makefile guard tests.
+3. Integration tests, including the P6 ingestion end-to-end tests with real worker processes and a fake embedding provider.
+4. Build, the API smoke test, and the P6 check that the built worker can extract a PDF in its sandboxed child process.
+
+CI makes no provider calls and never touches a hosted project. It mirrors the system suite in `rules.md` §3, which stays the gate for commits; a CI result is never a gate (`rules.md` §2).
+
 ## Environment variables
 API: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `VISITOR_TOKEN_SECRET`, `TURNSTILE_SECRET_KEY`, `ALLOWED_ORIGINS`, `PORT`, `LOG_LEVEL`, `TRUSTED_PROXY_HOPS`, `BODY_LIMIT_BYTES`, `REQUEST_TIMEOUT_MS`, `CONNECTION_TIMEOUT_MS`, `READY_TIMEOUT_MS`, `DB_TIMEOUT_MS`, `VISITOR_TOKEN_TTL_SECONDS`, `CHAT_DEADLINE_MS`, `PROVIDER_MAX_ATTEMPTS`, optional `VISITOR_TOKEN_SECRET_PREVIOUS` for rotation, `RATE_LIMIT_KEY_SECRET`, `TURNSTILE_TIMEOUT_MS`, `SESSION_PREFLIGHT_PER_IP_LIMIT`, `SESSION_PREFLIGHT_WINDOW_SECONDS`, plus AI roles `CHAT_PRIMARY_*`, optional `CHAT_FALLBACK_*`, `EMBEDDING_*` (incl. `EMBEDDING_DIMENSIONS=1536`), `MODERATION_*`.
 Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never give the worker the visitor-signing key.

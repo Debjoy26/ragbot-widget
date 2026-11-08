@@ -20,7 +20,7 @@ Set by the owner on 2026-11-08. These rules apply to every phase and every sessi
 | Build and static checks | `npm run build`, `npm run lint`, `npm run format:check`, `npm run typecheck` |
 | Database | `make db-local`, `make db-test`, `make db-lint`, `make db-race` |
 | Unit and integration | `npm test`, `npm run test:integration` |
-| Running system | `node scripts/api-smoke.mjs` against the local stack |
+| Running system | `node scripts/api-smoke.mjs` against the local stack; `node scripts/worker-dist-check.mjs` after the build |
 | Guards and secrets | `make test-make`, `npm run secret-scan:self-test`, `bash scripts/secret-scan.sh --include-untracked` |
 | Advisors | `npx supabase db advisors --type all --level warn` (local) |
 

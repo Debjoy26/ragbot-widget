@@ -1,6 +1,6 @@
-// Main-session check: the compiled extraction child runs from worker/dist (P6-EXTRACT left this untested).
-import { buildPdf } from '../../../tests/unit/worker/fixtures/pdf.ts';
-const { extractText } = await import('../../../worker/dist/lib/extract.js');
+// Checks that the compiled PDF extraction child runs from worker/dist (run after npm run build; used by CI).
+import { buildPdf } from '../tests/unit/worker/fixtures/pdf.ts';
+const { extractText } = await import('../worker/dist/lib/extract.js');
 const pdf = buildPdf({
   pages: [
     ['Hello from page one of the dist check, with enough words to pass the text threshold.'],

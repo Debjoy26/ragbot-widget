@@ -23,7 +23,7 @@ Run by Opus at 19:55–20:01 on `9790630` plus the working tree, which became co
 | `make test-make` | 0 | 116 passed | `test-make.txt` |
 | Secret scan with self-test | 0 | No hits | `secret-*.txt` |
 | Local advisors (`--level warn`) | 0 | No issues | `advisors-local.txt` |
-| Compiled PDF child (`dist-extract-check.mjs`) | 0 | 2 pages extracted from `dist` | `dist-extract-check.txt` |
+| Compiled PDF child (`scripts/worker-dist-check.mjs`, moved there for CI after P6) | 0 | 2 pages extracted from `dist` | `dist-extract-check.txt` |
 | Chunking timing probe | 0 | 32,000-char adversarial inputs in 1–3 ms (2753 ms before P6-D3) | `regex-dos-probe*.txt` |
 
 ## Delivered
