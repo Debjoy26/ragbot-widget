@@ -4,12 +4,12 @@
 -- job; failing a version; retry with a delay and the dead-letter step; usage events; cleanup in batches; storage
 -- targets; expiring abandoned uploads; grants; lock_timeout; schema_version. P6-D2 adds the index budget (reserve, settle,
 -- release), reset_version_chunks, the context's stored_ columns, fail_orphaned_index_versions, release_job_lease and
--- prune_superseded_chunks. All fixtures are synthetic.
+-- prune_superseded_chunks. P6-D5 adds settle_orphaned_index_reservations. All fixtures are synthetic.
 -- Sequential only: the real two-connection races are in scripts/race-db.sh.
 --
 -- Ids end in 000000000250: bots bN, documents dN, versions eN/cN, jobs fN/aN. Worker ids are 'w1' (the holder) and 'w2'.
 begin;
-select plan(357);
+select plan(417);
 
 -- A valid embedding (1536 numbers) and a short one (1535), kept as transaction-local settings so every role can use them.
 select set_config('p6.emb', (select jsonb_agg(0.01)::text from generate_series(1, 1536)), true);
@@ -588,45 +588,79 @@ select set_config('t.x1', public.reserve_index_budget('f1a00000-0000-4000-8000-0
 select results_eq($q$select bot_id, request_id, job_id, amount, state, expires_at = now() + interval '3600 seconds' from public.budget_reservations where id = current_setting('t.x1')::uuid$q$,
   $q$values ('b5000000-0000-4000-8000-000000000250'::uuid, null::uuid, 'f1a00000-0000-4000-8000-000000000250'::uuid, 2.000000::numeric, 'reserved'::text, true)$q$,
   'index budget: reserve returns the id of a reserved row of the job, owned by the bot of the version, with the requested ttl');
--- Attempt 2 of the same job: the first row becomes expired and keeps counting (2.0 + 2.0 of 5.0).
-select set_config('t.x2', public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 2.0, 3600)::text, true);
+-- Attempt 2 of the same job (review P6-R5 #1). The caller holds the lease, so attempt 1 is over: its row is settled at
+-- the embedding_index usage recorded in its window before the cap check, not counted at its full 2.0. A lost lease is
+-- taken over running -> running, so the maintenance sweep never sees attempt 1's row before this reserve.
+-- Every now() in this transaction is the same instant, so attempt 1's row and its usage are backdated.
+reset role;
+update public.budget_reservations set created_at = now() - interval '10 minutes' where id = current_setting('t.x1')::uuid;
+insert into public.usage_events (bot_id, job_id, operation, estimated_cost, created_at) values
+  ('b5000000-0000-4000-8000-000000000250', 'f1a00000-0000-4000-8000-000000000250', 'embedding_index', 0.4, now() - interval '5 minutes'),
+  ('b5000000-0000-4000-8000-000000000250', 'f1a00000-0000-4000-8000-000000000250', 'embedding_query', 9.0, now() - interval '5 minutes'),
+  ('b5000000-0000-4000-8000-000000000250', 'f2a00000-0000-4000-8000-000000000250', 'embedding_index', 9.0, now() - interval '5 minutes'),
+  ('b5000000-0000-4000-8000-000000000250', 'f1a00000-0000-4000-8000-000000000250', 'embedding_index', 9.0, now() - interval '20 minutes');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+-- 0.4 + 4.0 fits the cap of 5.0; counted at its full 2.0 (the old rule), 2.0 + 4.0 would be refused.
+select set_config('t.x2', public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 4.0, 3600)::text, true);
 select isnt(current_setting('t.x2')::uuid, current_setting('t.x1')::uuid, 'index budget: a second reserve for the job is a new reservation, not an idempotent return');
-select is((select state from public.budget_reservations where id = current_setting('t.x1')::uuid), 'expired', 'index budget: the earlier reserved row of the job became expired');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x1')), $q$values ('settled'::text, 0.400000::numeric)$q$,
+  'index budget: attempt 1''s row is settled by the next attempt''s reserve at its window''s embedding_index usage (0.4, not 2.0; other operations, other jobs and earlier usage excluded)');
 select is((select state from public.budget_reservations where id = current_setting('t.x2')::uuid), 'reserved', 'index budget: and the new one is reserved');
--- The previous attempt's row counts: 2.0 (expired) + 2.0 + 1.5 is over the cap, so a third attempt is refused and changes nothing.
-select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 1.5, 3600)$q$, 'RB001', null,
-  'index budget: a further attempt is refused when the expired row, the live row and the new amount together exceed the cap');
-select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'f1a00000-0000-4000-8000-000000000250'), array['expired', 'reserved'], 'index budget: the refused call changed no row (the rollback keeps the live row reserved)');
--- Another job of the bot: 1.0 fits exactly (5.0 of 5.0), one cent more does not.
-select set_config('t.x3', public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 1.0, 600)::text, true);
-select throws_ok($q$select public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 0.01, 600)$q$, 'RB001', null, 'index budget: one cent over the cap (the job''s own earlier row counts) is refused');
+-- A third attempt: attempt 2's row (no usage in its window) would be settled at 0, but 0.4 + 4.7 is over the cap, so the call is refused and changes nothing.
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 4.7, 3600)$q$, 'RB001', null,
+  'index budget: a further attempt is refused when the settled spend and the new amount together exceed the cap');
+select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'f1a00000-0000-4000-8000-000000000250'), array['reserved', 'settled'], 'index budget: the refused call changed no row (the rollback keeps the live row reserved)');
+-- Another job of the bot: 0.6 fits exactly (0.4 + 4.0 + 0.6 = 5.0). A re-reserve of that job settles its first row at 0 and is then one cent over.
+select set_config('t.x3', public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 0.6, 600)::text, true);
+select throws_ok($q$select public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 0.61, 600)$q$, 'RB001', null, 'index budget: one cent over the cap is refused (4.4 + 0.61)');
 -- A reservation of another job can be neither settled nor released.
 select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 1.0)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: settle refuses another job''s reservation');
 select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: release refuses another job''s reservation');
 select throws_ok($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid(), 1.0)$q$, 'RB003', null, 'index budget: settle refuses an unknown reservation');
 select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', gen_random_uuid())$q$, 'RB003', null, 'index budget: release refuses an unknown reservation');
 select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'reserved', 'index budget: the other job''s reservation is untouched by the refusals');
--- A stale worker can settle the expired row of the earlier attempt; the real amount replaces it.
-select lives_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x1')), 'index budget: settle works on an expired reservation of the job');
-select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x1')), $q$values ('settled'::text, 0.500000::numeric)$q$, 'index budget: the row is settled with the actual amount');
-select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: a settled reservation cannot be settled again');
-select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: a settled reservation cannot be released');
-select lives_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x2')), 'index budget: release gives back the live reservation');
-select is((select state from public.budget_reservations where id = current_setting('t.x2')::uuid), 'released', 'index budget: the row is released');
-select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a released reservation cannot be released again');
-select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a released reservation cannot be settled');
--- Spend now: settled 0.5 + the other job's 1.0 = 1.5, so 3.5 fits exactly and 3.51 does not.
-select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: released spend is free again but settled and live spend still count (3.51 over)');
--- A job reservation still 'reserved' but past its expires_at keeps counting (a stale worker can still settle it).
--- Spend is 1.5 (settled 0.5 + the other job's 1.0), so 3.5 is the room; push the other job's row past its expiry.
-update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.x3')::uuid;
-select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'reserved', 'index budget: the other job''s row is still reserved but past expires_at');
-select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: a job row reserved past expires_at still counts (3.51 over)');
+-- Attempt 1's row is settled already: neither settle nor release can touch it again.
+select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: a row settled by the next reserve cannot be settled again');
+select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x1')), 'RB003', null, 'index budget: and cannot be released');
+-- settle is never below the usage recorded in the row's window (review P6-R5 #2): 0.3 recorded, the holder says 0.1.
+reset role;
+insert into public.usage_events (bot_id, job_id, operation, estimated_cost, created_at) values ('b5000000-0000-4000-8000-000000000250', 'f1a00000-0000-4000-8000-000000000250', 'embedding_index', 0.3, now());
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select lives_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.1)$q$, current_setting('t.x2')), 'index budget: the holder settles its live row');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x2')), $q$values ('settled'::text, 0.300000::numeric)$q$, 'index budget: settled at the window''s recorded usage (0.3) when the holder reports less (0.1)');
+select throws_ok(format($q$select public.settle_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a settled reservation cannot be settled again');
+select throws_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x2')), 'RB003', null, 'index budget: a settled reservation cannot be released');
+-- release with usage in the row's window settles at it instead (a stale worker's batch is real spend); without usage it releases.
+select set_config('t.x4', public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 0.5, 3600)::text, true);
+reset role;
+update public.budget_reservations set created_at = now() + interval '1 minute' where id = current_setting('t.x4')::uuid;
+insert into public.usage_events (bot_id, job_id, operation, estimated_cost, created_at) values ('b5000000-0000-4000-8000-000000000250', 'f1a00000-0000-4000-8000-000000000250', 'embedding_index', 0.2, now() + interval '2 minutes');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select lives_ok(format($q$select public.release_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x4')), 'index budget: release of a row with recorded usage succeeds');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x4')), $q$values ('settled'::text, 0.200000::numeric)$q$, 'index budget: and settles it at the usage recorded since it was made (0.2; earlier usage excluded)');
+select lives_ok(format($q$select public.release_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x3')), 'index budget: release gives back a live reservation with no usage');
+select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'released', 'index budget: the row is released');
+select throws_ok(format($q$select public.release_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', %L)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: a released reservation cannot be released again');
+select throws_ok(format($q$select public.settle_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', %L, 0.5)$q$, current_setting('t.x3')), 'RB003', null, 'index budget: a released reservation cannot be settled');
+-- Spend now: settled 0.4 + 0.3 + 0.2 = 0.9, so 4.1 is the room and 4.11 is over.
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 4.11, 3600)$q$, 'RB001', null, 'index budget: released spend is free again but settled spend still counts (4.11 over)');
+-- A job reservation still 'reserved' but past its expires_at keeps counting (its holder may still settle it; an orphaned one is settled by the sweep).
+-- Another job's live row of 1.0: spend 1.9, room 3.1; push it past its expiry.
+select set_config('t.x6', public.reserve_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', 'e2a00000-0000-4000-8000-000000000250', 1.0, 600)::text, true);
+update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.x6')::uuid;
+select is((select state from public.budget_reservations where id = current_setting('t.x6')::uuid), 'reserved', 'index budget: the other job''s row is still reserved but past expires_at');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.11, 3600)$q$, 'RB001', null, 'index budget: a job row reserved past expires_at still counts (3.11 over)');
 -- After the sweep marks it expired it still counts.
 select cmp_ok(public.expire_stale_budget_reservations(100), '>=', 1, 'index budget: the sweep expires at least the stale job row');
-select is((select state from public.budget_reservations where id = current_setting('t.x3')::uuid), 'expired', 'index budget: the other job''s row is now expired');
-select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.51, 3600)$q$, 'RB001', null, 'index budget: the same row, swept to expired, still counts (3.51 over)');
-select isnt(public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.5, 3600), null, 'index budget: 3.5 fits the cap exactly');
+select is((select state from public.budget_reservations where id = current_setting('t.x6')::uuid), 'expired', 'index budget: the other job''s row is now expired');
+select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.11, 3600)$q$, 'RB001', null, 'index budget: the same row, swept to expired, still counts (3.11 over)');
+select isnt(public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 3.1, 3600), null, 'index budget: 3.1 fits the cap exactly');
+-- The holder can still settle its own row after the expiry sweep marked it 'expired' (P6-R6: this path had lost its test).
+select lives_ok(format($q$select public.settle_index_budget('f2a00000-0000-4000-8000-000000000250', 'w1', %L, 0.2)$q$, current_setting('t.x6')), 'index budget: the holder settles its own row that the sweep marked expired');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.x6')), $q$values ('settled'::text, 0.200000::numeric)$q$, 'index budget: at the holder''s amount (no usage in its window)');
 -- Argument checks.
 select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', 0, 3600)$q$, '22023', null, 'index budget: amount 0 -> 22023');
 select throws_ok($q$select public.reserve_index_budget('f1a00000-0000-4000-8000-000000000250', 'w1', 'e1a00000-0000-4000-8000-000000000250', null, 3600)$q$, '22023', null, 'index budget: null amount -> 22023');
@@ -645,7 +679,7 @@ select throws_ok($q$select public.release_index_budget('f1a00000-0000-4000-8000-
 -- The disabled bot: indexing is still allowed, because knowledge is indexed before a bot is enabled.
 select lives_ok($q$select public.reserve_index_budget('f6a00000-0000-4000-8000-000000000250', 'w1', 'e6a00000-0000-4000-8000-000000000250', 1.0, 3600)$q$, 'index budget: a disabled bot can still reserve for indexing (knowledge goes in before launch)');
 select is((select count(*)::int from public.budget_reservations where bot_id = 'b6000000-0000-4000-8000-000000000250' and state = 'reserved'), 1, 'index budget: the disabled bot''s indexing reservation exists');
--- reserve_request_budget counts the indexing job's row (3.0 of the 5.0 cap) in every state a stale worker can still settle.
+-- reserve_request_budget counts the indexing job's row (3.0 of the 5.0 cap) in every state its holder can still settle (an orphaned row is settled by settle_orphaned_index_reservations).
 -- A chat reserve of 2.5 would make 5.5, so it is refused; 2.0 fits exactly.
 select throws_ok($q$select public.reserve_request_budget('b7000000-0000-4000-8000-000000000250', 'cb1a0000-0000-4000-8000-000000000250', 2.5, 600)$q$, 'RB001', null, 'chat budget: a live job reservation counts (2.5 over)');
 update public.budget_reservations set expires_at = now() - interval '1 minute' where id = 'ca2a0000-0000-4000-8000-000000000250';
@@ -763,6 +797,214 @@ select is((select count(*)::int from public.document_chunks where document_versi
 select is((select count(*)::int from public.document_chunks where document_version_id in ('0c3a0000-0000-4000-8000-000000000250', '0c4a0000-0000-4000-8000-000000000250', '0c5a0000-0000-4000-8000-000000000250')), 3, 'prune: the active (ready), in-progress (embedding) and failed versions keep their chunks');
 select is((select count(*)::int from public.document_versions where document_id = 'dba00000-0000-4000-8000-000000000250'), 5, 'prune: version rows are kept');
 
+-- ===== settle_orphaned_index_reservations (P6-D5) =====
+-- Fixtures (ids end in 000000000250): bots b8 (direct reservation and usage rows) and b9 (cap 5.0, real fence). Jobs 5a0000NN,
+-- reservations 5b0000NN. Rows are inserted with explicit created_at so each job's windows are exact.
+-- Jobs: 01 running, two rows (lost lease); 02 running, only an expired row; 03 failed (dead-lettered); 04 running, three
+-- rows (two windows plus the newest); 05 queued, no usage; 06 succeeded; 07 failed with released and settled rows;
+-- 08 failed, usage above the reservation; 09 running, two rows with the same created_at; 0a failed, usage sum above
+-- numeric(14,6); 0b running, usage only (another job's usage); 0c running, 'reserved' newest row past expires_at.
+-- Orphans expected: A1 (5b..01), C1 (05), D1 (06), D2 (07), E1 (09), F1 (0a), G1 (0d), H1 (a1), K1 (0e) and R1 (below).
+reset role;
+insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions, enabled) values
+  ('b8000000-0000-4000-8000-000000000250', 'p6-d5-direct', 'x', array['en'], 'm', 1536, true),
+  ('b9000000-0000-4000-8000-000000000250', 'p6-d5-cap',    'x', array['en'], 'm', 1536, true);
+insert into public.client_settings (bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy) values
+  ('b8000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}'),
+  ('b9000000-0000-4000-8000-000000000250', array['https://e.test'], '{}', '{"daily_cap_usd": 5}', '{}', '{"max_bytes": 1000, "max_pages": 50}', '{}', '{}');
+-- Any orphan that earlier sections or an earlier run left in the local database goes first, so the counts below are exact.
+select lives_ok($q$select public.settle_orphaned_index_reservations(1000)$q$, 'orphans: a first sweep clears whatever earlier sections left');
+
+insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until)
+  select x.j::uuid, 'index_document', '{}', x.st, 1, 3,
+         case when x.st = 'running' then 'w1' end, case when x.st = 'running' then now() + interval '1 hour' end
+    from (values
+      ('5a000001-0000-4000-8000-000000000250', 'running'),   ('5a000002-0000-4000-8000-000000000250', 'running'),
+      ('5a000003-0000-4000-8000-000000000250', 'failed'),    ('5a000004-0000-4000-8000-000000000250', 'running'),
+      ('5a000005-0000-4000-8000-000000000250', 'queued'),    ('5a000006-0000-4000-8000-000000000250', 'succeeded'),
+      ('5a000007-0000-4000-8000-000000000250', 'failed'),    ('5a000008-0000-4000-8000-000000000250', 'failed'),
+      ('5a000009-0000-4000-8000-000000000250', 'running'),   ('5a00000a-0000-4000-8000-000000000250', 'failed'),
+      ('5a00000b-0000-4000-8000-000000000250', 'running'),   ('5a00000c-0000-4000-8000-000000000250', 'running')) x(j, st);
+insert into public.budget_reservations (id, bot_id, job_id, amount, state, expires_at, created_at)
+  select x.id::uuid, 'b8000000-0000-4000-8000-000000000250', nullif(x.j, '')::uuid, x.amt, x.st,
+         case when x.past then now() - interval '1 minute' else now() + interval '1 hour' end, now() - x.age::interval
+    from (values
+      ('5b000001-0000-4000-8000-000000000250', '5a000001-0000-4000-8000-000000000250', 2.0, 'expired',  true,  '3 hours'),
+      ('5b000002-0000-4000-8000-000000000250', '5a000001-0000-4000-8000-000000000250', 2.0, 'reserved', false, '1 hour'),
+      ('5b000003-0000-4000-8000-000000000250', '5a000002-0000-4000-8000-000000000250', 1.0, 'expired',  true,  '2 hours'),
+      ('5b000004-0000-4000-8000-000000000250', '5a00000c-0000-4000-8000-000000000250', 1.0, 'reserved', true,  '2 hours'),
+      ('5b000005-0000-4000-8000-000000000250', '5a000003-0000-4000-8000-000000000250', 1.5, 'expired',  true,  '4 hours'),
+      ('5b000006-0000-4000-8000-000000000250', '5a000004-0000-4000-8000-000000000250', 1.0, 'expired',  true,  '5 hours'),
+      ('5b000007-0000-4000-8000-000000000250', '5a000004-0000-4000-8000-000000000250', 1.0, 'expired',  true,  '150 minutes'),
+      ('5b000008-0000-4000-8000-000000000250', '5a000004-0000-4000-8000-000000000250', 1.0, 'reserved', false, '1 hour'),
+      ('5b000009-0000-4000-8000-000000000250', '5a000005-0000-4000-8000-000000000250', 2.0, 'reserved', false, '2 hours'),
+      ('5b00000a-0000-4000-8000-000000000250', '5a000006-0000-4000-8000-000000000250', 0.5, 'reserved', false, '2 hours'),
+      ('5b00000b-0000-4000-8000-000000000250', '5a000007-0000-4000-8000-000000000250', 1.0, 'released', false, '2 hours'),
+      ('5b00000c-0000-4000-8000-000000000250', '5a000007-0000-4000-8000-000000000250', 2.0, 'settled',  false, '2 hours'),
+      ('5b00000d-0000-4000-8000-000000000250', '5a000008-0000-4000-8000-000000000250', 0.5, 'reserved', false, '2 hours'),
+      ('5b0000a1-0000-4000-8000-000000000250', '5a000009-0000-4000-8000-000000000250', 1.0, 'expired',  true,  '90 minutes'),
+      ('5b0000a2-0000-4000-8000-000000000250', '5a000009-0000-4000-8000-000000000250', 1.0, 'reserved', false, '90 minutes'),
+      ('5b00000e-0000-4000-8000-000000000250', '5a00000a-0000-4000-8000-000000000250', 1.0, 'expired',  true,  '2 hours'),
+      ('5b00000f-0000-4000-8000-000000000250', '',                                    1.0, 'expired',  true,  '2 hours')) x(id, j, amt, st, past, age);
+-- Usage: (job, operation, cost, age). A1 window = [-3h, -1h): 0.3 + 0.7 (the chat row, the row before the window and
+-- the other job's row are not counted); A2 (newest) window starts at -1h.
+insert into public.usage_events (bot_id, job_id, provider, model, operation, estimated_cost, created_at)
+  select 'b8000000-0000-4000-8000-000000000250', x.j::uuid, 'p', 'm', x.op, x.cost, now() - x.age::interval
+    from (values
+      ('5a000001-0000-4000-8000-000000000250', 'embedding_index', 5.0,  '4 hours'),
+      ('5a000001-0000-4000-8000-000000000250', 'embedding_index', 0.3,  '150 minutes'),
+      ('5a000001-0000-4000-8000-000000000250', 'embedding_index', 0.7,  '2 hours'),
+      ('5a000001-0000-4000-8000-000000000250', 'chat',            9.0,  '2 hours'),
+      ('5a000001-0000-4000-8000-000000000250', 'embedding_index', 0.2,  '30 minutes'),
+      ('5a00000b-0000-4000-8000-000000000250', 'embedding_index', 8.0,  '2 hours'),
+      ('5a000003-0000-4000-8000-000000000250', 'embedding_index', 0.25, '3 hours'),
+      ('5a000004-0000-4000-8000-000000000250', 'embedding_index', 0.1,  '4 hours'),
+      ('5a000004-0000-4000-8000-000000000250', 'embedding_index', 0.2,  '210 minutes'),
+      ('5a000004-0000-4000-8000-000000000250', 'embedding_index', 0.4,  '2 hours'),
+      ('5a000004-0000-4000-8000-000000000250', 'embedding_index', 0.8,  '30 minutes'),
+      ('5a000006-0000-4000-8000-000000000250', 'embedding_index', 0.35, '90 minutes'),
+      ('5a000008-0000-4000-8000-000000000250', 'embedding_index', 0.9,  '1 hour'),
+      ('5a000009-0000-4000-8000-000000000250', 'embedding_index', 0.6,  '90 minutes'),
+      ('5a00000a-0000-4000-8000-000000000250', 'embedding_index', 99999999.0, '1 hour'),
+      ('5a00000a-0000-4000-8000-000000000250', 'embedding_index', 99999999.0, '1 hour')) x(j, op, cost, age);
+
+-- The cap case (bot b9, cap 5.0), through the real functions: job 1 reserves 3.0, its worker shuts down and releases the
+-- lease (the reservation stays 'reserved'), and the retry of another job of the bot needs 3.0 more.
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('d1b00000-0000-4000-8000-000000000250', 'b9000000-0000-4000-8000-000000000250', 'd1b', 'indexing', 'public_answer'),
+  ('d2b00000-0000-4000-8000-000000000250', 'b9000000-0000-4000-8000-000000000250', 'd2b', 'indexing', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status) values
+  ('e1b00000-0000-4000-8000-000000000250', 'd1b00000-0000-4000-8000-000000000250', 1, 'b9000000-0000-4000-8000-000000000250/d1b00000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt', 'text/plain', 100, 'embedding'),
+  ('e2b00000-0000-4000-8000-000000000250', 'd2b00000-0000-4000-8000-000000000250', 1, 'b9000000-0000-4000-8000-000000000250/d2b00000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt', 'text/plain', 100, 'embedding');
+insert into public.jobs (id, type, payload, state, attempts, max_attempts, locked_by, locked_until) values
+  ('5a0000b1-0000-4000-8000-000000000250', 'index_document', '{"bot_id":"b9000000-0000-4000-8000-000000000250","document_id":"d1b00000-0000-4000-8000-000000000250","version_id":"e1b00000-0000-4000-8000-000000000250"}', 'running', 1, 3, 'w1', now() + interval '1 hour'),
+  ('5a0000b2-0000-4000-8000-000000000250', 'index_document', '{"bot_id":"b9000000-0000-4000-8000-000000000250","document_id":"d2b00000-0000-4000-8000-000000000250","version_id":"e2b00000-0000-4000-8000-000000000250"}', 'running', 1, 3, 'w1', now() + interval '1 hour');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
+select set_config('t.r1', public.reserve_index_budget('5a0000b1-0000-4000-8000-000000000250', 'w1', 'e1b00000-0000-4000-8000-000000000250', 3.0, 3600)::text, true);
+select is(public.release_job_lease('5a0000b1-0000-4000-8000-000000000250', 'w1'), true, 'orphans: the worker of job 1 shuts down and releases its lease');
+select is((select state from public.budget_reservations where id = current_setting('t.r1')::uuid), 'reserved', 'orphans: its reservation is still reserved (release_job_lease touches only the job)');
+select throws_ok(format($q$select public.settle_index_budget('5a0000b1-0000-4000-8000-000000000250', 'w1', %L, 0.4)$q$, current_setting('t.r1')), 'RB013', null, 'orphans: the old holder cannot settle it any more (the fence)');
+select throws_ok($q$select public.reserve_index_budget('5a0000b2-0000-4000-8000-000000000250', 'w1', 'e2b00000-0000-4000-8000-000000000250', 3.0, 3600)$q$, 'RB001', null, 'orphans: before the sweep the old 3.0 still counts and the next job is refused (3.0 + 3.0 over 5.0)');
+-- Real usage of job 1, written right after its provider answer: 0.4 (created now, the same instant as the reservation).
+select isnt(public.record_usage_event('b9000000-0000-4000-8000-000000000250', '5a0000b1-0000-4000-8000-000000000250', 'p', 'm', 'embedding_index', 10, 0.4, 5), null, 'orphans: job 1 recorded 0.4 of usage');
+
+-- Argument checks.
+select throws_ok($q$select public.settle_orphaned_index_reservations(0)$q$, '22023', null, 'orphans: batch 0 -> 22023');
+select throws_ok($q$select public.settle_orphaned_index_reservations(1001)$q$, '22023', null, 'orphans: batch 1001 -> 22023');
+select throws_ok($q$select public.settle_orphaned_index_reservations(null)$q$, '22023', null, 'orphans: null batch -> 22023');
+select throws_ok($q$select public.settle_orphaned_index_reservations(-1)$q$, '22023', null, 'orphans: negative batch -> 22023');
+select is((select count(*)::int from public.budget_reservations where state in ('reserved', 'expired') and bot_id = 'b8000000-0000-4000-8000-000000000250'), 15, 'orphans: the refused calls changed nothing (15 rows of bot b8 still reserved or expired)');
+
+-- Batch: the two oldest orphans (D1 at -5h, C1 at -4h) first.
+select is(public.settle_orphaned_index_reservations(2), 2, 'orphans: a batch of 2 settles 2 rows');
+select results_eq($q$select id, state, amount from public.budget_reservations where id in ('5b000005-0000-4000-8000-000000000250', '5b000006-0000-4000-8000-000000000250') order by id$q$,
+  $q$values ('5b000005-0000-4000-8000-000000000250'::uuid, 'settled'::text, 0.250000::numeric), ('5b000006-0000-4000-8000-000000000250', 'settled', 0.300000)$q$,
+  'orphans: the oldest two (D1, C1) are settled at the usage of their windows (the dead-lettered job: 0.25; D1: 0.1 + 0.2)');
+select is((select state from public.budget_reservations where id = '5b000001-0000-4000-8000-000000000250'), 'expired', 'orphans: a later orphan (A1) waits for the next call');
+select throws_ok($q$select public.reserve_index_budget('5a0000b2-0000-4000-8000-000000000250', 'w1', 'e2b00000-0000-4000-8000-000000000250', 3.0, 3600)$q$, 'RB001', null, 'orphans: the batch did not reach job 1 yet, so the next job is still refused');
+
+select is(public.settle_orphaned_index_reservations(1000), 8, 'orphans: the next call settles the other eight (A1, D2, E1, F1, G1, H1, K1 and job 1''s row)');
+
+-- Lost lease: A1 settled with the usage of [-3h, -1h) only; the newest row A2 untouched even though a stale worker may still be writing.
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b000001-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 1.000000::numeric)$q$,
+  'lost lease: the older row is settled at 0.3 + 0.7 (chat usage, usage before the window and another job''s usage are not counted)');
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b000002-0000-4000-8000-000000000250'$q$, $q$values ('reserved'::text, 2.000000::numeric)$q$,
+  'lost lease: the newest row of the running job is untouched');
+-- A running job's only row, whatever its state or expires_at.
+select results_eq($q$select id, state, amount from public.budget_reservations where id in ('5b000003-0000-4000-8000-000000000250', '5b000004-0000-4000-8000-000000000250') order by id$q$,
+  $q$values ('5b000003-0000-4000-8000-000000000250'::uuid, 'expired'::text, 1.000000::numeric), ('5b000004-0000-4000-8000-000000000250', 'reserved', 1.000000)$q$,
+  'running job: its only row is untouched, expired or reserved past expires_at');
+-- Dead-lettered (failed) job.
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b000005-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 0.250000::numeric)$q$, 'dead-lettered job: its row is settled at its usage');
+-- Two windows of one job.
+select results_eq($q$select id, state, amount from public.budget_reservations where job_id = '5a000004-0000-4000-8000-000000000250' order by created_at$q$,
+  $q$values ('5b000006-0000-4000-8000-000000000250'::uuid, 'settled'::text, 0.300000::numeric), ('5b000007-0000-4000-8000-000000000250', 'settled', 0.400000), ('5b000008-0000-4000-8000-000000000250', 'reserved', 1.000000)$q$,
+  'two windows: each row gets only its own window (0.1 + 0.2; 0.4); the newest row of the running job (usage 0.8 after it) is untouched');
+-- Zero usage, a queued job.
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b000009-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 0.000000::numeric)$q$, 'zero usage: a queued job''s row is settled at 0');
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b00000a-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 0.350000::numeric)$q$, 'finished job: a succeeded job''s leftover row is settled at its usage');
+-- Rows that are not 'reserved' or 'expired' are never touched, nor rows without a job.
+select results_eq($q$select id, state, amount from public.budget_reservations where id in ('5b00000b-0000-4000-8000-000000000250', '5b00000c-0000-4000-8000-000000000250', '5b00000f-0000-4000-8000-000000000250') order by id$q$,
+  $q$values ('5b00000b-0000-4000-8000-000000000250'::uuid, 'released'::text, 1.000000::numeric), ('5b00000c-0000-4000-8000-000000000250', 'settled', 2.000000), ('5b00000f-0000-4000-8000-000000000250', 'expired', 1.000000)$q$,
+  'untouched: released and settled rows and a row without a job keep state and amount');
+-- Real spend above the reservation is kept.
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b00000d-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 0.900000::numeric)$q$, 'overspend: usage of 0.9 against a 0.5 reservation settles at 0.9');
+-- Same created_at: the lower id is the older one, the later id is the newest row of the running job.
+select results_eq($q$select id, state, amount from public.budget_reservations where job_id = '5a000009-0000-4000-8000-000000000250' order by id$q$,
+  $q$values ('5b0000a1-0000-4000-8000-000000000250'::uuid, 'settled'::text, 0.000000::numeric), ('5b0000a2-0000-4000-8000-000000000250', 'reserved', 1.000000)$q$,
+  'tie: with equal created_at the lower id is the older row (empty window, 0) and the higher id stays reserved');
+select results_eq($q$select state, amount from public.budget_reservations where id = '5b00000e-0000-4000-8000-000000000250'$q$, $q$values ('settled'::text, 99999999.999999::numeric)$q$, 'clamp: a usage sum above numeric(14,6) is held to its largest value instead of failing');
+
+-- The cap case: the old row now counts 0.4 instead of 3.0, so the retry fits (0.4 + 3.0 = 3.4). A further attempt of
+-- that job would settle its live 3.0 row at its usage (0) first (P6-R5 #1), so the refusal needs 0.4 + 4.7 > 5.0.
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.r1')), $q$values ('settled'::text, 0.400000::numeric)$q$, 'cap: job 1''s row is settled at its real usage 0.4');
+select lives_ok($q$select public.reserve_index_budget('5a0000b2-0000-4000-8000-000000000250', 'w1', 'e2b00000-0000-4000-8000-000000000250', 3.0, 3600)$q$, 'cap: after the sweep the same reservation that was refused with RB001 succeeds');
+select throws_ok($q$select public.reserve_index_budget('5a0000b2-0000-4000-8000-000000000250', 'w1', 'e2b00000-0000-4000-8000-000000000250', 4.7, 3600)$q$, 'RB001', null, 'cap: the settled 0.4 still counts (a further attempt of 4.7 is over 5.0, and the refusal rolls back)');
+select is((select state from public.budget_reservations where job_id = '5a0000b2-0000-4000-8000-000000000250'), 'reserved', 'cap: the running job''s own new row is untouched by the sweep');
+select is((select sum(amount) from public.budget_reservations where bot_id = 'b9000000-0000-4000-8000-000000000250' and state in ('settled', 'reserved')), 3.4::numeric, 'cap: the bot''s counted spend is 3.4');
+
+-- Idempotent.
+select is(public.settle_orphaned_index_reservations(1000), 0, 'orphans: a second sweep settles nothing (0)');
+select is(public.settle_orphaned_index_reservations(1), 0, 'orphans: and neither does a batch of 1');
+select is((select count(*)::int from public.budget_reservations where job_id is not null and state in ('reserved', 'expired')
+             and bot_id in ('b8000000-0000-4000-8000-000000000250', 'b9000000-0000-4000-8000-000000000250')),
+  6, 'orphans: six rows are left reserved or expired, all newest rows of running jobs (A2, B1, B2, D3, H2 and job 2''s)');
+select is((select count(*)::int from public.budget_reservations br where br.job_id is not null and br.state in ('reserved', 'expired')
+             and br.bot_id in ('b8000000-0000-4000-8000-000000000250', 'b9000000-0000-4000-8000-000000000250')
+             and (not exists (select 1 from public.jobs j where j.id = br.job_id and j.state = 'running')
+                  or exists (select 1 from public.budget_reservations n where n.job_id = br.job_id and (n.created_at, n.id) > (br.created_at, br.id)))), 0, 'orphans: none of them is an orphan by the definition');
+-- A holder that arrives after the sweep is told RB003 for the swept row of its own job; the fence refuses a stale one.
+select throws_ok(format($q$select public.settle_index_budget('5a0000b2-0000-4000-8000-000000000250', 'w1', %L, 0.4)$q$, current_setting('t.r1')), 'RB003', null, 'holder after sweep: settling a swept row that is not this job''s is RB003');
+-- The comments that said a stale worker can still settle a reservation are gone from the function bodies.
+select ok((select p.prosrc !~ 'stale worker can still settle' from pg_proc p where p.oid = 'public.reserve_index_budget(uuid,text,uuid,numeric,integer)'::regprocedure), 'comments: reserve_index_budget no longer claims a stale worker can settle');
+select ok((select p.prosrc !~ 'stale worker can still settle' from pg_proc p where p.oid = 'public.reserve_request_budget(uuid,uuid,numeric,integer)'::regprocedure), 'comments: reserve_request_budget no longer claims a stale worker can settle');
+
+-- ===== batch limits hold under a nested-loop plan (P6-D5) =====
+-- delete ... where id in (select ... limit n for update skip locked) can be planned as a nested-loop semi join that
+-- re-runs the subquery for every outer row. Rows the same statement has already deleted are then skipped by the lock,
+-- so each re-run takes the next rows and the batch limit is overrun. The planner picks that plan when its statistics say
+-- the tables are tiny, so these cases force it (no hash or merge join, hash aggregate, materialize or sort: the subquery is then re-run for every outer row) instead of relying on statistics.
+reset role;
+insert into public.documents (id, bot_id, title, status, disclosure_policy, deleted_at) values
+  ('d3b00000-0000-4000-8000-000000000250', 'b8000000-0000-4000-8000-000000000250', 'd3b', 'deleted', 'excluded', now());
+insert into public.documents (id, bot_id, title, status, disclosure_policy) values
+  ('d4b00000-0000-4000-8000-000000000250', 'b8000000-0000-4000-8000-000000000250', 'd4b', 'ready', 'public_answer');
+insert into public.document_versions (id, document_id, version_number, storage_path, media_type, byte_size, status) values
+  ('e3b00000-0000-4000-8000-000000000250', 'd3b00000-0000-4000-8000-000000000250', 1, 'b8000000-0000-4000-8000-000000000250/d3b00000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt', 'text/plain', 100, 'ready'),
+  ('e4b00000-0000-4000-8000-000000000250', 'd4b00000-0000-4000-8000-000000000250', 1, 'b8000000-0000-4000-8000-000000000250/d4b00000-0000-4000-8000-000000000250/a0000000-0000-4000-8000-000000000250/original.txt', 'text/plain', 100, 'superseded');
+insert into public.document_chunks (document_version_id, chunk_index, content, embedding)
+  select v.id, g, 'batch-' || g, (select array_agg(0.1::real) from generate_series(1, 1536))::extensions.vector
+    from (values ('e3b00000-0000-4000-8000-000000000250'::uuid), ('e4b00000-0000-4000-8000-000000000250')) v(id)
+    cross join generate_series(0, 7) g;
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local enable_hashjoin = off;
+set local enable_mergejoin = off;
+set local enable_hashagg = off;
+set local enable_material = off;
+set local enable_sort = off;
+select ok(current_setting('enable_hashjoin') = 'off' and current_setting('enable_mergejoin') = 'off' and current_setting('enable_hashagg') = 'off' and current_setting('enable_material') = 'off' and current_setting('enable_sort') = 'off', 'batch: hash and merge joins, hash aggregates, materialize and sort are off for the cases below (the subquery is re-run per outer row)');
+
+select results_eq($q$select deleted_chunks, done from public.cleanup_document('d3b00000-0000-4000-8000-000000000250', 3)$q$, $q$values (3, false)$q$, 'batch: cleanup_document with a batch of 3 deletes exactly 3 of 8 chunks (nested-loop plan)');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e3b00000-0000-4000-8000-000000000250'), 5, 'batch: and 5 chunks remain');
+select results_eq($q$select deleted_chunks, done from public.cleanup_document('d3b00000-0000-4000-8000-000000000250', 3)$q$, $q$values (3, false)$q$, 'batch: the second call deletes exactly 3 more');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e3b00000-0000-4000-8000-000000000250'), 2, 'batch: and 2 remain');
+select results_eq($q$select deleted_chunks, done from public.cleanup_document('d3b00000-0000-4000-8000-000000000250', 3)$q$, $q$values (2, true)$q$, 'batch: the third call deletes the last 2 and is done');
+
+select is(public.prune_superseded_chunks(3), 3, 'batch: prune_superseded_chunks with a batch of 3 deletes exactly 3 of 8 chunks (nested-loop plan)');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e4b00000-0000-4000-8000-000000000250'), 5, 'batch: and 5 chunks remain');
+select is(public.prune_superseded_chunks(3), 3, 'batch: the second prune deletes exactly 3 more');
+select is((select count(*)::int from public.document_chunks where document_version_id = 'e4b00000-0000-4000-8000-000000000250'), 2, 'batch: and 2 remain');
+select is(public.prune_superseded_chunks(3), 2, 'batch: the third prune deletes the last 2');
+select is(public.prune_superseded_chunks(3), 0, 'batch: and a repeat deletes nothing');
+reset enable_hashjoin;
+reset enable_mergejoin;
+reset enable_hashagg;
+reset enable_material;
+reset enable_sort;
+
 -- ===== grants, lock_timeout, search_path =====
 reset role;
 select is(
@@ -776,9 +1018,10 @@ select is(
                     'public.reset_version_chunks(uuid,text,uuid)'::regprocedure, 'public.reserve_index_budget(uuid,text,uuid,numeric,integer)'::regprocedure,
                     'public.settle_index_budget(uuid,text,uuid,numeric)'::regprocedure, 'public.release_index_budget(uuid,text,uuid)'::regprocedure,
                     'public.fail_orphaned_index_versions(integer)'::regprocedure, 'public.release_job_lease(uuid,text)'::regprocedure,
-                    'public.prune_superseded_chunks(integer)'::regprocedure)
+                    'public.prune_superseded_chunks(integer)'::regprocedure,
+                    'public.settle_orphaned_index_reservations(integer)'::regprocedure)
       and 'lock_timeout=2s' = any (p.proconfig) and 'search_path=""' = any (p.proconfig) and not p.prosecdef),
-  19, 'proconfig: all nineteen functions of migration 012 set lock_timeout = 2s and an empty search_path, and are SECURITY INVOKER');
+  20, 'proconfig: all twenty functions of migration 012 set lock_timeout = 2s and an empty search_path, and are SECURITY INVOKER');
 select is(
   (select count(*)::int from pg_proc p
     where p.oid in ('public.index_job_fence(uuid,text,uuid)'::regprocedure, 'public.get_index_job_context(uuid,text,uuid)'::regprocedure,
@@ -790,15 +1033,17 @@ select is(
                     'public.reset_version_chunks(uuid,text,uuid)'::regprocedure, 'public.reserve_index_budget(uuid,text,uuid,numeric,integer)'::regprocedure,
                     'public.settle_index_budget(uuid,text,uuid,numeric)'::regprocedure, 'public.release_index_budget(uuid,text,uuid)'::regprocedure,
                     'public.fail_orphaned_index_versions(integer)'::regprocedure, 'public.release_job_lease(uuid,text)'::regprocedure,
-                    'public.prune_superseded_chunks(integer)'::regprocedure)
+                    'public.prune_superseded_chunks(integer)'::regprocedure,
+                    'public.settle_orphaned_index_reservations(integer)'::regprocedure)
       and has_function_privilege('service_role', p.oid, 'EXECUTE')
       and not has_function_privilege('anon', p.oid, 'EXECUTE') and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
       and not exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee = 0)),
-  18, 'grants: the eighteen new functions are executable by service_role only (not anon, authenticated or PUBLIC)');
+  19, 'grants: the nineteen new functions are executable by service_role only (not anon, authenticated or PUBLIC)');
 select is(public.schema_version(), 12, 'schema_version: 12');
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the history');
 select ok(has_function_privilege('authenticated', 'public.schema_version()', 'EXECUTE') and not has_function_privilege('anon', 'public.schema_version()', 'EXECUTE'), 'schema_version: the grants of 010 are kept (authenticated yes, anon no)');
 select is((select count(*)::int from pg_indexes where schemaname = 'public' and indexname = 'document_versions_pending_upload_idx'), 1, 'index: the pending-upload age index exists');
+select is((select indexdef from pg_indexes where schemaname = 'public' and indexname = 'budget_reservations_job_created_idx'), 'CREATE INDEX budget_reservations_job_created_idx ON public.budget_reservations USING btree (job_id, created_at) WHERE (job_id IS NOT NULL)', 'index: the (job_id, created_at) index for the orphan sweep exists and is partial on job_id');
 
 set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
@@ -807,6 +1052,7 @@ select throws_ok($q$select * from public.get_index_job_context(gen_random_uuid()
 select throws_ok($q$select * from public.index_job_fence(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'anon: index_job_fence -> permission denied');
 select throws_ok($q$select public.reserve_index_budget(gen_random_uuid(), 'w', gen_random_uuid(), 1, 60)$q$, '42501', null, 'anon: reserve_index_budget -> permission denied');
 select throws_ok($q$select public.release_job_lease(gen_random_uuid(), 'w')$q$, '42501', null, 'anon: release_job_lease -> permission denied');
+select throws_ok($q$select public.settle_orphaned_index_reservations(1)$q$, '42501', null, 'anon: settle_orphaned_index_reservations -> permission denied');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"role":"authenticated"}', true);
@@ -819,6 +1065,7 @@ select throws_ok($q$select public.release_index_budget(gen_random_uuid(), 'w', g
 select throws_ok($q$select public.reset_version_chunks(gen_random_uuid(), 'w', gen_random_uuid())$q$, '42501', null, 'authenticated: reset_version_chunks -> permission denied');
 select throws_ok($q$select public.fail_orphaned_index_versions(1)$q$, '42501', null, 'authenticated: fail_orphaned_index_versions -> permission denied');
 select throws_ok($q$select public.prune_superseded_chunks(1)$q$, '42501', null, 'authenticated: prune_superseded_chunks -> permission denied');
+select throws_ok($q$select public.settle_orphaned_index_reservations(1)$q$, '42501', null, 'authenticated: settle_orphaned_index_reservations -> permission denied');
 reset role;
 
 -- ===== reindex carries the source version's etag and checksum (P6-D1) =====

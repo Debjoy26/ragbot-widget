@@ -26,7 +26,8 @@
 // Each batch's cost (provider token counts when given, else the estimate) is added up and its usage
 // row is recorded right after the provider answered, before the chunks are written (without the
 // job's abort signal, so an abort cannot drop it). A provider request that fails after it was sent
-// (timeout, dropped connection, 5xx) counts its estimated cost as spent. When the total
+// (timeout, dropped connection, 5xx), or whose 2xx answer was unusable (ProviderError.billed),
+// counts its estimated cost as spent. When the total
 // passes BUDGET_OVERRUN_FACTOR times the reservation the job stops: the spend is settled and the
 // version fails BUDGET_EXCEEDED. Otherwise the reservation is settled with the actual cost once all
 // batches are written; on any other failure that is not a lost lease it is settled with the cost
@@ -477,31 +478,39 @@ export function createIndexDocumentHandler(deps: IndexDocumentDeps): JobHandler 
             { taskType: 'document', signal },
           );
         } catch (err) {
-          // A request that was sent and then timed out, dropped mid-response or got a 5xx may
-          // still have been billed. Count its estimate as spent and write its usage row (usage
-          // includes failed attempts), so the failure path settles at least that much instead of
-          // releasing and the ledger agrees with the settled amount. (One batch is one request:
-          // see maxEmbeddingBatchSize.) Rate limits, auth and other 4xx are not billed; a request
-          // refused before sending (a local config or shape error) is not a transient error and
-          // records and counts nothing.
-          if (err instanceof ProviderError && err.kind === 'transient') {
-            const estimatedTokens = slice.reduce(
-              (sum, c) => sum + estimateBudgetTokens(c.content),
-              0,
-            );
-            const estimatedCost = usd(estimatedTokens, price);
+          // A request that may have been billed is counted: its estimate is added to the spend and
+          // a usage row is written (usage includes failed attempts), so the failure path settles at
+          // least that much instead of releasing and the ledger agrees with the settled amount. Two
+          // cases: a transient failure (timeout, dropped connection, 5xx: the request may have been
+          // billed), and any error flagged `billed` (the provider answered 2xx and the answer was
+          // then unusable: oversized, bad JSON, wrong shape or dimensions; it was billed whatever
+          // the kind). (One batch is one request: see maxEmbeddingBatchSize.) Rate limits, auth,
+          // other 4xx and a request refused before sending (a local config or shape error) are not
+          // billed and record and count nothing.
+          if (err instanceof ProviderError && (err.kind === 'transient' || err.billed)) {
+            const failedTokens = slice.reduce((sum, c) => sum + estimateBudgetTokens(c.content), 0);
+            const estimatedCost = usd(failedTokens, price);
+            // Counted before the ledger write: the cap stays fail-closed even if the write fails.
+            // Consequence: a failed write leaves usage_events short of the settled amount (the
+            // ledger may lag the settlement) until the row is reconciled; the money was spent.
             actualCost += estimatedCost;
-            // No abort signal (R-4), as for a completed call.
-            await ctx.db.rpc<unknown>('record_usage_event', {
-              p_bot_id: row.botId,
-              p_job_id: job.id,
-              p_provider: embeddings.provider,
-              p_model: embeddings.model,
-              p_operation: 'embedding_index',
-              p_input_tokens: estimatedTokens,
-              p_estimated_cost: estimatedCost,
-              p_latency_ms: Date.now() - started,
-            });
+            try {
+              // No abort signal (R-4), as for a completed call.
+              await ctx.db.rpc<unknown>('record_usage_event', {
+                p_bot_id: row.botId,
+                p_job_id: job.id,
+                p_provider: embeddings.provider,
+                p_model: embeddings.model,
+                p_operation: 'embedding_index',
+                p_input_tokens: failedTokens,
+                p_estimated_cost: estimatedCost,
+                p_latency_ms: Date.now() - started,
+              });
+            } catch (usageErr) {
+              // The provider error is the failure that matters; a failed ledger write must not mask
+              // it. Log the code only (a message can carry content).
+              log.error('index_usage_record_failed', { code: errorCode(usageErr) });
+            }
           }
           throw err;
         }

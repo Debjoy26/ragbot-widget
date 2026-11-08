@@ -40,14 +40,16 @@ insert into public.jobs (id, type, dedupe_key, payload, state, max_attempts, loc
 update public.bot_profiles set enabled = true where id = 'b1000000-0000-4000-8000-000000000230';
 select set_config('t.r1', public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.5, 3600)::text, true);
 update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.r1')::uuid;
-select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.0, 3600)$q$, 'RB001', null, 'R3-3: an expired job reservation still counts toward the cap');
-update public.budget_reservations set state = 'expired' where id = current_setting('t.r1')::uuid;
-select lives_ok($q$select public.settle_index_budget('c1000000-0000-4000-8000-000000000230', 'w', current_setting('t.r1')::uuid, 0.25)$q$, 'R3-3: a stale worker can settle it');
-select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.0, 3600) is not null, 'R3-3: settling frees the difference');
+-- P6-R5 #1: the next attempt of the same job (the fenced holder) settles the earlier row at its recorded usage (none
+-- here) before the cap check, so 1.0 fits the cap of 2 although 1.5 + 1.0 would not. A row of another job, reserved or
+-- expired, still counts in full: 250 covers that.
+select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 1.0, 3600) is not null, 'R3-3: the next attempt settles the earlier expired row of its job at its usage and fits');
+select results_eq(format($q$select state, amount from public.budget_reservations where id = %L$q$, current_setting('t.r1')), $q$values ('settled'::text, 0.000000::numeric)$q$, 'R3-3: the earlier row is settled at 0 (no usage recorded in its window)');
+select throws_ok(format($q$select public.settle_index_budget('c1000000-0000-4000-8000-000000000230', 'w', %L, 0.25)$q$, current_setting('t.r1')), 'RB003', null, 'R3-3: a settled earlier row cannot be settled again');
 
 update public.budget_reservations set expires_at = now() - interval '1 minute' where job_id = 'c1000000-0000-4000-8000-000000000230' and state = 'reserved';
 select ok(public.reserve_index_budget('c1000000-0000-4000-8000-000000000230', 'w', 'e2000000-0000-4000-8000-000000000230', 0.5, 3600) is not null, 'R3-3: with room under the cap, the next attempt replaces an expired row');
-select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000230'), array['expired', 'reserved', 'settled'], 'R3-3: the replaced row is marked expired');
+select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000230'), array['reserved', 'settled', 'settled'], 'R3-3: the replaced rows are settled, only the newest is reserved');
 
 -- R3-8
 insert into public.documents (id, bot_id, title, status) values

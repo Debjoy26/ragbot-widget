@@ -743,6 +743,136 @@ describe('index_document: partial spend', () => {
   });
 });
 
+// P6-D5 F1 and F4 (review P6-R4): a provider answer that was billed but unusable still counts, and a
+// failing usage write never masks the provider error.
+describe('index_document: billed provider errors (P6-D5)', () => {
+  const billedPermanent = (): ProviderError =>
+    new ProviderError('permanent', 'embedding provider returned an invalid vector', {
+      billed: true,
+    });
+
+  it('a billed permanent error records the estimate, settles (not releases) and fails the version', async () => {
+    const rig = makeRig(SHORT);
+    rig.embed.mockRejectedValueOnce(billedPermanent());
+    await run(rig);
+    const reserved = rig.of('reserve_index_budget')[0]?.args['p_amount'] as number;
+    const usage = rig.of('record_usage_event');
+    expect(usage).toHaveLength(1);
+    const row = usage[0]?.args ?? {};
+    expect(row['p_operation']).toBe('embedding_index');
+    expect(row['p_input_tokens']).toBe(estimateOfChunks(SHORT, 0, 1000));
+    expect(row['p_estimated_cost'] as number).toBeCloseTo(reserved, 10);
+    expect(usage[0]?.signal).toBeUndefined();
+    expect(rig.of('release_index_budget')).toHaveLength(0);
+    expectPartialSpendSettled(rig, reserved);
+    expect(failedWith(rig)).toBe('INDEXING_FAILED');
+    expect(rig.names()).not.toContain('write_document_chunks');
+    expect(rig.names()).not.toContain('activate_version_for_job');
+  });
+
+  it('adds a billed failed batch to the batches already paid for, and the rows sum to the settlement', async () => {
+    const rig = makeRig(longText());
+    rig.ctx = { ...rig.ctx, config: makeConfig({ embeddingBatchSize: 2 }) };
+    rig.embed
+      .mockImplementationOnce((texts: readonly string[]) =>
+        Promise.resolve({ vectors: texts.map(vector), inputTokens: 100 }),
+      )
+      .mockRejectedValueOnce(billedPermanent());
+    await run(rig);
+    const usage = rig.of('record_usage_event');
+    expect(usage).toHaveLength(2);
+    expect(usage[1]?.args['p_input_tokens']).toBe(estimateOfChunks(longText(), 2, 4));
+    const sum = usage.reduce((acc, u) => acc + (u.args['p_estimated_cost'] as number), 0);
+    expect(sum).toBeCloseTo(rig.of('settle_index_budget')[0]?.args['p_actual'] as number, 10);
+    expect(failedWith(rig)).toBe('INDEXING_FAILED');
+  });
+
+  it('a billed transient error (an unreadable 2xx body) still retries and counts once', async () => {
+    const rig = makeRig(SHORT);
+    rig.embed.mockRejectedValueOnce(
+      new ProviderError('transient', 'embedding response is not valid JSON', { billed: true }),
+    );
+    await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+    expect(rig.of('record_usage_event')).toHaveLength(1);
+    expect(rig.of('release_index_budget')).toHaveLength(0);
+    expect(rig.of('settle_index_budget')).toHaveLength(1);
+  });
+
+  it.each([
+    ['auth', new ProviderError('auth', 'embedding provider returned HTTP 401')],
+    ['a permanent 4xx', new ProviderError('permanent', 'embedding provider returned HTTP 400')],
+    ['billing', new ProviderError('billing', 'embedding provider returned HTTP 402')],
+    [
+      'an explicitly unbilled permanent error',
+      new ProviderError('permanent', 'x', { billed: false }),
+    ],
+  ])('%s that is not billed releases and records no usage', async (_n, failure) => {
+    const rig = makeRig(SHORT);
+    rig.embed.mockRejectedValueOnce(failure);
+    await run(rig);
+    expect(rig.of('record_usage_event')).toHaveLength(0);
+    expect(rig.of('settle_index_budget')).toHaveLength(0);
+    expect(rig.of('release_index_budget')).toHaveLength(1);
+    expect(failedWith(rig)).toBe('INDEXING_FAILED');
+  });
+
+  describe('a failing usage write does not mask the provider error (F4)', () => {
+    const SECRET_MESSAGE = `ledger down ${SENTINEL} ${FAKE_KEY}`;
+
+    it('a billed permanent error is still handled as itself; the spend is still settled', async () => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockRejectedValueOnce(billedPermanent());
+      rig.responders['record_usage_event'] = () => {
+        throw new Error(SECRET_MESSAGE);
+      };
+      await run(rig); // resolves: the version is failed as for the provider error
+      expect(failedWith(rig)).toBe('INDEXING_FAILED');
+      expect(rig.of('record_usage_event')).toHaveLength(1);
+      // The money was spent: the cap stays fail-closed even though the ledger row is missing.
+      const reserved = rig.of('reserve_index_budget')[0]?.args['p_amount'] as number;
+      expectPartialSpendSettled(rig, reserved);
+      expect(rig.of('release_index_budget')).toHaveLength(0);
+    });
+
+    it('a transient error still throws RetryJobError(provider_transient), not the database error', async () => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockRejectedValueOnce(
+        new ProviderError('transient', 'embedding request timed out'),
+      );
+      rig.responders['record_usage_event'] = () => {
+        throw new DbError('network');
+      };
+      const err: unknown = await run(rig).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(RetryJobError);
+      expect((err as RetryJobError).code).toBe('provider_transient');
+      expect(rig.of('settle_index_budget')).toHaveLength(1);
+    });
+
+    it('logs only a code for the failed write, never its message', async () => {
+      const rig = makeRig(SHORT);
+      rig.embed.mockRejectedValueOnce(billedPermanent());
+      rig.responders['record_usage_event'] = () => {
+        throw new Error(SECRET_MESSAGE);
+      };
+      await run(rig);
+      const lines = rig.logs.map((l) => JSON.parse(l) as Record<string, unknown>);
+      const failed = lines.filter(
+        (l) =>
+          l['msg'] === 'index_usage_record_failed' || l['event'] === 'index_usage_record_failed',
+      );
+      expect(failed).toHaveLength(1);
+      expect(typeof failed[0]?.['code']).toBe('string');
+      const all = rig.logs.join('\n');
+      expect(all).not.toContain(SENTINEL);
+      expect(all).not.toContain(FAKE_KEY);
+      expect(all).not.toContain('ledger down');
+    });
+  });
+});
+
 describe('index_document: budget (reserve, settle, release through the *_index_budget functions)', () => {
   const OLD_NAMES = /reserve_job_budget|settle_budget_reservation|release_budget_reservation/;
 

@@ -270,15 +270,26 @@ export class ProviderError extends Error {
   override readonly name = 'ProviderError';
   readonly kind: ProviderErrorKind;
   readonly retryAfterSeconds: number | null;
+  /**
+   * True when the provider accepted the request (a 2xx response) and the failure came after, so
+   * the request was billed whatever the kind. Callers that account for spend must count it. It
+   * has no bearing on isRetryable().
+   */
+  readonly billed: boolean;
 
   constructor(
     kind: ProviderErrorKind,
     message: string,
-    options: { readonly retryAfterSeconds?: number; readonly cause?: unknown } = {},
+    options: {
+      readonly retryAfterSeconds?: number;
+      readonly cause?: unknown;
+      readonly billed?: boolean;
+    } = {},
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.kind = kind;
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+    this.billed = options.billed ?? false;
   }
 
   /** auth, billing and permanent errors are never retryable. */

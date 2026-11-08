@@ -1324,12 +1324,13 @@ describe('D. debug cycle P6-D2', () => {
   }
 
   t(
-    'D3 lease lost after a paid batch, then the next attempt: the first attempt counts toward the day, so a cap that fits one attempt but not two refuses the second with BUDGET_EXCEEDED',
+    "D3 lease lost after a paid batch, then the next attempt: the first attempt's paid batch counts toward the day, so a cap that fits exactly one reservation refuses the second with BUDGET_EXCEEDED",
     async () => {
       const bot = await mkBot({ indexMaxAttempts: 3 });
       const up = await bot.register({ bytes: utf8(makeText('d3')), mediaType: 'text/plain' });
-      // The cap is 1.5 times one attempt's reservation.
-      const { job } = await lostLeaseAfterPaidBatch(bot, up, 1.5);
+      // The cap is exactly one attempt's reservation: the paid batch plus a second reservation does not fit.
+      // (P6-R5 #1 changed this case from a cap of 1.5 reservations, which now fits: see the control below.)
+      const { job } = await lostLeaseAfterPaidBatch(bot, up, 1);
 
       const v = await bot.waitVersion(up.versionId, ['failed', 'ready'], 40_000);
       expect(v.status).toBe('failed');
@@ -1339,7 +1340,8 @@ describe('D. debug cycle P6-D2', () => {
       expect(done.attempts).toBe(2);
       expect(backend.calls).toBe(1); // the second attempt made no provider call
       const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
-      // The first attempt's reservation was neither released nor reused: it still counts.
+      // The refused reserve was rolled back, so the first attempt's reservation is untouched and still counts
+      // in full until maintenance settles it.
       expect(reservations).toHaveLength(1);
       expect(['reserved', 'expired']).toContain(reservations[0]?.state);
       expect(await bot.chunkIndexes(up.versionId)).toEqual([]);
@@ -1348,11 +1350,12 @@ describe('D. debug cycle P6-D2', () => {
   );
 
   t(
-    'D3 control: with a cap that fits both attempts the second attempt indexes; the first reservation is expired (still counting) and the second is settled',
+    "D3 control (P6-R5 #1): with a cap of 1.5 reservations the second attempt indexes, because its reserve settles the first attempt's row at the batch it paid for instead of counting the whole reservation",
     async () => {
       const bot = await mkBot({ indexMaxAttempts: 3 });
       const up = await bot.register({ bytes: utf8(makeText('d3c')), mediaType: 'text/plain' });
-      const { job } = await lostLeaseAfterPaidBatch(bot, up, 3);
+      // Before P6-R5 #1 the first row counted in full (1 + 1 > 1.5) and this attempt failed BUDGET_EXCEEDED.
+      const { job, reserved } = await lostLeaseAfterPaidBatch(bot, up, 1.5);
 
       const v = await bot.waitVersion(up.versionId, ['failed', 'ready'], 40_000);
       expect(v.status).toBe('ready');
@@ -1360,7 +1363,11 @@ describe('D. debug cycle P6-D2', () => {
       expect(done.state).toBe('succeeded');
       expect(done.attempts).toBe(2);
       const reservations = (await bot.reservations()).filter((r) => r.job_id === job.id);
-      expect(reservations.map((r) => r.state)).toEqual(['expired', 'settled']);
+      expect(reservations.map((r) => r.state)).toEqual(['settled', 'settled']);
+      // The first attempt's row counts what it paid (one batch), not its whole reservation.
+      const firstAmount = Number(reservations[0]?.amount); // ordered by created_at
+      expect(firstAmount).toBeGreaterThan(0);
+      expect(firstAmount).toBeLessThan(reserved);
       // Both attempts paid the provider for the first batch: two usage rows for it, none lost.
       const usage = (await bot.usageEvents()).filter((u) => u.operation === 'embedding_index');
       const n = (await bot.chunkIndexes(up.versionId)).length;

@@ -635,6 +635,7 @@ as $$
 #variable_conflict use_column
 declare
   v_deleted timestamptz;
+  v_ids     uuid[];
   v_n       integer;
   v_left    boolean;
 begin
@@ -649,14 +650,18 @@ begin
     raise exception 'cleanup_document: the document is not deleted' using errcode = 'RB030';
   end if;
 
-  delete from public.document_chunks c
-   where c.id in (
-     select x.id
-       from public.document_chunks x
-       join public.document_versions v on v.id = x.document_version_id
-      where v.document_id = p_document_id
-      limit p_batch
-      for update of x skip locked);
+  -- The ids are chosen first, into an array, and deleted by a separate statement. "delete ... where id in (select ...
+  -- limit n for update skip locked)" can be planned as a nested-loop semi join that re-runs the subquery for every outer
+  -- row; the lock then skips rows this statement has already deleted, so each re-run takes new rows and the batch
+  -- limit is overrun (all chunks go).
+  select coalesce(array_agg(y.id), '{}'::uuid[]) into v_ids
+    from (select x.id
+            from public.document_chunks x
+            join public.document_versions v on v.id = x.document_version_id
+           where v.document_id = p_document_id
+           limit p_batch
+             for update of x skip locked) y;
+  delete from public.document_chunks c where c.id = any (v_ids);
   get diagnostics v_n = row_count;
 
   select exists (
@@ -792,15 +797,17 @@ $$;
 -- ---------------------------------------------------------------------------
 -- The index budget: the worker's reservation, settlement and release, keyed by the running index_document job.
 -- Replaces reserve_job_budget of 009 (dropped below); settle and release of 004 are not used for jobs any more.
--- All three are fenced. Lock order: the fence first (document, job), then bot_profiles (SHARE, reserve only), then
--- client_settings (UPDATE) as reserve_request_budget does, then the reservation row.
+-- All three are fenced. Lock order: the fence first (document, job), then client_settings (UPDATE) as
+-- reserve_request_budget does, then the job's reservation rows.
 --
--- reserve_index_budget: EVERY call is a new attempt. A still-'reserved' row of the job is marked 'expired' first
--- and keeps counting toward the daily cap (with settled rows, every job row in 'reserved' or 'expired' even past
--- its expires_at, and request rows in 'reserved' until expires_at), so reserving twice for one job needs room for both. A disabled bot is
--- not refused: admins index knowledge before enabling a bot. RB002 when settings or the cap are
--- missing, RB001 over the cap (the statement is rolled back, so nothing is marked expired by a refused call).
--- Returns the new reservation's id.
+-- reserve_index_budget: EVERY call is a new attempt. The job's unsettled rows from earlier attempts are first settled
+-- at the usage recorded in their windows (the caller holds the lease, so those attempts are over), then the cap is
+-- checked: settled rows, job rows still 'reserved' or 'expired' whatever their expires_at, and request rows in
+-- 'reserved' until expires_at all count. A disabled bot is not refused: admins index knowledge before enabling a
+-- bot. RB002 when settings or the cap are missing, RB001 over the cap (the statement is rolled back, so a refused
+-- call settles nothing). Returns the new reservation's id.
+-- Rows of a job no attempt will reserve for again (release_job_lease, dead-lettered or finished jobs) are settled by
+-- settle_orphaned_index_reservations (below). Until then they count at their full amount.
 -- ---------------------------------------------------------------------------
 create function public.reserve_index_budget(
   p_job_id      uuid,
@@ -843,7 +850,26 @@ begin
   v_cap := v_cap_text::numeric;
 
   -- The settings row is locked, so no other reservation of this bot runs now.
-  update public.budget_reservations br set state = 'expired' where br.job_id = p_job_id and br.state = 'reserved';
+  -- The fence proves the caller holds the job now, and a worker reserves once per attempt, so every unsettled row of
+  -- this job belongs to an earlier attempt that can no longer settle it (a lost lease is taken over running ->
+  -- running by claim_jobs, so the maintenance sweep would not see it before this reserve). Settle those rows here, at
+  -- the embedding_index usage recorded in each row's window, before the cap check (review P6-R5 #1): otherwise a
+  -- crashed attempt's full reservation counts beside the retry's and can fail the retry with BUDGET_EXCEEDED.
+  -- Window: [the row's created_at, the job's next row's created_at, or infinity), as in
+  -- settle_orphaned_index_reservations. A refused reserve (RB001) rolls this back with the rest of the statement.
+  update public.budget_reservations br
+     set state = 'settled',
+         amount = least(
+           (select coalesce(sum(ue.estimated_cost), 0)
+              from public.usage_events ue
+             where ue.job_id = br.job_id
+               and ue.operation = 'embedding_index'
+               and ue.created_at >= br.created_at
+               and ue.created_at < coalesce((select min(n.created_at) from public.budget_reservations n
+                                              where n.job_id = br.job_id and (n.created_at, n.id) > (br.created_at, br.id)),
+                                            'infinity'::timestamptz)),
+           99999999.999999)
+   where br.job_id = p_job_id and br.state in ('reserved', 'expired');
 
   select coalesce(sum(br.amount), 0) into v_spent
     from public.budget_reservations br
@@ -851,7 +877,9 @@ begin
      and br.created_at >= v_day
      and (br.state = 'settled'
           -- A request reservation counts until expires_at; a job reservation counts while 'reserved' whatever its
-          -- expires_at says, because a stale worker can still settle it. Only settle or release ends that.
+          -- expires_at says, because the worker that holds the job may still be running and will settle it. Only
+          -- settle or release by that holder, or settle_orphaned_index_reservations (for a row nobody can settle
+          -- any more), ends that. The holder's fence (RB013) stops a stale worker, so it does NOT settle the row.
           or (br.state = 'reserved' and (br.job_id is not null or br.expires_at > now()))
           -- The same for a job reservation that expire_stale_budget_reservations already marked 'expired'.
           or (br.state = 'expired' and br.job_id is not null));
@@ -903,11 +931,27 @@ begin
     raise exception 'settle_index_budget: reservation is not settleable' using errcode = 'RB003';
   end if;
 
-  update public.budget_reservations br set state = 'settled', amount = p_actual where br.id = v_res.id;
+  -- Never below the usage recorded in this row's window (review P6-R5 #2): a stale worker's usage recorded after
+  -- this attempt reserved lands here, and so does any batch the holder recorded but did not count. The holder's own
+  -- p_actual already includes its rows, so in the normal case the two are equal.
+  update public.budget_reservations br
+     set state = 'settled',
+         amount = greatest(p_actual, least(
+           (select coalesce(sum(ue.estimated_cost), 0)
+              from public.usage_events ue
+             where ue.job_id = v_res.job_id
+               and ue.operation = 'embedding_index'
+               and ue.created_at >= v_res.created_at
+               and ue.created_at < coalesce((select min(n.created_at) from public.budget_reservations n
+                                              where n.job_id = v_res.job_id and (n.created_at, n.id) > (v_res.created_at, v_res.id)),
+                                            'infinity'::timestamptz)),
+           99999999.999999))
+   where br.id = v_res.id;
 end;
 $$;
 
--- release_index_budget: gives an active ('reserved') reservation of THIS job back. Anything else is RB003.
+-- release_index_budget: gives an active ('reserved') reservation of THIS job back, or settles it at the usage recorded
+-- since it was made when there is any. Anything else is RB003.
 create function public.release_index_budget(p_job_id uuid, p_worker text, p_reservation_id uuid)
 returns void
 language plpgsql
@@ -916,8 +960,10 @@ set lock_timeout = '2s'
 as $$
 #variable_conflict use_column
 declare
-  v_ver text;
-  v_bot uuid;
+  v_ver  text;
+  v_bot  uuid;
+  v_res  public.budget_reservations%rowtype;
+  v_used numeric;
 begin
   if p_job_id is null or p_worker is null or btrim(p_worker) = '' or p_reservation_id is null then
     raise exception 'release_index_budget: job, worker and reservation are required' using errcode = '22023';
@@ -933,10 +979,22 @@ begin
     raise exception 'release_index_budget: no client settings for bot' using errcode = 'RB002';
   end if;
 
-  update public.budget_reservations br set state = 'released'
-   where br.id = p_reservation_id and br.job_id = p_job_id and br.bot_id = v_bot and br.state = 'reserved';
+  select * into v_res from public.budget_reservations br
+   where br.id = p_reservation_id and br.job_id = p_job_id and br.bot_id = v_bot and br.state = 'reserved' for update;
   if not found then
     raise exception 'release_index_budget: reservation is not active' using errcode = 'RB003';
+  end if;
+  -- Usage recorded in this row's window (a stale worker's batch, review P6-R5 #2) is real spend: settle at it
+  -- instead of releasing. With no usage the row is released as before.
+  select least(coalesce(sum(ue.estimated_cost), 0), 99999999.999999) into v_used
+    from public.usage_events ue
+   where ue.job_id = v_res.job_id
+     and ue.operation = 'embedding_index'
+     and ue.created_at >= v_res.created_at;
+  if v_used > 0 then
+    update public.budget_reservations br set state = 'settled', amount = v_used where br.id = v_res.id;
+  else
+    update public.budget_reservations br set state = 'released' where br.id = v_res.id;
   end if;
 end;
 $$;
@@ -1018,8 +1076,10 @@ begin
      and br.created_at >= v_day
      and (br.state = 'settled'
           -- A request reservation counts until expires_at. A job (indexing) reservation counts while 'reserved'
-          -- whatever its expires_at says, and while 'expired', as reserve_index_budget counts it: a stale worker
-          -- can still settle it, so the room stays taken until it is settled or released.
+          -- whatever its expires_at says, and while 'expired', as reserve_index_budget counts it: the worker
+          -- holding the job may still settle it, so the room stays taken until it is settled or released by that
+          -- holder, or settled by settle_orphaned_index_reservations once no holder can (lost lease, released
+          -- lease, dead-lettered job). A stale worker cannot settle it: the fence (RB013) refuses it.
           or (br.state = 'reserved' and (br.job_id is not null or br.expires_at > now()))
           or (br.state = 'expired' and br.job_id is not null));
 
@@ -1138,20 +1198,114 @@ set lock_timeout = '2s'
 as $$
 #variable_conflict use_column
 declare
-  v_n integer;
+  v_ids uuid[];
+  v_n   integer;
 begin
   if p_batch is null or p_batch < 1 or p_batch > 1000 then
     raise exception 'prune_superseded_chunks: batch (1..1000) is required' using errcode = '22023';
   end if;
 
-  delete from public.document_chunks c
-   where c.id in (
-     select x.id
-       from public.document_chunks x
-       join public.document_versions v on v.id = x.document_version_id
-      where v.status = 'superseded'
-      limit p_batch
-      for update of x skip locked);
+  -- Ids first, then the delete (see cleanup_document: an IN subquery with LIMIT and FOR UPDATE can overrun the batch).
+  select coalesce(array_agg(y.id), '{}'::uuid[]) into v_ids
+    from (select x.id
+            from public.document_chunks x
+            join public.document_versions v on v.id = x.document_version_id
+           where v.status = 'superseded'
+           limit p_batch
+             for update of x skip locked) y;
+  delete from public.document_chunks c where c.id = any (v_ids);
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+-- settle_orphaned_index_reservations looks, for every candidate row, for a newer row of the same job; without this index
+-- that lookup scans the whole table per candidate (60k rows, 100 orphans: 495 ms for a sweep; with it 11 ms). The unique
+-- index on job_id (009) only covers state = 'reserved'.
+create index budget_reservations_job_created_idx on public.budget_reservations (job_id, created_at)
+  where job_id is not null;
+
+-- ---------------------------------------------------------------------------
+-- settle_orphaned_index_reservations (P6-D5): settles job reservations that no worker can settle any more.
+-- Why: settle_index_budget and release_index_budget are fenced (RB013 for a worker that lost its lease) and need the
+-- reservation id, which a new lease holder does not know. After a lost lease, a release_job_lease at shutdown or a
+-- dead-lettered job, the old row would stay 'reserved' or 'expired' and count at its full amount until UTC midnight,
+-- and every retry reserves again: the same indexing work would be charged against the daily cap more than once and
+-- could block chat and later indexing. This sweep (run by the worker's maintenance tick) ends that.
+--
+-- Orphaned row: job_id is not null, state 'reserved' or 'expired', and
+--   (a) a newer reservation row exists for the same job (created_at greater, ties broken by id), or
+--   (b) the job is not 'running' (queued, succeeded, failed, cancelled) or the job row is gone.
+-- A running job's newest row is never touched, whatever its state or expires_at: its holder will settle it.
+-- Rows already settled or released, and request reservations (job_id is null), are never touched.
+--
+-- Amount: the row becomes 'settled' with amount = the sum of usage_events.estimated_cost, operation
+-- 'embedding_index', for its job_id and created_at in [the row's created_at, the created_at of the job's next
+-- reservation row, or infinity). 0 when there was none. This can exceed the amount reserved: that is real spend
+-- (settle_index_budget also accepts any non-negative p_actual). Same columns as settle_index_budget writes: state
+-- and amount only (budget_reservations has no settled-at column). The sum is held to numeric(14,6)'s largest value
+-- so one absurd total cannot make the batch fail for ever.
+-- Known bound: usage that a stale worker records after the job's NEXT reservation was created is attributed to
+-- that next window (its row, when that row is settled), not to the older row. settle_index_budget and
+-- release_index_budget never settle a row below its window's usage, so that usage is counted whoever settles it.
+--
+-- Locking: candidate rows are chosen FOR UPDATE OF br SKIP LOCKED (at most p_batch, oldest first). Only
+-- budget_reservations rows are locked: no job, document or settings row, and a locked row is skipped rather than
+-- waited for, so this function never waits behind another transaction while it holds a lock and cannot take part in
+-- a lock cycle. settle_index_budget and release_index_budget hold client_settings and then one reservation row;
+-- reserve_index_budget holds client_settings and then updates the job's reserved rows; this sweep holds only
+-- reservation rows and never asks for client_settings, so the order settings -> reservation is never reversed.
+-- If a holder is settling a row at that moment the sweep skips it (next tick), and a holder that arrives after the
+-- sweep gets RB003 (the worker tolerates it). The update re-checks state and the orphan test against a fresh
+-- snapshot, so a row whose job was re-claimed in between is left alone. Because the cap is not locked here, a
+-- reserve that runs at the same moment may still see the old amount, exactly as it may with a holder's settle.
+-- Returns the number of rows settled. A second call right after returns 0.
+-- ---------------------------------------------------------------------------
+create function public.settle_orphaned_index_reservations(p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+#variable_conflict use_column
+declare
+  v_ids uuid[];
+  v_n   integer;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 1000 then
+    raise exception 'settle_orphaned_index_reservations: batch (1..1000) is required' using errcode = '22023';
+  end if;
+
+  select coalesce(array_agg(x.id), '{}'::uuid[]) into v_ids
+    from (select br.id
+            from public.budget_reservations br
+           where br.job_id is not null
+             and br.state in ('reserved', 'expired')
+             and (exists (select 1 from public.budget_reservations n
+                           where n.job_id = br.job_id and (n.created_at, n.id) > (br.created_at, br.id))
+                  or not exists (select 1 from public.jobs j where j.id = br.job_id and j.state = 'running'))
+           order by br.created_at, br.id
+           limit p_batch
+             for update of br skip locked) x;
+
+  update public.budget_reservations br
+     set state = 'settled',
+         amount = least(
+           (select coalesce(sum(ue.estimated_cost), 0)
+              from public.usage_events ue
+             where ue.job_id = br.job_id
+               and ue.operation = 'embedding_index'
+               and ue.created_at >= br.created_at
+               and ue.created_at < coalesce((select min(n.created_at) from public.budget_reservations n
+                                              where n.job_id = br.job_id and (n.created_at, n.id) > (br.created_at, br.id)),
+                                            'infinity'::timestamptz)),
+           99999999.999999)
+   where br.id = any (v_ids)
+     and br.job_id is not null
+     and br.state in ('reserved', 'expired')
+     and (exists (select 1 from public.budget_reservations n
+                   where n.job_id = br.job_id and (n.created_at, n.id) > (br.created_at, br.id))
+          or not exists (select 1 from public.jobs j where j.id = br.job_id and j.state = 'running'));
   get diagnostics v_n = row_count;
   return v_n;
 end;
@@ -1191,6 +1345,7 @@ revoke all on function public.release_index_budget(uuid, text, uuid) from public
 revoke all on function public.fail_orphaned_index_versions(integer) from public, anon, authenticated;
 revoke all on function public.release_job_lease(uuid, text) from public, anon, authenticated;
 revoke all on function public.prune_superseded_chunks(integer) from public, anon, authenticated;
+revoke all on function public.settle_orphaned_index_reservations(integer) from public, anon, authenticated;
 
 grant execute on function public.index_job_fence(uuid, text, uuid) to service_role;
 grant execute on function public.get_index_job_context(uuid, text, uuid) to service_role;
@@ -1210,3 +1365,65 @@ grant execute on function public.release_index_budget(uuid, text, uuid) to servi
 grant execute on function public.fail_orphaned_index_versions(integer) to service_role;
 grant execute on function public.release_job_lease(uuid, text) to service_role;
 grant execute on function public.prune_superseded_chunks(integer) to service_role;
+grant execute on function public.settle_orphaned_index_reservations(integer) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- purge_expired_data_entries (005), replaced: the batch limit held only under some plans (P6-D5). The 005 body
+-- deleted `where d.id in (select ... limit n for update skip locked)`; with stale statistics the planner picks a
+-- nested-loop semi join that re-runs the locked subquery per outer row, and rows the statement already deleted are
+-- skipped, so each re-run takes new rows and one call can delete every expired row in one transaction. Only rows
+-- that met the retention rule were deleted, so this bounded transaction size and lock time, not data. The ids are
+-- now taken into an array first, then deleted, as cleanup_document and prune_superseded_chunks above do.
+-- Same signature, attributes and checks as 005; create or replace keeps the 005 grants (service_role only).
+-- ---------------------------------------------------------------------------
+create or replace function public.purge_expired_data_entries(p_batch integer)
+returns integer
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_n   integer := 0;
+  v_cnt integer;
+  v_ids uuid[];
+  r     record;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 10000 then
+    raise exception 'purge_expired_data_entries: batch must be 1..10000' using errcode = '22023';
+  end if;
+
+  if exists (
+    select 1
+      from public.bot_profiles b
+      left join public.client_settings cs on cs.bot_id = b.id
+     where cs.bot_id is null
+        or coalesce(cs.retention_policy ->> 'conversation_days', '') !~ '^[1-9][0-9]{0,5}$'
+  ) then
+    raise exception 'purge_expired_data_entries: conversation retention is not configured for every bot'
+      using errcode = 'RB020';
+  end if;
+
+  for r in
+    select cs.bot_id, (cs.retention_policy ->> 'conversation_days')::integer as days
+      from public.client_settings cs
+  loop
+    exit when v_n >= p_batch;
+    select coalesce(array_agg(x.id), '{}'::uuid[]) into v_ids
+      from (
+        select e.id from public.data_entries e
+         where e.bot_id = r.bot_id
+           and e.conversation_id is null
+           and e.created_at < now() - make_interval(days => r.days)
+         order by e.created_at
+         limit p_batch - v_n
+         for update skip locked
+      ) x;
+    delete from public.data_entries d where d.id = any (v_ids);
+    get diagnostics v_cnt = row_count;
+    v_n := v_n + v_cnt;
+  end loop;
+  return v_n;
+end;
+$$;
+
+revoke all on function public.purge_expired_data_entries(integer) from public, anon, authenticated;
+grant execute on function public.purge_expired_data_entries(integer) to service_role;

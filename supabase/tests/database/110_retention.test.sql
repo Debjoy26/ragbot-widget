@@ -1,6 +1,6 @@
 -- Retention helpers (ADR 0006): fail closed on missing config; purge by configured age; expiry helpers.
 begin;
-select plan(38);
+select plan(45);
 
 -- The seed bot already has full retention config; give the fixture bot its own.
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
@@ -114,6 +114,30 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select is((public.purge_expired_caches(100) ->> 'answer_cache')::int, 2, 'retention (L7): unexpired rows with a stale corpus_version (b: 0 < 3) or stale settings_version (c: 0 < 1) are purged');
 select is((select array_agg(cache_key_hash order by cache_key_hash) from public.answer_cache where bot_id = 'b1000000-0000-4000-8000-0000000000aa'), array[repeat('d', 64)], 'retention (L7): the row matching current corpus and settings versions survives');
 
+
+-- P6-D5: the batch limit holds when the planner re-runs the locked subquery per outer row (012 replaces the 005
+-- body). Statistics taken while the table holds one row make the planner choose, by itself, a nested-loop semi join
+-- with the locked subquery as its inner side and no Materialize. Rows are inserted oldest first, as real entries
+-- arrive, so the outer scan meets them in the subquery's order: each rescan skips the rows this statement already
+-- deleted and locks the next ones, and the 005 body deleted all 8 entries for a batch of 3.
+delete from public.data_entries;
+insert into public.data_entries (bot_id, conversation_id, schema_key, payload, created_at) values
+  ('b1000000-0000-4000-8000-0000000000aa', null, 'batch', '{}', now() - interval '200 days');
+analyze public.data_entries;
+insert into public.data_entries (bot_id, conversation_id, schema_key, payload, created_at)
+  select 'b1000000-0000-4000-8000-0000000000aa', null, 'batch', '{}', now() - interval '100 days' - make_interval(mins => 8 - g)
+    from generate_series(1, 7) g;
+insert into public.data_entries (id, bot_id, conversation_id, schema_key, payload, created_at) values
+  ('de000000-0000-4000-8000-0000000000ae', 'b1000000-0000-4000-8000-0000000000aa', null, 'k', '{}', now() - interval '10 days');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select ok((select reltuples <= 1 from pg_class where oid = 'public.data_entries'::regclass), 'retention (P6-D5): statistics are stale (one row, the table holds nine), as on a quiet production table');
+select is(public.purge_expired_data_entries(3), 3, 'retention (P6-D5): a batch of 3 deletes exactly 3 of 8 expired entries');
+select is((select count(*)::int from public.data_entries where schema_key = 'batch'), 5, 'retention (P6-D5): and 5 remain');
+select is(public.purge_expired_data_entries(3), 3, 'retention (P6-D5): the second call deletes exactly 3 more');
+select is(public.purge_expired_data_entries(3), 2, 'retention (P6-D5): the third deletes the last 2');
+select is(public.purge_expired_data_entries(3), 0, 'retention (P6-D5): a repeat deletes nothing');
+select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000ae'), 1, 'retention (P6-D5): a recent entry is untouched');
+
 reset role;
 select * from finish();
-rollback;

@@ -94,7 +94,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=45
+EXPECTED=47
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -583,6 +583,34 @@ run_order "reserve in flight (w1), reserve by w2"   "$IDX_FIX"               "$R
 run_order "release lease in flight, reserve by w1"  "$IDX_FIX"               "$RELEASE_IDX" "$RESERVE_IDX_W1" "$V_RELEASE_RESERVE" "" "RB013" yes
 run_order "release lease in flight, claim"          "$LEASE_JOB"             "$RELEASE_LEASE" "$CLAIM_LEASE" "$V_RELEASE_FIRST" "" ""       fast
 run_order "claim in flight, release lease (stale)"  "$LEASE_JOB"             "$CLAIM_LEASE" "$RELEASE_LEASE" "$V_CLAIM_FIRST"  "" ""       yes
+
+# ---- P6-D5: settle_orphaned_index_reservations against settle_index_budget on the same row ----
+# The running job IDXJ (holder w1) has an older 'expired' row (ORPH_OLD, an earlier attempt, so an orphan) and its newest
+# 'reserved' row (ORPH_NEW). The sweep settles the old row at the job's usage in its window (none here, so 0); the holder
+# settles it at 0.7. Exactly one of them wins; the other must not settle it a second time and must not touch the newest row.
+# Sweep first (still open): the holder's settle waits for the row, then finds it settled (RB003). Settle first (still
+# open): the sweep skips the locked row (SKIP LOCKED), does not wait, and settles nothing (it returns 0).
+ORPH_OLD=af800000-0000-4000-8000-000000000001; ORPH_NEW=af800000-0000-4000-8000-000000000002
+ORPH_FIX="$IDX_FIX
+  insert into public.budget_reservations (id, bot_id, job_id, amount, state, expires_at, created_at) values
+    ('$ORPH_OLD', '$BOT', '$IDXJ', 1.0, 'expired', now() - interval '1 hour', now() - interval '2 hours'),
+    ('$ORPH_NEW', '$BOT', '$IDXJ', 1.0, 'reserved', now() + interval '1 hour', now() - interval '1 hour');"
+SWEEP_ORPH="select public.settle_orphaned_index_reservations(100);"
+SETTLE_ORPH="select public.settle_index_budget('$IDXJ', 'w1', '$ORPH_OLD', 0.7);"
+V_ORPH_SWEEP="select case
+  when (select state from public.budget_reservations where id = '$ORPH_NEW') <> 'reserved' or (select amount from public.budget_reservations where id = '$ORPH_NEW') <> 1.0
+    then 'VIOLATION: the newest row of the running job was touched'
+  when (select state from public.budget_reservations where id = '$ORPH_OLD') <> 'settled' then 'VIOLATION: the old row is not settled'
+  when (select amount from public.budget_reservations where id = '$ORPH_OLD') <> 0 then 'VIOLATION: the old row was settled twice (amount ' || (select amount from public.budget_reservations where id = '$ORPH_OLD') || ')'
+  else 'CONSISTENT: the sweep settled the old row at 0, the holder got RB003, the newest row is untouched' end"
+V_ORPH_SETTLE="select case
+  when (select state from public.budget_reservations where id = '$ORPH_NEW') <> 'reserved' or (select amount from public.budget_reservations where id = '$ORPH_NEW') <> 1.0
+    then 'VIOLATION: the newest row of the running job was touched'
+  when (select state from public.budget_reservations where id = '$ORPH_OLD') <> 'settled' then 'VIOLATION: the old row is not settled'
+  when (select amount from public.budget_reservations where id = '$ORPH_OLD') <> 0.7 then 'VIOLATION: the old row was settled twice (amount ' || (select amount from public.budget_reservations where id = '$ORPH_OLD') || ')'
+  else 'CONSISTENT: the holder settled the old row at 0.7, the sweep skipped it, the newest row is untouched' end"
+run_order "orphan sweep in flight, holder settle"   "$ORPH_FIX"              "$SWEEP_ORPH"  "$SETTLE_ORPH" "$V_ORPH_SWEEP"  "" "RB003" yes
+run_order "holder settle in flight, orphan sweep"   "$ORPH_FIX"              "$SETTLE_ORPH" "$SWEEP_ORPH"  "$V_ORPH_SETTLE" "" ""      fast
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

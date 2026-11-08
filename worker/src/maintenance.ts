@@ -31,7 +31,7 @@ interface Task {
 
 const RETRY = { retryOnContention: true } as const;
 
-/** fail_orphaned_index_versions and prune_superseded_chunks accept a batch of 1..1000 (migration 012). */
+/** fail_orphaned_index_versions, prune_superseded_chunks and settle_orphaned_index_reservations accept a batch of 1..1000 (migration 012). */
 export const INDEX_MAINTENANCE_MAX_BATCH = 1000;
 
 /** expire_abandoned_uploads accepts a batch of 1..1000 (migration 012), tighter than the other tasks. */
@@ -83,6 +83,14 @@ export const MAINTENANCE_TASKS: readonly Task[] = [
   {
     name: 'expire_stale_budget_reservations',
     run: call('expire_stale_budget_reservations', (c) => ({ p_batch: c.retentionBatchSize })),
+  },
+  // After the expiry sweep: settles job reservations left `reserved` or `expired` by attempts that
+  // can no longer settle them (review P6-R4, F2). Batch 1..1000, like the other index tasks.
+  {
+    name: 'settle_orphaned_index_reservations',
+    run: call('settle_orphaned_index_reservations', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
+    })),
   },
   {
     name: 'purge_expired_conversations',

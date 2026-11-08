@@ -11,7 +11,9 @@ import {
   deriveChunkingVersion,
   estimateTokens,
   matchHeading,
+  MAX_HEADING_INDENT,
   MAX_HEADING_LINE_CHARS,
+  MAX_HEADING_MARKS,
   splitHard,
   splitSentences,
   type Chunk,
@@ -44,7 +46,12 @@ const GOLDEN_HASH = '69c308e50e67948fb36af8c5c21a18a3ba0d5f93bfd6b6458a6e318b591
 // The version hash changed from 63a5402b to e9e81409 when sentence and heading detection moved from
 // backtracking regexes to linear scans (P6-D3, review R-1): the pattern set the hash covers is
 // different. The chunk OUTPUT hash above did not change, so stored chunks stay valid in content.
-const GOLDEN_VERSION = 'c1-350-50-e9e81409';
+//
+// It changed again, from e9e81409 to eb436a36, when the two literals in matchHeading (the indent
+// maximum 3 and the heading-mark maximum 6) became the named constants MAX_HEADING_INDENT and
+// MAX_HEADING_MARKS and were added to the hashed sizes (review P6-R4, F8). The output hash did not
+// change.
+const GOLDEN_VERSION = 'c1-350-50-eb436a36';
 
 describe('chunking config', () => {
   it('has a versioned config constant derived from the sizes, weights and patterns', () => {
@@ -70,6 +77,30 @@ describe('chunking config', () => {
     ];
     const versions = new Set([CHUNKING_VERSION, ...variants.map(deriveChunkingVersion)]);
     expect(versions.size).toBe(variants.length + 1);
+  });
+
+  // F8: the literals inside matchHeading shape which lines are headings, so they are hashed too.
+  it('hashes the heading indent maximum, the heading mark maximum and the heading line cap', () => {
+    expect(MAX_HEADING_INDENT).toBe(3);
+    expect(MAX_HEADING_MARKS).toBe(6);
+    const sizes = CHUNKING_FINGERPRINT.sizes;
+    for (const constant of [MAX_HEADING_INDENT, MAX_HEADING_MARKS, MAX_HEADING_LINE_CHARS]) {
+      expect(sizes).toContain(constant);
+    }
+    const versions = new Set([CHUNKING_VERSION]);
+    for (const constant of [MAX_HEADING_INDENT, MAX_HEADING_MARKS, MAX_HEADING_LINE_CHARS]) {
+      const at = sizes.lastIndexOf(constant);
+      const changed = sizes.map((n, i) => (i === at ? n + 1 : n));
+      versions.add(deriveChunkingVersion({ ...CHUNKING_FINGERPRINT, sizes: changed }));
+    }
+    expect(versions.size).toBe(4);
+  });
+
+  it('matchHeading honours the named indent and mark maxima', () => {
+    expect(matchHeading(`${' '.repeat(MAX_HEADING_INDENT)}# t`)).toBe('t');
+    expect(matchHeading(`${' '.repeat(MAX_HEADING_INDENT + 1)}# t`)).toBeNull();
+    expect(matchHeading(`${'#'.repeat(MAX_HEADING_MARKS)} t`)).toBe('t');
+    expect(matchHeading(`${'#'.repeat(MAX_HEADING_MARKS + 1)} t`)).toBeNull();
   });
 
   // GOLDEN OUTPUT. If this test fails, the chunk output for a fixed input changed. That makes every
@@ -453,6 +484,26 @@ describe('chunkDocument: linear time on hostile input (R-1)', () => {
       });
     },
   );
+
+  // F7: a very long separator (whitespace between two atoms) used to be rescanned for every
+  // overlap atom the packer dropped. The cost is now read once per atom. This is a regression guard
+  // with a generous bound: the old code also finished this shape in under 2 s (about 0.45 s against
+  // about 0.1 s now on the development machine), so it does not fail on the old code by itself; the
+  // golden test and the tests above pin the output, which did not change.
+  it('chunks 2,000,000 characters of tiny sentences split by 200,000 spaces in under 2 seconds', () => {
+    const unit = Array.from({ length: 200 }, (_, i) => `S${String(i)}.`).join(' ');
+    let text = '';
+    while (text.length < 2_000_000) text += `${unit}${' '.repeat(200_000)}End.`;
+    const started = performance.now();
+    const { chunks } = chunkDocument([{ number: 1, text }], 'text/plain');
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(LIMIT_MS);
+    expect(chunks.length).toBeGreaterThan(10);
+    chunks.forEach((chunk, i) => {
+      expect(chunk.chunk_index).toBe(i);
+      expect(chunk.token_count).toBeLessThanOrEqual(CHUNK_TARGET_TOKENS);
+    });
+  });
 
   it('keeps time proportional to size: 16 times the input costs far less than 16 squared', () => {
     const time = (n: number): number => {

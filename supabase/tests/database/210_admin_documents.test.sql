@@ -737,8 +737,9 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select ok(public.reserve_index_budget('c2000000-0000-4000-8000-000000000210', 'w1', '1c000002-0000-4000-8000-000000000210', 1.0, 3600) is not null, 'job budget: a second job reserves up to the cap exactly (2.0 of 2.0)');
 select throws_ok($q$select public.reserve_index_budget('c3000000-0000-4000-8000-000000000210', 'w1', '1c000003-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'job budget: one cent over the cap is refused');
 select throws_ok($q$select public.reserve_request_budget('b6000000-0000-4000-8000-000000000210', 'f2000000-0000-4000-8000-000000000210', 0.5, 3600)$q$, 'RB001', null, 'job budget: job reservations count toward the request cap too (same sum)');
--- Replaces "a retry returns the same reservation": every call is a new attempt, and the earlier row keeps counting.
-select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000001-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'job budget: a second reserve for the same job counts its first reservation too (1.0 + 1.0 + 0.01 over the cap)');
+-- Replaces "a retry returns the same reservation": every call is a new attempt. The caller holds the job, so its earlier
+-- row is settled first at the usage recorded for it (none here, P6-R5 #1); job 2's 1.0 still counts, so 1.01 is over.
+select throws_ok($q$select public.reserve_index_budget('c1000000-0000-4000-8000-000000000210', 'w1', '1c000001-0000-4000-8000-000000000210', 1.01, 3600)$q$, 'RB001', null, 'job budget: a second reserve for the same job is checked against the other job''s 1.0 (1.0 + 1.01 over the cap)');
 reset role;
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'b6000000-0000-4000-8000-000000000210' and state = 'reserved'), 2.000000::numeric, 'job budget: reserved total never exceeds the cap');
 select is((select array_agg(state) from public.budget_reservations where job_id = 'c1000000-0000-4000-8000-000000000210'), array['reserved'], 'job budget: the refused second reserve added no row and left the first reserved');
@@ -924,7 +925,8 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('t.ra2', public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.0, 3600)::text, true);
 select isnt(current_setting('t.ra2')::uuid, current_setting('t.ra1')::uuid, 'attempts: reserve, release, requeue, reserve gives a NEW reservation');
-select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 1.5, 3600)$q$, 'RB001', null, 'attempts: a repeat during attempt 2 is a new attempt that counts the first (1.0 + 1.5 over the 2.0 cap)');
+-- P6-R5 #1: the caller holds the job, so a repeat settles attempt 2's row at its recorded usage (none) before the check.
+select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 2.01, 3600)$q$, 'RB001', null, 'attempts: a repeat during attempt 2 is a new attempt, checked against the cap (2.01 over the 2.0 cap; the refusal rolls back)');
 reset role;
 select is((select array_agg(state order by created_at, state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved'], 'attempts: the released row is kept as history next to the active one');
 select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state = 'reserved'), 1.000000::numeric, 'attempts: only attempt 2 holds budget');
@@ -941,16 +943,16 @@ set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select throws_ok($q$select public.reserve_index_budget('c9000000-0000-4000-8000-000000000210', 'w1', '1c0000a9-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'attempts: another job of the bot is refused at the cap (one cent over)');
 reset role;
--- an expired but still 'reserved' row keeps counting, because a stale worker can still settle it (R3-3)
+-- a job row 'reserved' past its expires_at keeps counting for every other caller (R3-3): job c9 is refused
 update public.budget_reservations set expires_at = now() - interval '1 minute' where job_id = 'c8000000-0000-4000-8000-000000000210' and state = 'reserved';
 set local role service_role;
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
-select throws_ok($q$select public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.4, 3600)$q$, 'RB001', null, 'attempts: an expired reservation still counts, so the next attempt is refused at the cap');
-select public.settle_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', (select id from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210' and state = 'reserved'), 0.1);
+select throws_ok($q$select public.reserve_index_budget('c9000000-0000-4000-8000-000000000210', 'w1', '1c0000a9-0000-4000-8000-000000000210', 0.01, 3600)$q$, 'RB001', null, 'attempts: another job''s reservation past expires_at still counts (1.5 + 0.5 + 0.01 over the cap)');
+-- the job's own next attempt settles that row at its recorded usage (none, P6-R5 #1), so 0.4 fits
 select set_config('t.ra4', public.reserve_index_budget('c8000000-0000-4000-8000-000000000210', 'w1', '1c0000a8-0000-4000-8000-000000000210', 0.4, 3600)::text, true);
 reset role;
-select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved', 'settled', 'settled'], 'attempts: settling the stale row frees the difference for the next attempt');
-select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state in ('settled', 'reserved') and (state = 'settled' or expires_at > now())), 2.000000::numeric, 'attempts: the expired row is not counted, so the replacement fits the cap');
+select is((select array_agg(state order by state) from public.budget_reservations where job_id = 'c8000000-0000-4000-8000-000000000210'), array['released', 'reserved', 'settled', 'settled'], 'attempts: the next attempt settled the expired row of its own job and holds a new one');
+select is((select coalesce(sum(amount), 0) from public.budget_reservations where bot_id = 'ba000000-0000-4000-8000-000000000210' and state in ('settled', 'reserved')), 1.900000::numeric, 'attempts: the counted spend is the settled 1.5, the settled 0 and the live 0.4');
 -- an expired row cannot be reserved over the cap
 update public.budget_reservations set expires_at = now() - interval '1 minute' where id = current_setting('t.ra4')::uuid;
 set local role service_role;

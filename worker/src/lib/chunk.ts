@@ -53,7 +53,10 @@ interface Atom {
   text: string;
   /** Whitespace that preceded this piece in the source (or the paragraph separator). */
   sep: string;
+  /** Quarter-tokens of the text. */
   q: number;
+  /** Quarter-tokens of `sep`, computed once (a separator can be a very long run of whitespace). */
+  sepQ: number;
   section: string | null;
 }
 
@@ -202,7 +205,8 @@ function* toAtoms(text: string, sep: string, section: string | null): Steps<Atom
   const atoms: Atom[] = [];
   const push = (piece: Piece, forceSep?: string): void => {
     const q = quarterTokens(piece.text);
-    atoms.push({ text: piece.text, sep: forceSep ?? piece.sep, q, section });
+    const atomSep = forceSep ?? piece.sep;
+    atoms.push({ text: piece.text, sep: atomSep, q, sepQ: quarterTokens(atomSep), section });
   };
   let first = true;
   const sepFor = (piece: Piece): string => {
@@ -242,6 +246,10 @@ const SPACE_OR_TAB = /[ \t]/;
 const LINE_TERMINATOR = /[\r\u2028\u2029]/;
 /** A line longer than this is never treated as a heading, so heading detection stays cheap. */
 export const MAX_HEADING_LINE_CHARS = 2000;
+/** A heading may be indented by at most this many whitespace characters. */
+export const MAX_HEADING_INDENT = 3;
+/** A heading has at most this many `#` marks (`#` through `######`). */
+export const MAX_HEADING_MARKS = 6;
 
 /**
  * ATX heading test: up to three leading whitespace characters, one to six `#`, then the end of the
@@ -254,10 +262,10 @@ export const MAX_HEADING_LINE_CHARS = 2000;
 export function matchHeading(line: string): string | null {
   if (line.length > MAX_HEADING_LINE_CHARS) return null;
   let i = 0;
-  while (i < 3 && i < line.length && WHITESPACE.test(line.charAt(i))) i += 1;
+  while (i < MAX_HEADING_INDENT && i < line.length && WHITESPACE.test(line.charAt(i))) i += 1;
   let marks = 0;
   while (i + marks < line.length && line.charAt(i + marks) === '#') marks += 1;
-  if (marks < 1 || marks > 6) return null;
+  if (marks < 1 || marks > MAX_HEADING_MARKS) return null;
   const rest = line.slice(i + marks);
   if (rest === '') return '';
   if (!SPACE_OR_TAB.test(rest.charAt(0)) || LINE_TERMINATOR.test(rest)) return null;
@@ -286,7 +294,14 @@ export interface ChunkingFingerprint {
 
 export const CHUNKING_FINGERPRINT: ChunkingFingerprint = {
   weights: [Q_ASCII, Q_ALPHABETIC, Q_WIDE, ASCII_LIMIT, ALPHABETIC_LIMIT],
-  sizes: [CHUNK_TARGET_TOKENS, CHUNK_OVERLAP_TOKENS, MAX_SECTION_CHARS, MAX_HEADING_LINE_CHARS],
+  sizes: [
+    CHUNK_TARGET_TOKENS,
+    CHUNK_OVERLAP_TOKENS,
+    MAX_SECTION_CHARS,
+    MAX_HEADING_LINE_CHARS,
+    MAX_HEADING_INDENT,
+    MAX_HEADING_MARKS,
+  ],
   separators: [BLOCK_SEPARATOR],
   patterns: [
     SENTENCE_TERMINATOR,
@@ -398,7 +413,7 @@ function* packAtoms(
   let cur: Atom[] = [];
   let curQ = 0;
 
-  const addCost = (a: Atom): number => (cur.length === 0 ? a.q : quarterTokens(a.sep) + a.q);
+  const addCost = (a: Atom): number => (cur.length === 0 ? a.q : a.sepQ + a.q);
   const emit = (): void => {
     const content = cur.map((a, i) => (i === 0 ? a.text : a.sep + a.text)).join('');
     if (content.trim() === '') return;
@@ -412,7 +427,7 @@ function* packAtoms(
     });
   };
   const total = (list: Atom[]): number =>
-    list.reduce((sum, a, i) => sum + (i === 0 ? a.q : quarterTokens(a.sep) + a.q), 0);
+    list.reduce((sum, a, i) => sum + (i === 0 ? a.q : a.sepQ + a.q), 0);
 
   let seen = 0;
   for (const atom of atoms) {
@@ -425,7 +440,7 @@ function* packAtoms(
       let overlapQ = 0;
       for (let i = cur.length - 1; i >= 0; i -= 1) {
         const next = cur[i + 1];
-        const cost = (cur[i] as Atom).q + (next ? quarterTokens(next.sep) : 0);
+        const cost = (cur[i] as Atom).q + (next ? next.sepQ : 0);
         if (overlapQ + cost > OVERLAP_Q) break;
         overlapQ += cost;
         start = i;
@@ -433,11 +448,15 @@ function* packAtoms(
       cur = cur.slice(start);
       // Overlap never reaches back across a heading, so a chunk's label matches its new content.
       while (cur.length > 0 && (cur[0] as Atom).section !== atom.section) cur.shift();
-      // The new atom must fit beside the overlap; otherwise shorten the overlap.
-      while (cur.length > 0 && total(cur) + quarterTokens(atom.sep) + atom.q > CAP_Q) {
-        cur.shift();
-      }
+      // The new atom must fit beside the overlap; otherwise shorten the overlap. `curQ` is kept as
+      // the running total of `cur` (the first atom carries no separator) and the new atom's
+      // separator cost is read once, so a long separator is never rescanned.
       curQ = total(cur);
+      while (cur.length > 0 && curQ + atom.sepQ + atom.q > CAP_Q) {
+        const dropped = cur.shift() as Atom;
+        const newFirst = cur[0];
+        curQ -= dropped.q + (newFirst ? newFirst.sepQ : 0);
+      }
     }
     curQ += addCost(atom);
     cur.push(atom);

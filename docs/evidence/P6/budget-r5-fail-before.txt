@@ -1,0 +1,9 @@
+== 210_admin_documents
+psql:/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/210_admin_documents.test.sql:952: ERROR:  reserve_index_budget: daily budget exceeded
+Result: FAIL
+== 230_p35_final_fixes
+psql:/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/230_p35_final_fixes.test.sql:46: ERROR:  reserve_index_budget: daily budget exceeded
+Result: FAIL
+== 250_ingestion
+psql:/home/kali/Desktop/rag-bot/ragbot-widget/supabase/tests/database/250_ingestion.test.sql:605: ERROR:  reserve_index_budget: daily budget exceeded
+Result: FAIL

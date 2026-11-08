@@ -8,6 +8,10 @@
 //  * Failures map onto the shared ProviderError kinds: HTTP 429 -> rate_limited; 408, 5xx, network
 //    errors, timeouts and unparseable bodies -> transient; 401/403 -> auth; 402 -> billing; any
 //    other 4xx and a wrong response shape -> permanent.
+//  * `billed`: every ProviderError raised after the provider answered 2xx (oversized or unreadable
+//    body, bad JSON, wrong shape, vector bounds, wrong dimensions) carries `billed: true`, whatever
+//    its kind: the request was accepted and is charged. Errors before or instead of a 2xx (network,
+//    timeout, any non-2xx status) are `billed: false`. The caller's spend accounting relies on it.
 //  * The API key travels in a header only (never a URL). Error messages are fixed strings: they
 //    carry no URL, no request text, no upstream body and no key.
 //  * A caller abort (lease lost, shutdown) is rethrown as an AbortError, not a ProviderError.
@@ -88,12 +92,13 @@ function parseRetryAfter(res: Response): number | undefined {
 /**
  * Reads a response body as UTF-8 text, never holding more than MAX_RESPONSE_BYTES: a declared
  * content-length over the cap is refused before reading, and a stream that passes the cap is
- * cancelled. Throws ProviderError('permanent') for an oversized body.
+ * cancelled. Throws ProviderError('permanent', billed) for an oversized body: it only runs after a
+ * 2xx response.
  */
 async function readCappedText(res: Response): Promise<string> {
   const declared = res.headers.get('content-length');
   const tooLarge = (): ProviderError =>
-    new ProviderError('permanent', 'embedding response is too large');
+    new ProviderError('permanent', 'embedding response is too large', { billed: true });
   if (declared !== null && /^\d+$/.test(declared) && Number(declared) > MAX_RESPONSE_BYTES) {
     await res.body?.cancel().catch(() => undefined);
     throw tooLarge();
@@ -120,14 +125,42 @@ async function readCappedText(res: Response): Promise<string> {
   return new TextDecoder('utf-8', { fatal: false }).decode(Buffer.concat(parts));
 }
 
-/** Throws a permanent ProviderError when any component is not finite or is beyond the bound. */
+/**
+ * Throws a permanent, billed ProviderError when any component is not finite or is beyond the bound.
+ * Only ever called on a response the provider already returned, so the request was billed.
+ */
 export function assertVectorBounds(vectors: readonly (readonly number[])[]): void {
   for (const v of vectors) {
     for (const n of v) {
       if (typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > MAX_VECTOR_COMPONENT_ABS) {
-        throw new ProviderError('permanent', 'embedding provider returned an invalid vector');
+        throw new ProviderError('permanent', 'embedding provider returned an invalid vector', {
+          billed: true,
+        });
       }
     }
+  }
+}
+
+/** A ProviderError marked billed (same kind, message and retry-after); anything else unchanged. */
+function markBilled(err: unknown): unknown {
+  if (err instanceof ProviderError && !err.billed) {
+    return new ProviderError(err.kind, err.message, {
+      billed: true,
+      ...(err.retryAfterSeconds === null ? {} : { retryAfterSeconds: err.retryAfterSeconds }),
+    });
+  }
+  return err;
+}
+
+/**
+ * Runs `check` on a response the provider already returned (2xx) and marks any ProviderError it
+ * raises as billed, keeping the kind and message. Other errors pass through unchanged.
+ */
+function whenBilled(check: () => void): void {
+  try {
+    check();
+  } catch (err) {
+    throw markBilled(err);
   }
 }
 
@@ -176,13 +209,16 @@ async function postJson(
   } catch (err) {
     if (err instanceof ProviderError) throw err;
     if (callerSignal !== undefined && callerAborted()) throw abortError(callerSignal);
-    if (timeout.aborted) throw new ProviderError('transient', 'embedding request timed out');
-    throw new ProviderError('transient', 'embedding response could not be read');
+    // The provider answered 2xx: whatever goes wrong from here on, the request was billed.
+    if (timeout.aborted) {
+      throw new ProviderError('transient', 'embedding request timed out', { billed: true });
+    }
+    throw new ProviderError('transient', 'embedding response could not be read', { billed: true });
   }
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new ProviderError('transient', 'embedding response is not valid JSON');
+    throw new ProviderError('transient', 'embedding response is not valid JSON', { billed: true });
   }
 }
 
@@ -190,8 +226,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Only used on a body the provider returned with 2xx, so it is billed. */
 function wrongShape(): ProviderError {
-  return new ProviderError('permanent', 'embedding provider returned an unexpected response');
+  return new ProviderError('permanent', 'embedding provider returned an unexpected response', {
+    billed: true,
+  });
 }
 
 function numberArray(value: unknown): number[] {
@@ -243,12 +282,23 @@ function createGemini(
       const vectors: number[][] = [];
       for (let i = 0; i < texts.length; i += GEMINI_MAX_BATCH) {
         const group = texts.slice(i, i + GEMINI_MAX_BATCH);
-        const part = await embedGroup(group, options);
-        assertEmbeddingShape(part, group.length);
-        assertVectorBounds(part);
-        vectors.push(...part);
+        // Once an earlier group was answered it was billed, so a later group's failure of any kind
+        // (even a 5xx or a network error) leaves the call as a whole billed.
+        const earlierAnswered = i > 0;
+        try {
+          const part = await embedGroup(group, options);
+          whenBilled(() => {
+            assertEmbeddingShape(part, group.length);
+            assertVectorBounds(part);
+          });
+          vectors.push(...part);
+        } catch (err) {
+          throw earlierAnswered ? markBilled(err) : err;
+        }
       }
-      assertEmbeddingShape(vectors, texts.length);
+      whenBilled(() => {
+        assertEmbeddingShape(vectors, texts.length);
+      });
       // Gemini's batch endpoint reports no usage: the caller estimates.
       return { vectors, inputTokens: null };
     },
@@ -307,8 +357,10 @@ function createOpenAiStyle(
         }
         vectors[index] = numberArray(item['embedding']);
       }
-      assertEmbeddingShape(vectors, texts.length);
-      assertVectorBounds(vectors);
+      whenBilled(() => {
+        assertEmbeddingShape(vectors, texts.length);
+        assertVectorBounds(vectors);
+      });
 
       let inputTokens: number | null = null;
       const usage = json['usage'];

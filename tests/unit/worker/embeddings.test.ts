@@ -540,3 +540,207 @@ describe('response size cap (bytes, streamed)', () => {
     expect((await p.embed(['a'], { taskType: 'document' })).vectors).toHaveLength(1);
   });
 });
+
+// P6-D5 F1: a failure AFTER a 2xx answer was billed whatever its kind; a failure before or instead
+// of a 2xx was not (transient ones are counted by the caller on their own account).
+describe('ProviderError.billed (P6-D5 F1)', () => {
+  const kinds = ['transient', 'rate_limited', 'auth', 'billing', 'permanent'] as const;
+
+  it.each(kinds)('defaults to false and never changes isRetryable (%s)', (kind) => {
+    expect(new ProviderError(kind, 'x').billed).toBe(false);
+    const billed = new ProviderError(kind, 'x', { billed: true });
+    expect(billed.billed).toBe(true);
+    expect(billed.isRetryable()).toBe(isRetryableErrorKind(kind));
+  });
+
+  const providers = ['gemini', 'openai', 'openai_compatible'] as const;
+  const bodyFor = (kind: (typeof providers)[number], n: number): unknown =>
+    kind === 'gemini' ? geminiBody(n) : openAiBody(n);
+
+  async function billedError(
+    kind: (typeof providers)[number],
+    respond: () => Response,
+    texts: readonly string[] = ['a'],
+  ): Promise<ProviderError> {
+    const { fetchImpl } = fakeFetch(respond);
+    const p = createEmbeddingProvider(config(kind), { fetchImpl });
+    const err = await failure(p.embed(texts, { taskType: 'document' }));
+    expect(err).toBeInstanceOf(ProviderError);
+    return err as ProviderError;
+  }
+
+  describe.each(providers)('%s: after a 2xx answer', (kind) => {
+    it('wrong-dimension vectors are permanent and billed', async () => {
+      const wrong =
+        kind === 'gemini'
+          ? { embeddings: [{ values: [0.1, 0.2, 0.3] }] }
+          : { data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }], usage: { prompt_tokens: 3 } };
+      const err = await billedError(kind, () => json(wrong));
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+      expect(err.isRetryable()).toBe(false);
+    });
+
+    it('a wrong vector count is permanent and billed', async () => {
+      const err = await billedError(kind, () => json(bodyFor(kind, 1)), ['a', 'b']);
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('a wrong response shape is permanent and billed', async () => {
+      const err = await billedError(kind, () => json({ nope: true }));
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('a vector component beyond the bound is permanent and billed', async () => {
+      const huge = vec();
+      huge[3] = MAX_VECTOR_COMPONENT_ABS * 2;
+      const body =
+        kind === 'gemini'
+          ? { embeddings: [{ values: huge }] }
+          : { data: [{ index: 0, embedding: huge }] };
+      const err = await billedError(kind, () => json(body));
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('an invalid JSON body keeps its transient kind and is billed', async () => {
+      const err = await billedError(kind, () => new Response('<html>gateway</html>'));
+      expect(err.kind).toBe('transient');
+      expect(err.billed).toBe(true);
+    });
+
+    it('an oversized declared content-length is permanent and billed', async () => {
+      const err = await billedError(
+        kind,
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({ pull: (c) => c.enqueue(new Uint8Array(1)) }),
+            {
+              status: 200,
+              headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) },
+            },
+          ),
+      );
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('an oversized streamed body is permanent and billed', async () => {
+      const chunk = new Uint8Array(8 * 1024 * 1024);
+      const err = await billedError(
+        kind,
+        () => new Response(new ReadableStream<Uint8Array>({ pull: (c) => c.enqueue(chunk) })),
+      );
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('a body stream that fails mid-read is transient and billed', async () => {
+      const err = await billedError(
+        kind,
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull() {
+                throw new Error('connection reset');
+              },
+            }),
+          ),
+      );
+      expect(err.kind).toBe('transient');
+      expect(err.billed).toBe(true);
+    });
+  });
+
+  describe.each(providers)('%s: no 2xx answer', (kind) => {
+    it.each([500, 429, 401, 402, 400])('HTTP %i is not billed', async (status) => {
+      const err = await billedError(kind, () => json({ error: SENTINEL_BODY }, status));
+      expect(err.billed).toBe(false);
+    });
+
+    it('a network failure is not billed', async () => {
+      const fetchImpl = (() => Promise.reject(new TypeError('connect failed'))) as typeof fetch;
+      const p = createEmbeddingProvider(config(kind), { fetchImpl });
+      const err = await failure(p.embed(['a'], { taskType: 'document' }));
+      expect((err as ProviderError).kind).toBe('transient');
+      expect((err as ProviderError).billed).toBe(false);
+    });
+
+    it('a timeout before any answer is not billed', async () => {
+      const fetchImpl = ((_u: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        })) as unknown as typeof fetch;
+      const p = createEmbeddingProvider(config(kind), { fetchImpl, timeoutMs: 25 });
+      const err = await failure(p.embed(['a'], { taskType: 'document' }));
+      expect((err as ProviderError).billed).toBe(false);
+    });
+  });
+
+  describe('gemini multi-part calls', () => {
+    const many = Array.from({ length: GEMINI_MAX_BATCH + 5 }, (_, i) => `text ${String(i)}`);
+
+    it('a wrong shape in the second part is billed', async () => {
+      const { fetchImpl } = fakeFetch((_s, n) =>
+        n === 1 ? json(geminiBody(GEMINI_MAX_BATCH)) : json({ nope: true }),
+      );
+      const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+      const err = (await failure(p.embed(many, { taskType: 'document' }))) as ProviderError;
+      expect(err.kind).toBe('permanent');
+      expect(err.billed).toBe(true);
+    });
+
+    it('a wrong dimension in the first part is billed', async () => {
+      const { fetchImpl } = fakeFetch(() =>
+        json({
+          embeddings: Array.from({ length: GEMINI_MAX_BATCH }, () => ({ values: [0.1] })),
+        }),
+      );
+      const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+      const err = (await failure(p.embed(many, { taskType: 'document' }))) as ProviderError;
+      expect(err.billed).toBe(true);
+    });
+
+    it('a 500 on the second part is billed because the first part was answered', async () => {
+      const { fetchImpl } = fakeFetch((_s, n) =>
+        n === 1 ? json(geminiBody(GEMINI_MAX_BATCH)) : json({}, 500),
+      );
+      const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+      const err = (await failure(p.embed(many, { taskType: 'document' }))) as ProviderError;
+      expect(err.kind).toBe('transient');
+      expect(err.billed).toBe(true);
+    });
+
+    it('a 500 on the first part is not billed', async () => {
+      const { fetchImpl } = fakeFetch(() => json({}, 500));
+      const p = createEmbeddingProvider(config('gemini'), { fetchImpl });
+      const err = (await failure(p.embed(many, { taskType: 'document' }))) as ProviderError;
+      expect(err.billed).toBe(false);
+    });
+  });
+
+  it('keeps messages free of the key, the body and the text when marking billed', async () => {
+    const { fetchImpl } = fakeFetch(() => json({ nope: SENTINEL_BODY }));
+    const p = createEmbeddingProvider(config('openai'), { fetchImpl });
+    const err = await failure(p.embed([SENTINEL_TEXT], { taskType: 'document' }));
+    expect((err as ProviderError).billed).toBe(true);
+    expectNoLeak(err);
+  });
+
+  it('assertVectorBounds always raises a billed permanent error', () => {
+    const bad = vec();
+    bad[0] = Number.NaN;
+    try {
+      assertVectorBounds([bad]);
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ProviderError);
+      expect((e as ProviderError).billed).toBe(true);
+      expect((e as ProviderError).kind).toBe('permanent');
+    }
+  });
+});
