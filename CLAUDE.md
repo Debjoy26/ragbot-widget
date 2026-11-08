@@ -2,6 +2,8 @@
 
 > Adapted from the PWT Workbench contract v0.3 for this repo (Node/TypeScript monorepo + Supabase). Phase IDs are `plan.md` P0–P12; invariants are `handover.md §4`.
 
+**Working rules:** read and follow `rules.md` (owner, 2026-11-08). It replaces CI with testing on this system, adds post-push verification, and makes the main session responsible for debug cycles. Where it differs from this file on CI, testing or starting debug cycles, `rules.md` wins: the main session starts and runs a debug cycle without waiting for approval, while merges, pushes and hosted changes still need the owner.
+
 ## Start/resume
 Read `status.md`, `handover.md` and the active `plan.md` phase section; inspect actual Git/dirty-worktree state (`git status`, `git log -5`). Load only the spec sections the active phase needs (`PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`), not every doc each session. Preserve existing work. Never invent commits, test results, decisions or approvals. Open P0 decisions (`status.md §3`) are never guessed — a task that depends on one stops and asks.
 
