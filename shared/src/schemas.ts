@@ -290,11 +290,34 @@ export const MAX_MESSAGE_CHARS = 2000;
 
 export const idempotencyKeySchema = z.uuid();
 
+/** True when `value` has U+0000 or a UTF-16 surrogate that is not half of a valid pair. */
+function hasNulOrLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const c = value.charCodeAt(i);
+    if (c === 0) return true;
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      i += 1;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** POST /v1/chat. Strict: context/system/history/messages/api_key and any other extra field are rejected. */
 export const chatRequestSchema = z.strictObject({
   bot_slug: botSlugSchema,
   conversation_id: z.uuid().nullable(),
-  message: z.string().trim().min(1).max(MAX_MESSAGE_CHARS),
+  // U+0000 and lone surrogates are refused: Postgres text cannot hold NUL, and a lone surrogate
+  // is not valid UTF-8 (the insert would fail after the budget was reserved).
+  message: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_MESSAGE_CHARS)
+    .refine((v) => !hasNulOrLoneSurrogate(v), 'must not contain NUL or unpaired surrogates'),
   preferred_language: languageTagSchema.optional(),
 });
 

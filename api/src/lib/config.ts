@@ -46,10 +46,14 @@ export interface AppConfig {
   readonly chatContextMaxTokens: number;
   readonly chatHistoryMaxMessages: number;
   readonly chatMaxOutputTokens: number;
+  /** Hard cap on the characters of one answer: the stream is aborted and the turn stored partial. */
+  readonly chatMaxOutputChars: number;
   readonly chatReservationTtlSeconds: number;
   /** Total attempts per provider before the first token (1..3), including the first. */
   readonly chatProviderAttempts: number;
   readonly historyPageSize: number;
+  /** Per-session limit on GET /v1/conversations/:id. */
+  readonly historyRate: { readonly limit: number; readonly window_seconds: number };
   /** USD per million tokens. */
   readonly chatPrice: TokenPrice;
   /** Null exactly when no fallback provider is configured. */
@@ -79,6 +83,8 @@ export class ConfigError extends Error {
 }
 
 const MAX_INT32 = 2_147_483_647;
+/** CHAT_RESERVATION_TTL_SECONDS * 1000 must be at least CHAT_DEADLINE_MS plus this. */
+export const RESERVATION_MARGIN_MS = 30_000;
 const MIN_SECRET_BYTES = 32;
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -108,7 +114,8 @@ const decimal = (min: number, max: number) =>
 
 /** Largest USD-per-million price accepted. A typo such as 1e9 must not pass as a price. */
 const MAX_PRICE_PER_MILLION = 100_000;
-const price = decimal(0, MAX_PRICE_PER_MILLION);
+/** A price of 0 would make every budget calculation meaningless: prices must be positive. */
+const price = decimal(0, MAX_PRICE_PER_MILLION).refine((v) => v > 0);
 /** Fallback prices are required only when a fallback provider is configured (checked in loadConfig). */
 const optionalPrice = z.preprocess((v) => (v === '' ? undefined : v), price.optional());
 
@@ -188,9 +195,11 @@ const envSchema = z.object({
   // P7 chat pipeline. match_document_chunks accepts a count of 1..50 and a similarity of -1..1.
   RETRIEVAL_TOP_K: integer(1, 50),
   RETRIEVAL_MIN_SIMILARITY: decimal(0, 1),
-  CHAT_CONTEXT_MAX_TOKENS: integer(1, 10_000_000),
+  // A floor below which not even the system prompt and one question fit.
+  CHAT_CONTEXT_MAX_TOKENS: integer(256, 10_000_000),
   CHAT_HISTORY_MAX_MESSAGES: integer(0, 50),
   CHAT_MAX_OUTPUT_TOKENS: integer(1, 1_000_000),
+  CHAT_MAX_OUTPUT_CHARS: integer(100, 10_000_000),
   CHAT_PRICE_INPUT_PER_MILLION: price,
   CHAT_PRICE_OUTPUT_PER_MILLION: price,
   CHAT_FALLBACK_PRICE_INPUT_PER_MILLION: optionalPrice,
@@ -203,6 +212,9 @@ const envSchema = z.object({
   CHAT_PROVIDER_ATTEMPTS: integer(1, 3),
   // get_conversation_history accepts a limit of 1..100.
   HISTORY_PAGE_SIZE: integer(1, 100),
+  // Same ranges as the other rate rules (record_rate_limit_attempt).
+  HISTORY_RATE_PER_SESSION_LIMIT: integer(1, 999_999_999),
+  HISTORY_RATE_WINDOW_SECONDS: integer(1, 86_400),
 });
 
 function deepFreeze<T>(value: T): T {
@@ -325,8 +337,9 @@ export function loadConfig(env: Env): AppConfig {
     );
   }
 
-  // A reservation must outlive the request it covers, or the reaper could expire it mid-answer.
-  if (v.CHAT_RESERVATION_TTL_SECONDS * 1000 <= v.CHAT_DEADLINE_MS) {
+  // A reservation must outlive the request it covers, or the reaper could expire it mid-answer:
+  // the deadline plus a margin for persisting the turn and settling the budget.
+  if (v.CHAT_RESERVATION_TTL_SECONDS * 1000 < v.CHAT_DEADLINE_MS + RESERVATION_MARGIN_MS) {
     const names = ['CHAT_RESERVATION_TTL_SECONDS', 'CHAT_DEADLINE_MS'];
     throw new ConfigError(names, `Invalid configuration: ${names.join(', ')} (TTL must be longer)`);
   }
@@ -375,9 +388,14 @@ export function loadConfig(env: Env): AppConfig {
     chatContextMaxTokens: v.CHAT_CONTEXT_MAX_TOKENS,
     chatHistoryMaxMessages: v.CHAT_HISTORY_MAX_MESSAGES,
     chatMaxOutputTokens: v.CHAT_MAX_OUTPUT_TOKENS,
+    chatMaxOutputChars: v.CHAT_MAX_OUTPUT_CHARS,
     chatReservationTtlSeconds: v.CHAT_RESERVATION_TTL_SECONDS,
     chatProviderAttempts: v.CHAT_PROVIDER_ATTEMPTS,
     historyPageSize: v.HISTORY_PAGE_SIZE,
+    historyRate: {
+      limit: v.HISTORY_RATE_PER_SESSION_LIMIT,
+      window_seconds: v.HISTORY_RATE_WINDOW_SECONDS,
+    },
     chatPrice: {
       inputPerMillion: v.CHAT_PRICE_INPUT_PER_MILLION,
       outputPerMillion: v.CHAT_PRICE_OUTPUT_PER_MILLION,

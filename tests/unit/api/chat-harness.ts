@@ -114,10 +114,14 @@ export interface Options {
   moderationUsage?: { inputTokens: number; outputTokens: number } | null;
   embeddingModel?: string;
   embeddingFail?: Error;
+  /** Extra FakeEmbeddingProvider options (delay, hang, failTimes, ...). */
+  embeddingOptions?: ConstructorParameters<typeof FakeEmbeddingProvider>[0];
   /** Errors thrown by a database function, by name (once per call number, `n` is 0-based). */
   dbFail?: Record<string, (n: number, args: Record<string, unknown>) => Error | undefined>;
   begin?: () => Promise<BeginRunResult>;
   consume?: () => Promise<void>;
+  consumeHistory?: () => Promise<void>;
+  settle?: (botId: string, reservationId: string, amount: number) => Promise<void>;
   reserve?: () => Promise<string>;
   markRunning?: () => Promise<boolean>;
   attempts?: number;
@@ -199,6 +203,7 @@ export function setup(options: Options = {}) {
   const embedding = new FakeEmbeddingProvider({
     model: options.embeddingModel ?? 'fake-embedding-model',
     ...(options.embeddingFail === undefined ? {} : { fail: options.embeddingFail }),
+    ...options.embeddingOptions,
   });
 
   const limits = {
@@ -207,8 +212,12 @@ export function setup(options: Options = {}) {
       message_per_ip: { limit: 10, window_seconds: 60 },
     })),
     consumeMessage: vi.fn(options.consume ?? (async () => undefined)),
+    consumeHistory: vi.fn(options.consumeHistory ?? (async () => undefined)),
     reserve: vi.fn(options.reserve ?? (async () => RESERVATION)),
-    settle: vi.fn(async () => undefined),
+    settle: vi.fn(
+      options.settle ??
+        (async (_botId: string, _reservationId: string, _amount: number) => undefined),
+    ),
     release: vi.fn(async () => undefined),
   };
   const runs = {
@@ -246,7 +255,8 @@ export function setup(options: Options = {}) {
     }),
     moderationMode: 'llm_classifier',
     embedding,
-    hasFallback: fallbackProvider !== null,
+    // Retries of the input stage do not wait in unit tests.
+    sleep: options.sleep ?? (async () => undefined),
   });
   const auth = createVisitorAuth({
     secret: FAKE_VISITOR_SECRET,
@@ -263,7 +273,12 @@ export function setup(options: Options = {}) {
     logger: { ...buildLoggerOptions('info'), stream: capture.stream },
   });
   registerChatRoutes(app, { auth, limits, runs, chat });
-  registerConversationRoutes(app, { auth, conversations, pageSize: config.historyPageSize });
+  registerConversationRoutes(app, {
+    auth,
+    limits,
+    conversations,
+    pageSize: config.historyPageSize,
+  });
   const token = auth.issueToken({
     bot_id: options.visitorBot ?? BOT,
     session_id: SESSION,

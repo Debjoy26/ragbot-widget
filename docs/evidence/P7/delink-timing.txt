@@ -1,0 +1,9 @@
+P7-D1 R1-3: delink timing on adversarial input, measured by Opus on this system (Node 24.22.2).
+Before (wave 1, 8e81f8b): 'a'x5000 22 ms; 'a'x20000 352 ms (quadratic: 4x input, 16x time).
+  P7-D1-B measured the 200k shapes on the wave 1 code: 'a'x200k 34699 ms, 'a.'x100k 34527 ms, 'a+'x100k 45388 ms (self-reported).
+After (P7-D1-B citations.ts):
+  'a' x 200000:  73 ms
+  'a.' x 100000: 32 ms
+  'a+' x 100000: 38 ms
+  '1 ' x 100000: 49 ms
+  '_' x 100000:   7 ms

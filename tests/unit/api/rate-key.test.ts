@@ -26,7 +26,12 @@ describe('rateKey', () => {
   });
 
   it('has a distinct bucket for each session kind, with the same parts', () => {
-    const kinds = ['session_preflight', 'session_create_ip', 'session_create_bot'] as const;
+    const kinds = [
+      'session_preflight',
+      'session_create_ip',
+      'session_create_bot',
+      'history_session',
+    ] as const;
     const keys = kinds.map((k) => rateKey(SECRET, k, ['203.0.113.9']));
     expect(new Set(keys).size).toBe(kinds.length);
     for (const k of keys) expect(k).toMatch(/^[0-9a-f]{64}$/);

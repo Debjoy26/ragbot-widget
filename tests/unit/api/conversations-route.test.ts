@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { conversationHistoryResponseSchema } from '@ragbot/shared';
+import { AppError } from '../../../api/src/lib/errors.ts';
 import {
   BOT,
   CONVERSATION,
@@ -84,6 +85,55 @@ describe('GET /v1/conversations/:id (E2, ADR 0009)', () => {
     expect(res.statusCode).toBe(403);
     expect(json(res)['code']).toBe('FORBIDDEN');
     expect(h.calls('get_conversation_history')).toHaveLength(0);
+  });
+
+  describe('rate limit per session (P7-D1 fix 8, R1-7)', () => {
+    const over = async () => {
+      throw new AppError('RATE_LIMITED', { retryAfterSeconds: 11 });
+    };
+
+    it('429 RATE_LIMITED with a retry hint when over the limit; nothing is read', async () => {
+      const h = withHistory({ consumeHistory: over });
+      const res = await get(h, `/v1/conversations/${CONVERSATION}`);
+      expect(res.statusCode).toBe(429);
+      expect(json(res)).toMatchObject({ code: 'RATE_LIMITED', retry_after_seconds: 11 });
+      expect(res.headers['retry-after']).toBe('11');
+      expect(h.rpcs).toHaveLength(0);
+    });
+
+    it('counts every valid, authenticated read once, with the visitor of the token', async () => {
+      const h = withHistory();
+      await get(h, `/v1/conversations/${CONVERSATION}`);
+      await get(h, `/v1/conversations/${CONVERSATION}`);
+      expect(h.limits.consumeHistory).toHaveBeenCalledTimes(2);
+      expect(h.limits.consumeHistory).toHaveBeenCalledWith(
+        expect.objectContaining({ bot_id: BOT, session_id: SESSION }),
+      );
+    });
+
+    it('counts a read even when history is switched off for the bot', async () => {
+      const h = withHistory({
+        context: defaultContext({ settings: { feature_flags: { history_enabled: false } } }),
+      });
+      expect((await get(h, `/v1/conversations/${CONVERSATION}`)).statusCode).toBe(403);
+      expect(h.limits.consumeHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not count a request without a valid token or with an invalid id', async () => {
+      const h = withHistory();
+      await h.app.inject({ method: 'GET', url: `/v1/conversations/${CONVERSATION}` });
+      await get(h, '/v1/conversations/not-a-uuid');
+      expect(h.limits.consumeHistory).not.toHaveBeenCalled();
+    });
+
+    it('a limiter that is not configured fails closed as 500', async () => {
+      const h = withHistory({
+        consumeHistory: async () => {
+          throw new AppError('INTERNAL_ERROR', { internalName: 'history_rate_not_configured' });
+        },
+      });
+      expect((await get(h, `/v1/conversations/${CONVERSATION}`)).statusCode).toBe(500);
+    });
   });
 
   it('is on when the flag is missing or true; anything else counts as off', () => {

@@ -578,7 +578,7 @@ describe('Gemini specifics', () => {
     expect(texts).toEqual(['early ']);
   });
 
-  it('other finish reasons (MAX_TOKENS) end the reply normally', async () => {
+  it('finish reason MAX_TOKENS ends the reply normally and marks the usage truncated (R2-9)', async () => {
     const p = make([
       ev({
         candidates: [{ content: { parts: [{ text: 'cut' }] }, finishReason: 'MAX_TOKENS' }],
@@ -587,8 +587,29 @@ describe('Gemini specifics', () => {
     ]);
     const out = await collect(p.stream(request()));
     expect(out.texts).toEqual(['cut']);
-    expect(out.usage).toEqual({ inputTokens: 5, outputTokens: 321 });
+    expect(out.usage).toEqual({ inputTokens: 5, outputTokens: 321, truncated: true });
   });
+
+  it('MAX_TOKENS in a later event than the text still marks truncated', async () => {
+    const p = make([
+      ev({ candidates: [{ content: { parts: [{ text: 'cut' }] } }] }),
+      ev({ candidates: [{ finishReason: 'MAX_TOKENS' }] }),
+    ]);
+    const out = await collect(p.stream(request()));
+    expect(out.usage.truncated).toBe(true);
+  });
+
+  it.each(['STOP', 'OTHER', 'FINISH_REASON_UNSPECIFIED'])(
+    'finish reason %s leaves truncated undefined',
+    async (finishReason) => {
+      const p = make([
+        ev({ candidates: [{ content: { parts: [{ text: 'ok' }] }, finishReason }] }),
+        ev({ candidates: [{ finishReason: 'STOP' }] }),
+      ]);
+      const out = await collect(p.stream(request()));
+      expect(out.usage).not.toHaveProperty('truncated');
+    },
+  );
 
   it('skips thought parts, counts thinking tokens as output and reports cached input', async () => {
     const p = make([
@@ -683,8 +704,31 @@ describe('OpenAI and openai_compatible specifics', () => {
     ]);
     const out = await collect(p.stream(request()));
     expect(out.texts).toEqual(['hi']);
-    expect(out.usage).toEqual({ inputTokens: 3, outputTokens: 2 });
+    expect(out.usage).toEqual({ inputTokens: 3, outputTokens: 2, truncated: true });
   });
+
+  it.each(['openai', 'openai_compatible'] as const)(
+    '%s: finish_reason length marks the usage truncated, stop does not (R2-9)',
+    async (kind) => {
+      const run = async (finish: string): Promise<Awaited<ReturnType<typeof collect>>> => {
+        const { p } = make(kind, [
+          delta('hi'),
+          ev({ choices: [{ delta: {}, finish_reason: finish }] }),
+          ev({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 2 } }),
+          'data: [DONE]\n\n',
+        ]);
+        return collect(p.stream(request()));
+      };
+      expect((await run('length')).usage).toEqual({
+        inputTokens: 3,
+        outputTokens: 2,
+        truncated: true,
+      });
+      for (const finish of ['stop', 'tool_calls']) {
+        expect((await run(finish)).usage).toEqual({ inputTokens: 3, outputTokens: 2 });
+      }
+    },
+  );
 
   it('rejects a stream with text but no finish_reason and no [DONE]', async () => {
     const { p } = make('openai_compatible', [delta('hi')]);
@@ -732,6 +776,29 @@ describe('OpenAI and openai_compatible specifics', () => {
     const out = await collect(p.stream(req));
     const inputChars = req.system.length + req.messages.reduce((n, m) => n + m.content.length, 0);
     expect(out.usage).toEqual({ inputTokens: Math.ceil(inputChars / 3), outputTokens: 1 });
+  });
+
+  describe('stream_options and a 400 (P7-D1)', () => {
+    // The compatibility resend without stream_options was removed: a 400 is permanent and is never
+    // retried, so a genuine bad request costs exactly one call.
+    const hasOptions = (b: Record<string, unknown>): boolean => 'stream_options' in b;
+
+    it.each(['openai', 'openai_compatible'] as const)(
+      '%s sends stream_options.include_usage, and a 400 is permanent with exactly one request',
+      async (provider) => {
+        const { fetch, seen } = fakeFetch(() => new Response('{"error":"nope"}', { status: 400 }));
+        const p = createChatProvider(config(provider), { fetch });
+        const err = await collect(p.stream(request())).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(ProviderError);
+        expect((err as ProviderError).kind).toBe('permanent');
+        expect((err as ProviderError).billed).toBe(false);
+        expect(seen).toHaveLength(1);
+        expect(hasOptions(seen[0]?.body ?? {})).toBe(true);
+      },
+    );
   });
 
   it('builds the compatible URL from the base with or without /v1 and trailing slashes', async () => {
@@ -815,6 +882,23 @@ describe('Anthropic specifics', () => {
       const p = make([start({ input_tokens: 5 }), text('ok'), stop(reason, { output_tokens: 2 })]);
       const out = await collect(p.stream(request()));
       expect(out.texts).toEqual(['ok']);
+    }
+  });
+
+  it('stop_reason max_tokens marks the usage truncated; other reasons leave it undefined (R2-9)', async () => {
+    const run = async (reason: string): Promise<Awaited<ReturnType<typeof collect>>> =>
+      collect(
+        make([start({ input_tokens: 5 }), text('ok'), stop(reason, { output_tokens: 2 })]).stream(
+          request(),
+        ),
+      );
+    expect((await run('max_tokens')).usage).toEqual({
+      inputTokens: 5,
+      outputTokens: 2,
+      truncated: true,
+    });
+    for (const reason of ['end_turn', 'stop_sequence', 'tool_use']) {
+      expect((await run(reason)).usage).toEqual({ inputTokens: 5, outputTokens: 2 });
     }
   });
 

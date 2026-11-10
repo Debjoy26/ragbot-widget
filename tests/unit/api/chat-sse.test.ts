@@ -195,6 +195,50 @@ describe('SSE writer', () => {
     expect(await second).toBe(false);
   });
 
+  it('no keep-alive after error or done (P7-D1 fix 11, R2-8)', async () => {
+    const afterError = make();
+    afterError.writer.start({});
+    await afterError.writer.send(meta);
+    afterError.writer.keepAlive();
+    await afterError.writer.send(error);
+    const frames = afterError.res.frames.length;
+    afterError.writer.keepAlive();
+    expect(afterError.res.frames).toHaveLength(frames);
+    // The handoff that may follow an error is an event; after it nothing at all is written.
+    await afterError.writer.send(handoff);
+    afterError.writer.keepAlive();
+    expect(afterError.res.frames).toHaveLength(frames + 1);
+
+    const afterDone = make();
+    afterDone.writer.start({});
+    await afterDone.writer.send(meta);
+    await afterDone.writer.send(sources);
+    await afterDone.writer.send(done);
+    const written = afterDone.res.frames.length;
+    afterDone.writer.keepAlive();
+    expect(afterDone.res.frames).toHaveLength(written);
+  });
+
+  it('a client that already left (socket destroyed) is gone from the start (P7-D1 fix 6)', async () => {
+    const res = new FakeResponse() as FakeResponse & { socket: { destroyed: boolean } };
+    res.socket = { destroyed: true };
+    const writer = createSseWriter(res as unknown as ServerResponse);
+    expect(writer.clientGone).toBe(true);
+    let called = 0;
+    writer.onClientGone(() => {
+      called += 1;
+    });
+    expect(called).toBe(1); // told at once, no event needed
+    writer.start({});
+    expect(res.flushed).toBe(false); // nothing written to a dead socket
+    expect(await writer.send(meta)).toBe(false);
+    expect(res.frames).toHaveLength(0);
+
+    const destroyed = new FakeResponse();
+    destroyed.destroyed = true;
+    expect(createSseWriter(destroyed as unknown as ServerResponse).clientGone).toBe(true);
+  });
+
   it('keep-alive is a comment, never an event', () => {
     const { res, writer } = make();
     writer.start({});

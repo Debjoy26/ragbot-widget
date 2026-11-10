@@ -76,7 +76,9 @@ function nextPhase(phase: Phase, name: SseEventName): Phase {
 
 export function createSseWriter(raw: ServerResponse): SseWriter {
   let phase: Phase = 'new';
-  let gone = false;
+  // A client that left before the response was taken over has already fired its 'close': read the
+  // state of the socket now instead of waiting for an event that will not come.
+  let gone = raw.destroyed || raw.socket?.destroyed === true;
   let started = false;
   const callbacks: (() => void)[] = [];
 
@@ -111,6 +113,7 @@ export function createSseWriter(raw: ServerResponse): SseWriter {
     start(headers) {
       if (started) throw new SseProtocolError('sse already started');
       started = true;
+      if (unusable()) return; // nobody is listening: write nothing
       const out: Record<string, string | number | readonly string[]> = {};
       for (const [name, value] of Object.entries(headers)) {
         if (value !== undefined) out[name] = value;
@@ -137,7 +140,10 @@ export function createSseWriter(raw: ServerResponse): SseWriter {
     },
 
     keepAlive() {
-      if (started && !unusable() && phase !== 'closed') raw.write(': keep-alive\n\n');
+      // Nothing at all follows `error` or `done` (a handoff after an error is an event, not this).
+      if (started && !unusable() && phase !== 'closed' && phase !== 'errored') {
+        raw.write(': keep-alive\n\n');
+      }
     },
 
     end() {

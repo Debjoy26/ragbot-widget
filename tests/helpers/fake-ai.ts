@@ -66,6 +66,8 @@ export interface FakeChatScript {
   readonly chunkDelayMs?: number;
   /** Never yield: wait until the signal aborts (a stuck provider). */
   readonly hang?: boolean;
+  /** After this many chunks were yielded, wait until the signal aborts (a stream that stalls). */
+  readonly hangAfter?: number;
   /** Final usage; defaults to a simple estimate. */
   readonly usage?: ChatUsage;
 }
@@ -112,6 +114,9 @@ export class FakeChatProvider implements ChatProvider {
         if (script.failAfter !== undefined && i === script.failAfter.chunks) {
           throw script.failAfter.error;
         }
+        if (script.hangAfter !== undefined && i === script.hangAfter) {
+          await pause(2 ** 31 - 1, signal);
+        }
         if (script.chunkDelayMs !== undefined) await pause(script.chunkDelayMs, signal);
         else if (signal?.aborted === true) throw abortError();
         const text = chunks[i] as string;
@@ -120,6 +125,9 @@ export class FakeChatProvider implements ChatProvider {
       }
       if (script.failAfter !== undefined && script.failAfter.chunks >= chunks.length) {
         throw script.failAfter.error;
+      }
+      if (script.hangAfter !== undefined && script.hangAfter >= chunks.length) {
+        await pause(2 ** 31 - 1, signal);
       }
       return script.usage ?? { inputTokens: 100, outputTokens: Math.ceil(chars / 3) };
     } catch (err) {
@@ -133,14 +141,16 @@ export class FakeChatProvider implements ChatProvider {
 // Moderation
 // ---------------------------------------------------------------------------
 
-/** What a fake moderation call does: a verdict, or a thrown failure. */
-export type FakeModerationAction = 'allow' | 'block' | Error;
+/** What a fake moderation call does: a verdict, a thrown failure, or `hang` (wait for the abort). */
+export type FakeModerationAction = 'allow' | 'block' | 'hang' | Error;
 
 export class FakeModerationProvider implements ModerationProvider {
   readonly provider: ProviderKind;
   readonly model: string;
   /** The text of every call, in order. */
   readonly texts: string[] = [];
+  /** Number of calls that ended because the signal aborted. */
+  abortedCalls = 0;
   readonly #decide: (text: string, callIndex: number) => FakeModerationAction;
   readonly #usage: ChatUsage | null;
 
@@ -169,11 +179,22 @@ export class FakeModerationProvider implements ModerationProvider {
   ): Promise<ModerationResult> {
     const index = this.texts.length;
     this.texts.push(text);
-    if (options?.signal?.aborted === true) throw abortError();
+    if (options?.signal?.aborted === true) {
+      this.abortedCalls += 1;
+      throw abortError();
+    }
     const action = this.#decide(text, index);
     if (action instanceof Error) throw action;
+    if (action === 'hang') {
+      try {
+        await pause(2 ** 31 - 1, options?.signal);
+      } catch (err) {
+        this.abortedCalls += 1;
+        throw err;
+      }
+    }
     return {
-      verdict: action,
+      verdict: action === 'block' ? 'block' : 'allow',
       categories: action === 'block' ? ['fake_block'] : [],
       usage: this.#usage,
     };
@@ -190,22 +211,36 @@ export class FakeEmbeddingProvider implements EmbeddingProvider {
   readonly dimensions = VECTOR_DIMENSIONS;
   readonly texts: string[] = [];
   readonly taskTypes: string[] = [];
+  /** Number of calls that ended because the signal aborted. */
+  abortedCalls = 0;
   readonly #fail: Error | undefined;
+  readonly #failTimes: number;
   readonly #inputTokens: number | null;
   readonly #delayMs: number;
+  readonly #hang: boolean;
+  readonly #ignoreAbort: boolean;
 
   constructor(
     options: {
       model?: string;
       provider?: ProviderKind;
       fail?: Error;
+      /** Fail only the first N calls (default: every call when `fail` is set). */
+      failTimes?: number;
       inputTokens?: number | null;
       delayMs?: number;
+      /** Wait until the signal aborts. */
+      hang?: boolean;
+      /** Never settle and never look at the signal (a provider that ignores cancellation). */
+      ignoreAbort?: boolean;
     } = {},
   ) {
     this.provider = options.provider ?? 'gemini';
     this.model = options.model ?? 'fake-embedding-model';
     this.#fail = options.fail;
+    this.#failTimes = options.failTimes ?? Number.POSITIVE_INFINITY;
+    this.#hang = options.hang ?? false;
+    this.#ignoreAbort = options.ignoreAbort ?? false;
     this.#inputTokens = options.inputTokens === undefined ? 8 : options.inputTokens;
     this.#delayMs = options.delayMs ?? 0;
   }
@@ -215,11 +250,19 @@ export class FakeEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embed(texts: readonly string[], options: EmbedOptions): Promise<EmbeddingResult> {
+    const call = this.taskTypes.length;
     this.texts.push(...texts);
     this.taskTypes.push(options.taskType);
-    if (this.#delayMs > 0) await pause(this.#delayMs, options.signal);
-    else if (options.signal?.aborted === true) throw abortError();
-    if (this.#fail !== undefined) throw this.#fail;
+    if (this.#ignoreAbort) await new Promise<never>(() => undefined);
+    try {
+      if (this.#hang) await pause(2 ** 31 - 1, options.signal);
+      else if (this.#delayMs > 0) await pause(this.#delayMs, options.signal);
+      else if (options.signal?.aborted === true) throw abortError();
+    } catch (err) {
+      this.abortedCalls += 1;
+      throw err;
+    }
+    if (this.#fail !== undefined && call < this.#failTimes) throw this.#fail;
     return {
       vectors: texts.map(() => new Array<number>(VECTOR_DIMENSIONS).fill(0.01)),
       inputTokens: this.#inputTokens,

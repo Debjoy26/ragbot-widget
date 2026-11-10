@@ -10,6 +10,7 @@ const BOT = randomUUID();
 const SESSION = randomUUID();
 const NOW = Date.parse('2026-11-07T12:00:10.000Z');
 const PREFLIGHT = { limit: 30, window_seconds: 600 };
+const HISTORY = { limit: 25, window_seconds: 120 };
 
 interface Rpc {
   name: string;
@@ -39,6 +40,7 @@ function fake(answer: (rpc: Rpc) => unknown) {
     db: db as never,
     rateKeySecret: SECRET,
     sessionPreflight: PREFLIGHT,
+    history: HISTORY,
     now: () => NOW,
   });
   return { limits, calls };
@@ -242,6 +244,69 @@ describe('consumeSessionCreateBot', () => {
       bot_session_window_seconds: 60,
     });
     expect(calls[0]?.args['p_limit']).toBe(999_999_999);
+  });
+});
+
+describe('consumeHistory (P7-D1 fix 8, R1-7)', () => {
+  it('counts one attempt per session with the configured rule', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeHistory(visitor);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('record_rate_limit_attempt');
+    expect(calls[0]?.args).toMatchObject({ p_limit: 25, p_window_seconds: 120 });
+    expect(String(calls[0]?.args['p_key_hash'])).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls[0]?.opts).toEqual({ retryOnContention: true });
+  });
+
+  it('uses a bucket of its own, per bot and session', async () => {
+    const { limits, calls } = fake(() => row(true));
+    await limits.consumeHistory(visitor);
+    await limits.consumeHistory(visitor);
+    await limits.consumeHistory({ ...visitor, session_id: randomUUID() });
+    await limits.consumeMessage(visitor, '203.0.113.9', POLICY);
+    const keys = calls.map((c) => c.args['p_key_hash']);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[3]).not.toBe(keys[0]); // not the message bucket of the same session
+  });
+
+  it('is RATE_LIMITED with a retry-after from the window when over the limit', async () => {
+    const { limits } = fake(() => row(false, '2026-11-07T12:01:10.000Z'));
+    const err = await appError(limits.consumeHistory(visitor));
+    expect(err.code).toBe('RATE_LIMITED');
+    expect(err.retryAfterSeconds).toBe(60);
+  });
+
+  it('fails closed as INTERNAL_ERROR, counting nothing, when no history rule was configured', async () => {
+    const calls: unknown[] = [];
+    const limits = createLimits({
+      db: {
+        rpc: async (...args: unknown[]) => {
+          calls.push(args);
+          return row(true);
+        },
+      } as never,
+      rateKeySecret: SECRET,
+      sessionPreflight: PREFLIGHT,
+    });
+    const err = await appError(limits.consumeHistory(visitor));
+    expect(err.code).toBe('INTERNAL_ERROR');
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each([
+    ['zero limit', { limit: 0, window_seconds: 60 }],
+    ['window too long', { limit: 5, window_seconds: 86401 }],
+    ['extra key', { limit: 5, window_seconds: 60, x: 1 }],
+  ])('refuses an invalid rule at construction: %s', (_label, bad) => {
+    expect(() =>
+      createLimits({
+        db: { rpc: async () => row(true) } as never,
+        rateKeySecret: SECRET,
+        sessionPreflight: PREFLIGHT,
+        history: bad as never,
+      }),
+    ).toThrow();
   });
 });
 

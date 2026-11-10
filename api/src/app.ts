@@ -49,6 +49,7 @@ export function createApp(
       limit: config.sessionPreflightPerIpLimit,
       window_seconds: config.sessionPreflightWindowSeconds,
     },
+    history: config.historyRate,
   });
   const runs = createRuns({ db });
   const turnstile = createTurnstileVerifier({
@@ -89,9 +90,13 @@ export function createApp(
     }),
     moderationMode: config.ai.moderation.mode,
     embedding: ai.embedding,
-    hasFallback: ai.chatFallback !== null,
   });
   registerChatRoutes(app, { auth, limits, runs, chat });
-  registerConversationRoutes(app, { auth, conversations, pageSize: config.historyPageSize });
+  registerConversationRoutes(app, {
+    auth,
+    limits,
+    conversations,
+    pageSize: config.historyPageSize,
+  });
   return { app, config, db, auth, limits, runs, turnstile };
 }

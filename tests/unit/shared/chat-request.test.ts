@@ -48,6 +48,24 @@ describe('chat request schema', () => {
     );
   });
 
+  it.each([
+    ['NUL', 'hello\u0000world'],
+    ['NUL alone after text', 'hello\u0000'],
+    ['lone high surrogate', 'hi \uD83D there'],
+    ['lone low surrogate', 'hi \uDE00 there'],
+    ['high surrogate at the end', 'hi \uD83D'],
+    ['low then high (reversed pair)', 'hi \uDE00\uD83D x'],
+    ['two highs in a row', '\uD83D😀'],
+  ])('rejects a message with %s', (_name, message) => {
+    expect(chatRequestSchema.safeParse({ ...valid, message }).success).toBe(false);
+  });
+
+  it('accepts well-formed surrogate pairs (emoji) and ordinary non-ASCII text', () => {
+    for (const message of ['hi \u{1F600}', '\u{1F600}\u{1F600}', 'Café 你好']) {
+      expect(chatRequestSchema.safeParse({ ...valid, message }).success, message).toBe(true);
+    }
+  });
+
   it('rejects a malformed conversation id and bad bot slugs', () => {
     expect(chatRequestSchema.safeParse({ ...valid, conversation_id: 'not-a-uuid' }).success).toBe(
       false,

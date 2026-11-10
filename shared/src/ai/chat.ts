@@ -27,6 +27,15 @@
 //    servers ignore `include_usage`) it is estimated at one token per 3 characters, which
 //    over-counts English on purpose: spend accounting should not under-count. `inputTokens`
 //    includes cached input; `cachedInputTokens`, when reported, is the part of it served from cache.
+//  * `ChatUsage.truncated` is true when the provider stopped at its output-token limit (Gemini
+//    `MAX_TOKENS`, OpenAI-style `finish_reason: length`, Anthropic `stop_reason: max_tokens`); the
+//    stream still completes normally, the caller decides what a cut-short reply means. Otherwise
+//    the field is absent.
+//  * openai_compatible: `stream_options.include_usage` is always sent. A server that refuses it
+//    answers 400, which is permanent and never retried (P7-D1: a compatibility resend made a
+//    genuine 400 cost an extra call and broke the "never retry a 400" rule). Such a server cannot
+//    be used until a config option exists; a server that accepts it but reports no usage is
+//    covered by the estimate.
 import {
   ProviderError,
   type ChatProvider,
@@ -161,6 +170,8 @@ interface Decoder {
   /** The provider's own completion signal was seen. */
   readonly complete: boolean;
   usage(): UsageParts;
+  /** The provider stopped at its output-token limit. */
+  truncated(): boolean;
 }
 
 function nonNegativeInt(value: unknown): number | undefined {
@@ -230,6 +241,7 @@ const GEMINI_BLOCKING_FINISH = new Set([
 
 function geminiDecoder(): Decoder {
   let complete = false;
+  let truncated = false;
   const usage: UsageParts = {};
   return {
     done: false,
@@ -237,6 +249,7 @@ function geminiDecoder(): Decoder {
       return complete;
     },
     usage: () => usage,
+    truncated: () => truncated,
     push(event, sawText): string {
       if (event.data.trim() === '') return '';
       const json = parseData(event.data);
@@ -272,6 +285,7 @@ function geminiDecoder(): Decoder {
       const finish = candidate['finishReason'];
       if (typeof finish === 'string' && finish !== '' && finish !== 'FINISH_REASON_UNSPECIFIED') {
         if (GEMINI_BLOCKING_FINISH.has(finish)) throw blocked();
+        if (finish === 'MAX_TOKENS') truncated = true;
         complete = true;
       }
       const content = candidate['content'];
@@ -291,6 +305,7 @@ function geminiDecoder(): Decoder {
 function openAiDecoder(): Decoder {
   let done = false;
   let finished = false;
+  let truncated = false;
   const usage: UsageParts = {};
   return {
     get done(): boolean {
@@ -300,6 +315,7 @@ function openAiDecoder(): Decoder {
       return done || finished;
     },
     usage: () => usage,
+    truncated: () => truncated,
     push(event, sawText): string {
       const data = event.data.trim();
       if (data === '') return '';
@@ -331,6 +347,7 @@ function openAiDecoder(): Decoder {
       const finish = choice['finish_reason'];
       if (typeof finish === 'string' && finish !== '') {
         if (finish === 'content_filter') throw blocked();
+        if (finish === 'length') truncated = true;
         finished = true;
       }
       const delta = choice['delta'];
@@ -345,6 +362,7 @@ function openAiDecoder(): Decoder {
 
 function anthropicDecoder(): Decoder {
   let done = false;
+  let truncated = false;
   const usage: UsageParts = {};
 
   const readUsage = (u: unknown): void => {
@@ -369,6 +387,7 @@ function anthropicDecoder(): Decoder {
       return done;
     },
     usage: () => usage,
+    truncated: () => truncated,
     push(event, sawText): string {
       if (event.data.trim() === '') return '';
       const json = parseData(event.data);
@@ -401,6 +420,7 @@ function anthropicDecoder(): Decoder {
           readUsage(json['usage']);
           const delta = json['delta'];
           if (isRecord(delta) && delta['stop_reason'] === 'refusal') throw blocked();
+          if (isRecord(delta) && delta['stop_reason'] === 'max_tokens') truncated = true;
           return '';
         }
         case 'message_stop':
@@ -431,18 +451,24 @@ function estimateTokens(chars: number): number {
   return Math.ceil(chars / ESTIMATE_CHARS_PER_TOKEN);
 }
 
-function finalUsage(parts: UsageParts, request: ChatStreamRequest, outputChars: number): ChatUsage {
+function finalUsage(
+  parts: UsageParts,
+  request: ChatStreamRequest,
+  outputChars: number,
+  truncated: boolean,
+): ChatUsage {
   const inputChars =
     request.system.length + request.messages.reduce((n, m) => n + m.content.length, 0);
   const inputTokens = parts.inputTokens ?? estimateTokens(inputChars);
   const outputTokens = parts.outputTokens ?? estimateTokens(outputChars);
-  return parts.cachedInputTokens === undefined
-    ? { inputTokens, outputTokens }
-    : {
-        inputTokens,
-        outputTokens,
-        cachedInputTokens: Math.min(parts.cachedInputTokens, inputTokens),
-      };
+  return {
+    inputTokens,
+    outputTokens,
+    ...(parts.cachedInputTokens === undefined
+      ? {}
+      : { cachedInputTokens: Math.min(parts.cachedInputTokens, inputTokens) }),
+    ...(truncated ? { truncated: true } : {}),
+  };
 }
 
 async function* driveStream(
@@ -502,7 +528,7 @@ async function* driveStream(
     signal.removeEventListener('abort', onAbort);
     await reader.cancel().catch(() => undefined);
   }
-  return finalUsage(decoder.usage(), request, outputChars);
+  return finalUsage(decoder.usage(), request, outputChars, decoder.truncated());
 }
 
 function checkRequest(request: ChatStreamRequest): void {

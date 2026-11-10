@@ -1,0 +1,16 @@
+     × A4b P7-D1: markdown links, entity-encoded schemes, www and bare domains and [at] emails are de-linked
+     × A5b P7-D1: history sent to the model leaves out a blocked question and non-complete answers, and alternates
+     × B3c P7-D1: "How do I update my contact information?" is an ordinary question, not a request for a person
+     × B3c P7-D1: "What is your customer service refund policy?" is an ordinary question, not a request for a person
+     × B8b P7-D1: a bot with no contact channel is refused before any spend with 500 INTERNAL_ERROR
+     × B8b P7-D1: a bot with no escalation message for any supported language is refused before any spend with 500 INTERNAL_ERROR
+     × B8b P7-D1: a bot with an empty set of escalation messages is refused before any spend with 500 INTERNAL_ERROR
+     × C2b P7-D1: a stream that breaks before any text was SHOWN (header held back) is retried
+     × C2c P7-D1: a break while rolling moderation still holds the text (nothing shown) is retried
+     × C2d P7-D1: in buffer mode a long first attempt that breaks before the end is retried, then the fallback
+     × C6 P7-D1: a provider stop at its output limit (finish_reason length) ends done(partial)
+     × C7 P7-D1: a reply longer than CHAT_MAX_OUTPUT_CHARS is cut: the stream ends and the turn is partial
+     × E2c P7-D1: the history route is rate limited per session
+       × E4c P7-D1: a bot_slug mismatch uses no rate-limit slot and creates no run
+⎯⎯⎯⎯⎯⎯ Failed Tests 14 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  14 failed | 67 passed (81)

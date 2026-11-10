@@ -15,9 +15,12 @@ import {
 import { AppError } from '../lib/errors.js';
 import { requireVisitor, type VisitorAuth } from '../services/auth.js';
 import { historyEnabled, type Conversations } from '../services/conversations.js';
+import type { Limits } from '../services/limits.js';
 
 export interface ConversationRouteDeps {
   readonly auth: Pick<VisitorAuth, 'authenticate'>;
+  /** HISTORY_RATE_*: counted per session after authentication and validation, before any read. */
+  readonly limits: Pick<Limits, 'consumeHistory'>;
   readonly conversations: Pick<Conversations, 'loadContext' | 'history'>;
   /** HISTORY_PAGE_SIZE. */
   readonly pageSize: number;
@@ -27,7 +30,7 @@ export function registerConversationRoutes(
   app: FastifyInstance,
   deps: ConversationRouteDeps,
 ): void {
-  const { auth, conversations, pageSize } = deps;
+  const { auth, limits, conversations, pageSize } = deps;
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
     throw new TypeError('history page size must be 1..100');
   }
@@ -40,6 +43,9 @@ export function registerConversationRoutes(
     }
     const visitor = request.visitor;
     if (visitor === undefined) throw new AppError('UNAUTHORIZED', { internalName: 'no_visitor' });
+
+    // Every read of a conversation counts, so a token cannot page the database without bound.
+    await limits.consumeHistory(visitor);
 
     const ctx = await conversations.loadContext(visitor.bot_id);
     if (!ctx.bot.enabled || !historyEnabled(ctx.settings.feature_flags)) {

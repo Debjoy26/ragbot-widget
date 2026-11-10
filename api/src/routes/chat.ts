@@ -4,8 +4,8 @@
 // owns the rest. Everything up to `reply.hijack()` answers with the JSON error envelope and
 // nothing has been spent:
 //   1. strict body (no history, system prompt, context or key is accepted), a canonical
-//      Idempotency-Key, a bearer token that authenticates, and (in the service) a `bot_slug` that
-//      is the token's bot
+//      Idempotency-Key, a bearer token that authenticates, and a `bot_slug` that is the token's
+//      bot (and an enabled bot): checked before anything is counted or created
 //   2. message rate limit (per session, then per IP bucket), then beginRun: a repeat of a finished
 //      request is answered with JSON (the stored status, no SSE, no spend); one still running gets
 //      409 with a retry hint; the same key with another body is 400
@@ -45,6 +45,9 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     }
     const visitor = await auth.authenticate(bearerToken(request.headers.authorization));
 
+    // A wrong bot_slug or a disabled bot ends here: no rate-limit count, no run.
+    const ctx = await chat.checkBot(visitor, body.data.bot_slug);
+
     // 2. Rate limit, then the run. A replay or a conflict ends here.
     const policy = await limits.loadMessagePolicy(visitor.bot_id);
     await limits.consumeMessage(visitor, request.clientIp, policy);
@@ -54,6 +57,7 @@ export function registerChatRoutes(app: FastifyInstance, deps: ChatRouteDeps): v
     // 3-6. Context, guards, budget reservation, stored question, run marked running.
     const turn = await chat.prepare({
       visitor,
+      ctx,
       runId: begun.runId,
       body: body.data,
       startedAt,

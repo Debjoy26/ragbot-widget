@@ -75,6 +75,11 @@ export interface Limits {
    * over, and INTERNAL_ERROR (before any counting) when `ratePolicy` is missing or invalid.
    */
   consumeMessage(visitor: VisitorContext, ip: string, ratePolicy: unknown): Promise<void>;
+  /**
+   * Counts one conversation-history read for the session (HISTORY_RATE_*). Throws RATE_LIMITED when
+   * over, and INTERNAL_ERROR (nothing counted) when no history limit was configured.
+   */
+  consumeHistory(visitor: VisitorContext): Promise<void>;
   /** Reserves budget for a run (the run id is the request id). Returns the reservation id. */
   reserve(botId: string, runId: string, amount: number, ttlSeconds: number): Promise<string>;
   settle(botId: string, reservationId: string, actualAmount: number): Promise<void>;
@@ -87,6 +92,11 @@ export interface CreateLimitsOptions {
   rateKeySecret: string;
   /** SESSION_PREFLIGHT_PER_IP_LIMIT and SESSION_PREFLIGHT_WINDOW_SECONDS. Required, no default. */
   sessionPreflight: RateRule;
+  /**
+   * HISTORY_RATE_PER_SESSION_LIMIT and HISTORY_RATE_WINDOW_SECONDS. Optional only so that callers
+   * that never serve history need not pass it; without it consumeHistory fails closed.
+   */
+  history?: RateRule;
   /** Clock in epoch milliseconds, for the retry-after hint. Injected for tests. */
   now?: () => number;
 }
@@ -99,6 +109,12 @@ export function createLimits(options: CreateLimitsOptions): Limits {
   const preflightRule = rateRuleSchema.safeParse(options.sessionPreflight);
   if (!preflightRule.success) throw new TypeError('session preflight limit is required and valid');
   const sessionPreflight = preflightRule.data;
+  let historyRule: RateRule | undefined;
+  if (options.history !== undefined) {
+    const parsedHistory = rateRuleSchema.safeParse(options.history);
+    if (!parsedHistory.success) throw new TypeError('history rate limit is invalid');
+    historyRule = parsedHistory.data;
+  }
   const now = options.now ?? Date.now;
   if (typeof rateKeySecret !== 'string' || rateKeySecret.length === 0) {
     throw new TypeError('rate limit key secret is required');
@@ -176,6 +192,14 @@ export function createLimits(options: CreateLimitsOptions): Limits {
       await consume(
         rateKey(rateKeySecret, 'message_ip', [visitor.bot_id, ipBucket(ip)]),
         policy.message_per_ip,
+      );
+    },
+
+    async consumeHistory(visitor) {
+      if (historyRule === undefined) throw internal('history_rate_not_configured');
+      await consume(
+        rateKey(rateKeySecret, 'history_session', [visitor.bot_id, visitor.session_id]),
+        historyRule,
       );
     },
 

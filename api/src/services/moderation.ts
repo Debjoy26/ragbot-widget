@@ -10,14 +10,18 @@
 // The text being moderated is never logged and never put in an error.
 
 import { ProviderError, type ModerationProvider, type ProviderErrorKind } from '@ragbot/shared';
+import { CLASSIFIER_MAX_OUTPUT_TOKENS, CLASSIFIER_SYSTEM_PROMPT } from '@ragbot/shared/ai';
 import type { TokenPrice } from '../lib/config.js';
 import type { UsageEntry, UsageSink } from './conversations.js';
-import { costUsd, estimateTokens } from './llm.js';
+import { costUsd, worstCaseTokens } from './llm.js';
 
-/** Fixed prompt of an llm_classifier call, in estimated tokens (an allowance, not a measurement). */
-export const MODERATION_PROMPT_OVERHEAD_TOKENS = 512;
-/** The classifier answers one word. */
-export const MODERATION_OUTPUT_TOKENS = 16;
+/**
+ * Fixed part of an llm_classifier call at 1 char = 1 token: the classifier's system prompt plus the
+ * markers around the message (about 64 characters). Taken from the adapter, not guessed.
+ */
+export const MODERATION_PROMPT_OVERHEAD_TOKENS = CLASSIFIER_SYSTEM_PROMPT.length + 64;
+/** The most a classifier call can produce: the adapter's real output cap. */
+export const MODERATION_OUTPUT_TOKENS = CLASSIFIER_MAX_OUTPUT_TOKENS;
 
 export type ModerationMode = 'endpoint' | 'llm_classifier';
 
@@ -55,7 +59,7 @@ export function worstCaseModerationCost(
   if (mode === 'endpoint') return 0;
   return costUsd(
     {
-      inputTokens: calls * MODERATION_PROMPT_OVERHEAD_TOKENS + estimateTokens(chars),
+      inputTokens: calls * MODERATION_PROMPT_OVERHEAD_TOKENS + worstCaseTokens(chars),
       outputTokens: calls * MODERATION_OUTPUT_TOKENS,
     },
     price,
@@ -93,7 +97,7 @@ export function createModerator(options: CreateModeratorOptions): Moderator {
         usage.record(
           billed && mode === 'llm_classifier'
             ? entry(
-                MODERATION_PROMPT_OVERHEAD_TOKENS + estimateTokens(text.length),
+                MODERATION_PROMPT_OVERHEAD_TOKENS + worstCaseTokens(text.length),
                 MODERATION_OUTPUT_TOKENS,
               )
             : entry(0, 0),

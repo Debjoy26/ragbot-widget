@@ -185,3 +185,40 @@ Confirmed by Opus on this system: the human-request matcher misfires on four ord
 - Owner of `api/src/services/citations.ts`, `shared/src/ai/*.ts`, `shared/src/providers.ts` (the `ChatUsage` field only) and `shared/src/schemas.ts` (the message refinement only): **P7-D1-B**.
 - Owner of every other `api/**` file and the API unit tests: **P7-D1-A**.
 - `citations.ts` keeps its exported names and signatures. P7-D1-B may add exports; post an INTERFACE if so.
+
+### [P7-D1-A] 2026-11-10 CLAIM: debug cycle P7-D1, API side (13 fixes)
+Branch `p7/d1a` @ 79f8c44 (worktree, no commits). Owned: every api/** file except api/src/services/citations.ts; api/.env.example; scripts/api-smoke.mjs (env only); tests/unit/api/** except chat-citations.test.ts; tests/helpers/fake-ai.ts.
+New required env I will add: CHAT_MAX_OUTPUT_CHARS, HISTORY_RATE_PER_SESSION_LIMIT, HISTORY_RATE_WINDOW_SECONDS. I code against `ChatUsage.truncated?` as an optional field (no cast needed once P7-D1-B lands it; until then I read it through a local type guard).
+
+### [P7-E2E] 2026-11-10 12:40 CLAIM: chat e2e tests (new files only)
+Branch `p7/e2e` @ 8e81f8b (worktree, no commits). Owned (new): `tests/integration/chat-e2e.test.ts`, `tests/integration/helpers/fake-llm-server.ts`, `tests/integration/helpers/chat-fixtures.ts`.
+Data is inserted by service-role REST (no worker). The built API (`api/dist/main.js`) is started as a child process against the local stack with fake loopback OpenAI-style servers. I will post a NOTICE before any `supabase db reset`. P7-D1 notes from main are being followed: tests assert corrected behaviour and carry a `P7-D1:` comment where wave 1 differs.
+
+### [P7-D1-B] 2026-11-10 12:20 CLAIM: citations.ts, shared/src/ai/*, ChatUsage.truncated, chatRequestSchema.message
+Branch `p7/d1b` @ 79f8c44 (worktree, no commits). Owning `api/src/services/citations.ts`, `tests/unit/api/chat-citations.test.ts`, `shared/src/ai/*.ts`, `tests/unit/shared-ai/**`, the `ChatUsage` field in `shared/src/providers.ts`, the `message` refinement in `shared/src/schemas.ts` (tests in `tests/unit/shared/chat-request.test.ts`).
+
+### [P7-E2E] 2026-11-10 DONE: chat e2e tests implemented (self-reported)
+Branch `p7/e2e` @ 8e81f8b, worktree, nothing committed. New files only: `tests/integration/chat-e2e.test.ts` (81 tests), `tests/integration/helpers/fake-llm-server.ts` (FAKE), `tests/integration/helpers/chat-fixtures.ts`. No reset of the local stack was done.
+- Data via service-role REST (no worker); the built API runs as a child process against the local stack with loopback fakes.
+- Three runs of the file: each 67 passed, 14 failed. Full `npm run test:integration`: 13 other files pass (751 tests), only this file fails.
+- The 14 failures are all tests marked `P7-D1:`, i.e. wave 1 behaves the old way: A4b (entity scheme, bare domain, [at] email not de-linked), A5b (blocked question and partial answer stay in history), B3c x2 (matcher misfires), B8b x3 (no contact/escalation message still served), C2b/c/d (no retry before the first SHOWN delta), C6 (finish_reason length reported complete), C7 (no output cap), E2c (history route not rate limited), E4c (slug mismatch uses a run and rate-limit slots).
+- tsc, eslint, prettier clean on tests.
+
+### [P7-D1-B] 2026-11-10 17:15 INTERFACE: citations.ts additions (all additive, existing signatures unchanged)
+- `buildSources(cited, evidence, allow?: AllowList)`: new optional third parameter. Titles, sections, excerpts and `source_label` are now de-linked with it, then cut to the 013 lengths. Omitted means an empty allow list (nothing allowed, fails closed). P7-D1-A: pass `allow` (the same `buildAllowList(contactCard(ctx) ?? {})` used for the answer text) so the configured contact stays readable in excerpts.
+- New export `sanitiseModelText(text)`: removes U+0000 and lone surrogates. `SafeTextStream.push/flush` and `delink` already apply it; no caller change needed.
+- Behaviour changes callers may notice: `delink` now also reduces markdown link/image syntax to its text (allowed destinations kept), so the returned text can be shorter than the input. `SafeTextStream` holds a markdown link back until it is closed (at most 512 chars) and releases a token longer than 2048 characters in pieces with a U+200B between them.
+- `ChatUsage.truncated?: true` is set by the Gemini, OpenAI, openai_compatible and Anthropic adapters when the provider stopped at its output limit; absent otherwise. `openai_compatible` retries once without `stream_options` after a 400 and remembers it per provider instance.
+- `chatRequestSchema.message` refuses U+0000 and unpaired surrogates (400 INVALID_REQUEST path unchanged).
+
+### [P7-D1-B] 2026-11-10 17:15 DONE: P7-D1-B fixes 1-7 (self-reported, uncommitted, branch p7/d1b @ 79f8c44)
+Checks in the worktree: `npx tsc -b` 0, `npx tsc -p tests --noEmit` 0, eslint on all changed files 0, prettier --check 0, `npm test` 0 (60 files, 2872 tests).
+Files: api/src/services/citations.ts, shared/src/ai/chat.ts, shared/src/providers.ts (ChatUsage.truncated), shared/src/schemas.ts (message refinement), tests/unit/api/chat-citations.test.ts, tests/unit/shared-ai/chat.test.ts, tests/unit/shared/chat-request.test.ts.
+Timings (200k-char shapes, delink / SafeTextStream): base 34.7 s / 0 for 'a'x200k, 34.5 s for 'a.'x100k, 45.4 s for 'a+'x100k, 8.7 s for '_'x100k, 67 s stream for '1 'x100k; after: all under 80 ms.
+
+### [P7-D1-A] 2026-11-10 DONE: debug cycle P7-D1, API side, all 13 fixes (self-reported)
+Branch `p7/d1a` @ 79f8c44 (worktree `.claude/worktrees/agent-adad1b01a75a04cb1`), uncommitted. `citations.ts`, shared/**, supabase/**, worker/** untouched.
+Checks there: `npx tsc -b` 0, `npx tsc -p tests --noEmit` 0, `npm test` 0 (62 files, 2862 tests; tests/unit/api x3 stable), `eslint . --max-warnings 0` 0, `prettier --check .` 0. Each fix has a regression test that failed on the base api/src (106 failures on the first run against the base).
+New required API env: CHAT_MAX_OUTPUT_CHARS (>=100), HISTORY_RATE_PER_SESSION_LIMIT, HISTORY_RATE_WINDOW_SECONDS. Config rules tightened: all prices > 0, CHAT_CONTEXT_MAX_TOKENS >= 256, CHAT_RESERVATION_TTL_SECONDS*1000 >= CHAT_DEADLINE_MS + 30000.
+Interfaces for Opus: ChatService gains `checkBot(visitor, slug)` and `prepare` takes `ctx` (the route calls checkBot before the rate limit); `Limits.consumeHistory(visitor)`; `createLimits({ history? })` (optional so tests/integration still compile; absent means consumeHistory fails closed); new RateKeyKind `history_session`; `ChatDeps.hasFallback` removed, `ChatDeps.sleep?` added; `LlmControl` gains `released()` and `onRestart()`. `ChatUsage.truncated` is read through a local type, so it works before and after P7-D1-B lands.
+Merge note: chat.ts passes the contact allowlist to `buildSources` as the optional third parameter through a small cast (`sourcesFor`), so it compiles against both the base and the D1-B citations.ts; after merge the cast can become a plain call. I did not need `shared` changes: `truncated` is read via a local type and works with the new `ChatUsage.truncated?`.

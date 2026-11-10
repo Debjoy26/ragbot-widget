@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ChatUsage } from '@ragbot/shared';
 import {
   ANSWER_HEADER,
   BOT,
+  CHUNK_A,
   RUN,
   chatBody,
   closeApps,
@@ -195,5 +197,113 @@ describe('output gate unit', () => {
     );
     await expect(blocking.push('more')).rejects.toBeInstanceOf(OutputBlocked);
     expect(blocking.releasedChars).toBe(0);
+  });
+});
+
+describe('output cap and provider truncation (P7-D1 fix 5 and fix 12, R1-2, R2-9)', () => {
+  const cited = `[[${CHUNK_A}]]`;
+
+  it('a provider that stopped at its output-token limit gives a partial turn and done(partial)', async () => {
+    const { h, events } = await run({
+      chat: [
+        {
+          chunks: [`${ANSWER_HEADER}Plans start at ten dollars ${cited}, and then`],
+          usage: { inputTokens: 100, outputTokens: 800, truncated: true } as ChatUsage,
+        },
+      ],
+    });
+    expect(names(events)).toEqual(['meta', 'delta', 'sources', 'done']);
+    expect(eventOf(events, 'done').data.status).toBe('partial');
+    // The cited source is still announced and stored.
+    expect(eventOf(events, 'sources').data.sources.map((s) => s.chunk_id)).toEqual([CHUNK_A]);
+    expect(h.calls('finish_chat_turn')[0]?.args).toMatchObject({
+      p_status: 'partial',
+      p_handoff_reason: null,
+    });
+    expect(h.runs.finishRun).toHaveBeenCalledWith(BOT, RUN, 'partial');
+  });
+
+  it('truncated: false (or absent) is a complete turn', async () => {
+    const { events } = await run({
+      chat: [
+        {
+          chunks: [`${ANSWER_HEADER}Short answer.`],
+          usage: { inputTokens: 100, outputTokens: 5, truncated: false } as ChatUsage,
+        },
+      ],
+    });
+    expect(eventOf(events, 'done').data.status).toBe('complete');
+  });
+
+  it('a truncation flag on a reply that is only a handoff changes nothing', async () => {
+    const { events } = await run({
+      chat: [
+        {
+          chunks: ['EVIDENCE: INSUFFICIENT\n'],
+          usage: { inputTokens: 100, outputTokens: 5, truncated: true } as ChatUsage,
+        },
+      ],
+    });
+    expect(eventOf(events, 'done').data.status).toBe('complete');
+    expect(eventOf(events, 'handoff').data.reason).toBe('no_knowledge');
+  });
+
+  it.each(['rolling', 'buffer'] as const)(
+    'CHAT_MAX_OUTPUT_CHARS stops the stream, keeps what fits and stores partial (%s mode)',
+    async (mode) => {
+      const piece = 'word '.repeat(100); // 500 characters
+      const { h, events } = await run({
+        context: defaultContext({ settings: { feature_flags: { output_moderation_mode: mode } } }),
+        env: { CHAT_MAX_OUTPUT_CHARS: '700' },
+        // After three chunks the provider would stall until the deadline: the cap must have
+        // stopped the stream before that.
+        chat: [{ chunks: [`${ANSWER_HEADER}${piece}`, piece, piece], hangAfter: 3 }],
+      });
+      const text = deltaText(events);
+      expect(text.length).toBeLessThanOrEqual(700);
+      expect(text.length).toBeGreaterThan(600);
+      expect(eventOf(events, 'done').data.status).toBe('partial');
+      expect(names(events)).toEqual(
+        mode === 'rolling'
+          ? ['meta', 'delta', 'delta', 'sources', 'done']
+          : ['meta', 'delta', 'sources', 'done'],
+      );
+      expect(h.calls('finish_chat_turn')[0]?.args).toMatchObject({
+        p_status: 'partial',
+        p_content: text,
+      });
+      expect(h.runs.finishRun).toHaveBeenCalledWith(BOT, RUN, 'partial');
+    },
+    20_000,
+  );
+
+  it('an answer of exactly CHAT_MAX_OUTPUT_CHARS characters is complete', async () => {
+    const { events } = await run({
+      env: { CHAT_MAX_OUTPUT_CHARS: '1000' },
+      chat: [{ chunks: [`${ANSWER_HEADER}${'a'.repeat(600)}`, 'b'.repeat(400)] }],
+    });
+    expect(deltaText(events)).toHaveLength(1000);
+    expect(eventOf(events, 'done').data.status).toBe('complete');
+  });
+
+  it('never cuts a surrogate pair in half', async () => {
+    const { events } = await run({
+      env: { CHAT_MAX_OUTPUT_CHARS: '101' },
+      chat: [{ chunks: [`${ANSWER_HEADER}${'\u{1F600}'.repeat(60)}`] }],
+    });
+    const text = deltaText(events);
+    expect(text).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+    expect(text).not.toMatch(/(?<![\ud800-\udbff])[\udc00-\udfff]/);
+    expect(text.length).toBe(100);
+    expect(eventOf(events, 'done').data.status).toBe('partial');
+  });
+
+  it('the text moderated never exceeds the cap either', async () => {
+    const { h } = await run({
+      env: { CHAT_MAX_OUTPUT_CHARS: '700' },
+      chat: [{ chunks: [`${ANSWER_HEADER}${'word '.repeat(300)}`] }],
+    });
+    const moderated = h.moderationProvider.texts.slice(1).join('');
+    expect(moderated.length).toBeLessThanOrEqual(700);
   });
 });

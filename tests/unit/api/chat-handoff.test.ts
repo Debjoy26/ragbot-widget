@@ -16,7 +16,11 @@ import {
   type Options,
 } from './chat-harness.ts';
 import { fakeProviderError } from '../../helpers/fake-ai.ts';
-import { matchesHumanRequest, parseHandoffPolicy } from '../../../api/src/services/handoff.ts';
+import {
+  escalationMessage,
+  matchesHumanRequest,
+  parseHandoffPolicy,
+} from '../../../api/src/services/handoff.ts';
 
 afterEach(closeApps);
 
@@ -105,6 +109,16 @@ describe('handoff: human_requested (B3)', () => {
     expect(h.chatProvider.calls).toBe(0);
     // Input moderation still ran first.
     expect(h.moderationProvider.calls).toBe(1);
+  });
+
+  it('a question that only mentions contact words is answered, not routed (P7-D1 fix 1)', async () => {
+    const { h, events } = await run(
+      {},
+      chatBody({ message: 'How do I update my contact information?' }),
+    );
+    expect(h.embedding.calls).toBe(1);
+    expect(h.chatProvider.calls).toBe(1);
+    expect(names(events)).not.toContain('handoff');
   });
 
   it('is also decided by the model header CONTACT: REQUESTED', async () => {
@@ -280,20 +294,80 @@ describe('handoff: configuration only (B8, W-16)', () => {
     expect(h.calls('finish_chat_turn')[0]?.args['p_handoff_reason']).toBe('no_knowledge');
   });
 
-  it('no message for the language and no first-language message: no event, a code is logged', async () => {
-    const ctx = defaultContext({ contact: { escalation_messages: {} } });
-    const { h, events } = await run({ chunks: [], context: ctx });
-    expect(names(events)).toEqual(['meta', 'sources', 'done']);
-    expect(h.capture.text).toContain('handoff_message_missing');
-  });
+  describe('P7-D1 fix 2 (R2-2): missing handoff configuration fails closed before any spend', () => {
+    const refused = async (context: ReturnType<typeof defaultContext>) => {
+      const h = setup({ context });
+      const res = await postChat(h);
+      expect(res.statusCode).toBe(500);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'INTERNAL_ERROR' });
+      expect(res.headers['content-type']).toContain('application/json');
+      // Nothing was reserved, stored or called, and the run is closed.
+      expect(h.limits.reserve).not.toHaveBeenCalled();
+      expect(h.calls('start_chat_turn')).toHaveLength(0);
+      expect(h.calls('record_request_usage')).toHaveLength(0);
+      expect(h.chatProvider.calls).toBe(0);
+      expect(h.moderationProvider.calls).toBe(0);
+      expect(h.embedding.calls).toBe(0);
+      expect(h.runs.finishRun).toHaveBeenCalledWith(expect.any(String), RUN, 'failed');
+      expect(h.capture.text).toContain('handoff_config_missing');
+      return h;
+    };
 
-  it('no contact channel at all: no event, a code is logged', async () => {
-    const ctx = defaultContext({
-      contact: { email: null, phone: null, page_url: null, whatsapp_url: null },
+    it('no escalation message in any language: INTERNAL_ERROR', async () => {
+      await refused(defaultContext({ contact: { escalation_messages: {} } }));
     });
-    const { h, events } = await run({ chunks: [], context: ctx });
-    expect(names(events)).toEqual(['meta', 'delta', 'sources', 'done']);
-    expect(h.capture.text).toContain('handoff_contact_missing');
+
+    it('a message only for an unsupported language counts as missing', async () => {
+      await refused(
+        defaultContext({ contact: { escalation_messages: { fr: 'Contactez-nous.' } } }),
+      );
+    });
+
+    it('a blank message (or one that is only markup) counts as missing', async () => {
+      await refused(defaultContext({ contact: { escalation_messages: { en: '   ', hi: '<>' } } }));
+    });
+
+    it('no contact channel at all: INTERNAL_ERROR', async () => {
+      await refused(
+        defaultContext({
+          contact: { email: null, phone: null, page_url: null, whatsapp_url: null },
+        }),
+      );
+    });
+
+    it('a contact card that does not validate: INTERNAL_ERROR', async () => {
+      await refused(defaultContext({ contact: { email: 'not-an-email' } }));
+    });
+
+    it('a message for a later supported language is used when the first has none; never blank', async () => {
+      const ctx = defaultContext({
+        contact: { escalation_messages: { hi: 'Hindi contact message.' } },
+      });
+      const { events } = await run({ chunks: [], context: ctx });
+      expect(deltaText(events)).toBe('Hindi contact message.');
+      expect(eventOf(events, 'handoff').data.message).toBe('Hindi contact message.');
+    });
+
+    it('escalationMessage is never blank when any supported language has a message', () => {
+      const ctx = defaultContext({
+        contact: { escalation_messages: { hi: 'Hindi contact message.' } },
+      });
+      const parsed = ctx as unknown as Parameters<typeof escalationMessage>[0];
+      expect(escalationMessage(parsed, undefined)).toBe('Hindi contact message.');
+      expect(escalationMessage(parsed, 'en')).toBe('Hindi contact message.');
+      expect(escalationMessage(parsed, 'hi')).toBe('Hindi contact message.');
+      const none = defaultContext({ contact: { escalation_messages: {} } });
+      expect(
+        escalationMessage(none as unknown as Parameters<typeof escalationMessage>[0], 'en'),
+      ).toBe('');
+    });
+
+    it('a switched-off trigger with valid configuration is still fine', async () => {
+      const ctx = defaultContext({ settings: { handoff_policy: { triggers: [] } } });
+      const { events } = await run({ chunks: [], context: ctx });
+      expect(deltaText(events)).toBe(MESSAGE);
+      expect(names(events)).toEqual(['meta', 'delta', 'sources', 'done']);
+    });
   });
 
   it('contact details in model text never reach the handoff card', async () => {
@@ -365,7 +439,8 @@ describe('input moderation and the query embedding run in parallel (TECH_SPECS 6
     expect(eventOf(events, 'error').data.code).toBe('PROVIDER_UNAVAILABLE');
     expect(h.calls('match_document_chunks')).toHaveLength(0);
     expect(h.chatProvider.calls).toBe(0);
-    expect(h.embedding.calls).toBe(1);
+    // P7-D1 fix 7: one retry of a transient embedding failure, then fail closed.
+    expect(h.embedding.calls).toBe(2);
   });
 
   it('a blocked question wins over the embedding: nothing is searched', async () => {

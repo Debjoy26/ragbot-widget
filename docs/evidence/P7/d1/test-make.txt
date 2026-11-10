@@ -1,0 +1,119 @@
+bash scripts/test-make-guards.sh
+ok   - check-ref injection payload 1 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 1 refused, no marker
+ok   - check-ref injection payload 2 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 2 refused, no marker
+ok   - check-ref injection payload 3 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 3 refused, no marker
+ok   - check-ref injection payload 4 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 4 refused, no marker
+ok   - check-ref injection payload 5 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 5 refused, no marker
+ok   - check-ref injection payload 6 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 6 refused, no marker
+ok   - check-ref injection payload 7 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 7 refused, no marker
+ok   - check-ref injection payload 8 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 8 refused, no marker
+ok   - check-ref injection payload 9 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 9 refused, no marker
+ok   - check-ref injection payload 10 refused, no marker
+ok   - check-confirm PROJECT_REF injection payload 10 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 1 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 2 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 3 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 4 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 5 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 6 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 7 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 8 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 9 refused, no marker
+ok   - check-confirm CONFIRM_REF injection payload 10 refused, no marker
+ok   - exported hostile PROJECT_REF with make -e: refused, no marker
+ok   - check-ref refuses make function: $(shell touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(shell touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - help refuses make function: $(shell touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - exported make function refused: $(shell touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - check-ref refuses make function: $(file >/tmp/tmp.Z3YtCikvb5/marker,x)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(file >/tmp/tmp.Z3YtCikvb5/marker,x)
+ok   - help refuses make function: $(file >/tmp/tmp.Z3YtCikvb5/marker,x)
+ok   - exported make function refused: $(file >/tmp/tmp.Z3YtCikvb5/marker,x)
+ok   - check-ref refuses make function: $(eval $(shell touch /tmp/tmp.Z3YtCikvb5/marker))
+ok   - check-confirm refuses make function in CONFIRM_REF: $(eval $(shell touch /tmp/tmp.Z3YtCikvb5/marker))
+ok   - help refuses make function: $(eval $(shell touch /tmp/tmp.Z3YtCikvb5/marker))
+ok   - exported make function refused: $(eval $(shell touch /tmp/tmp.Z3YtCikvb5/marker))
+ok   - check-ref refuses make function: $(call shell,touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - check-confirm refuses make function in CONFIRM_REF: $(call shell,touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - help refuses make function: $(call shell,touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - exported make function refused: $(call shell,touch /tmp/tmp.Z3YtCikvb5/marker)
+ok   - db-plan -i with a bad ref stops before the CLI
+ok   - db-status -i with a bad ref stops before the CLI
+ok   - db-advisors -i with a bad ref stops before the CLI
+ok   - db-create -i with a bad ref stops before the CLI
+ok   - db-create -i with a mismatched CONFIRM_REF stops before the CLI
+ok   - db-create -i without CONFIRM_REF stops before the CLI
+ok   - db-plan with a good ref reaches the stub
+ok   - db-create with matching refs reaches the stub
+ok   - first-admin with valid refs and email reaches the node stub
+ok   - first-admin bad ref stops before node
+ok   - first-admin -i bad ref stops before node
+ok   - first-admin uppercase ref stops before node
+ok   - first-admin -i uppercase ref stops before node
+ok   - first-admin missing PROJECT_REF stops before node
+ok   - first-admin -i missing PROJECT_REF stops before node
+ok   - first-admin mismatched CONFIRM_REF stops before node
+ok   - first-admin -i mismatched CONFIRM_REF stops before node
+ok   - first-admin missing CONFIRM_REF stops before node
+ok   - first-admin -i missing CONFIRM_REF stops before node
+ok   - first-admin missing EMAIL stops before node
+ok   - first-admin -i missing EMAIL stops before node
+ok   - first-admin empty EMAIL stops before node
+ok   - first-admin -i empty EMAIL stops before node
+ok   - first-admin malformed EMAIL [not-an-email] stops before node
+ok   - first-admin -i malformed EMAIL [not-an-email] stops before node
+ok   - first-admin malformed EMAIL [owner@] stops before node
+ok   - first-admin -i malformed EMAIL [owner@] stops before node
+ok   - first-admin malformed EMAIL [@client.example.com] stops before node
+ok   - first-admin -i malformed EMAIL [@client.example.com] stops before node
+ok   - first-admin malformed EMAIL [owner@client] stops before node
+ok   - first-admin -i malformed EMAIL [owner@client] stops before node
+ok   - first-admin malformed EMAIL [owner @client.example.co] stops before node
+ok   - first-admin -i malformed EMAIL [owner @client.example.co] stops before node
+ok   - first-admin malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin -i malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin -i malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin -i malformed EMAIL [owner@client.example.com] stops before node
+ok   - first-admin EMAIL containing $ stops before node
+ok   - first-admin -i EMAIL containing $ stops before node
+ok   - first-admin EMAIL containing a make function stops before node
+ok   - first-admin -i EMAIL containing a make function stops before node
+ok   - first-admin with an exported EMAIL stops before node
+ok   - exported PROJECT_REF refused
+ok   - make -e with exported PROJECT_REF refused
+ok   - check-confirm with exported PROJECT_REF refused
+ok   - exported CONFIRM_REF refused
+ok   - make -e with exported CONFIRM_REF refused
+ok   - check-ref: PROJECT_REF not set refused
+ok   - check-ref: empty PROJECT_REF refused
+ok   - check-ref: 19 letters refused
+ok   - check-ref: 21 letters refused
+ok   - check-ref: uppercase refused
+ok   - check-ref: one uppercase letter refused
+ok   - check-ref: digits refused
+ok   - check-ref: trailing newline refused
+ok   - check-ref: trailing space refused
+ok   - check-confirm: invalid CONFIRM_REF format refused
+ok   - check-confirm: CONFIRM_REF trailing newline refused
+ok   - check-confirm: invalid PROJECT_REF refused even when CONFIRM_REF equals it
+ok   - check-ref: valid 20-letter ref accepted, prints Target line
+ok   - check-confirm: missing CONFIRM_REF refused
+ok   - check-confirm: empty CONFIRM_REF refused
+ok   - check-confirm: mismatched CONFIRM_REF refused
+ok   - check-confirm: missing PROJECT_REF refused
+ok   - check-confirm: matching refs accepted when run alone
+ok   - Makefile has no bare $(PROJECT_REF) / $(CONFIRM_REF)
+ok   - Makefile uses no --yes / --include-seed outside comments
+
+passed: 116  failed: 0

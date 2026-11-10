@@ -10,6 +10,9 @@ const REQUIRED = [
   'CHAT_CONTEXT_MAX_TOKENS',
   'CHAT_HISTORY_MAX_MESSAGES',
   'CHAT_MAX_OUTPUT_TOKENS',
+  'CHAT_MAX_OUTPUT_CHARS',
+  'HISTORY_RATE_PER_SESSION_LIMIT',
+  'HISTORY_RATE_WINDOW_SECONDS',
   'CHAT_PRICE_INPUT_PER_MILLION',
   'CHAT_PRICE_OUTPUT_PER_MILLION',
   'MODERATION_PRICE_INPUT_PER_MILLION',
@@ -45,6 +48,8 @@ describe('chat settings in loadConfig', () => {
       chatContextMaxTokens: 6000,
       chatHistoryMaxMessages: 6,
       chatMaxOutputTokens: 800,
+      chatMaxOutputChars: 8000,
+      historyRate: { limit: 60, window_seconds: 60 },
       chatReservationTtlSeconds: 120,
       chatProviderAttempts: 2,
       historyPageSize: 20,
@@ -75,8 +80,17 @@ describe('chat settings in loadConfig', () => {
     ['HISTORY_PAGE_SIZE', ['0', '101']],
     ['CHAT_RESERVATION_TTL_SECONDS', ['0', '86401']],
     ['CHAT_MAX_OUTPUT_TOKENS', ['0', '-5']],
-    ['CHAT_CONTEXT_MAX_TOKENS', ['0', 'many']],
+    ['CHAT_CONTEXT_MAX_TOKENS', ['0', '255', 'many']],
+    ['CHAT_MAX_OUTPUT_CHARS', ['0', '99', '-1', 'many']],
+    ['HISTORY_RATE_PER_SESSION_LIMIT', ['0', '-1', '1.5', 'many']],
+    ['HISTORY_RATE_WINDOW_SECONDS', ['0', '86401', 'many']],
     ['CHAT_PRICE_INPUT_PER_MILLION', ['-1', 'free', '1e3', '100001']],
+    // Prices must be greater than zero (P7-D1 fix 5): a free price makes the budget meaningless.
+    ['CHAT_PRICE_INPUT_PER_MILLION', ['0', '0.0']],
+    ['CHAT_PRICE_OUTPUT_PER_MILLION', ['0']],
+    ['MODERATION_PRICE_INPUT_PER_MILLION', ['0']],
+    ['MODERATION_PRICE_OUTPUT_PER_MILLION', ['0']],
+    ['EMBEDDING_PRICE_PER_MILLION_TOKENS', ['0']],
     ['EMBEDDING_PRICE_PER_MILLION_TOKENS', ['-0.1', '<usd-per-million-tokens>']],
   ])('%s refuses out-of-range and malformed values', (name, values) => {
     for (const value of values) {
@@ -93,22 +107,56 @@ describe('chat settings in loadConfig', () => {
         CHAT_HISTORY_MAX_MESSAGES: '0',
         CHAT_PROVIDER_ATTEMPTS: '3',
         HISTORY_PAGE_SIZE: '100',
-        CHAT_PRICE_INPUT_PER_MILLION: '0',
+        CHAT_PRICE_INPUT_PER_MILLION: '0.000000001',
+        CHAT_CONTEXT_MAX_TOKENS: '256',
       }),
     );
     expect(c.retrievalTopK).toBe(50);
     expect(c.retrievalMinSimilarity).toBe(0);
     expect(c.chatHistoryMaxMessages).toBe(0);
-    expect(c.chatPrice.inputPerMillion).toBe(0);
+    expect(c.chatPrice.inputPerMillion).toBe(0.000000001);
+    expect(c.chatContextMaxTokens).toBe(256);
     expect(loadConfig(validEnv({ RETRIEVAL_MIN_SIMILARITY: '1' })).retrievalMinSimilarity).toBe(1);
   });
 
-  it('a reservation must outlive the request deadline', () => {
-    const err = failure({ CHAT_DEADLINE_MS: '120000', CHAT_RESERVATION_TTL_SECONDS: '120' });
+  it('a reservation must outlive the request deadline by 30 seconds (P7-D1 fix 5)', () => {
+    const err = failure({ CHAT_DEADLINE_MS: '90001', CHAT_RESERVATION_TTL_SECONDS: '120' });
     expect(err.variables).toEqual(['CHAT_RESERVATION_TTL_SECONDS', 'CHAT_DEADLINE_MS']);
+    // The old rule (TTL longer than the deadline) is no longer enough.
     expect(
-      loadConfig(validEnv({ CHAT_DEADLINE_MS: '119999', CHAT_RESERVATION_TTL_SECONDS: '120' })),
+      failure({ CHAT_DEADLINE_MS: '119999', CHAT_RESERVATION_TTL_SECONDS: '120' }).variables,
+    ).toContain('CHAT_RESERVATION_TTL_SECONDS');
+    // Exactly deadline + 30 s is allowed.
+    expect(
+      loadConfig(validEnv({ CHAT_DEADLINE_MS: '90000', CHAT_RESERVATION_TTL_SECONDS: '120' })),
     ).toBeTruthy();
+  });
+
+  it('fallback prices must be greater than zero too', () => {
+    const base = {
+      ...FALLBACK,
+      CHAT_FALLBACK_PRICE_INPUT_PER_MILLION: '0.2',
+      CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION: '0.8',
+    };
+    expect(failure({ ...base, CHAT_FALLBACK_PRICE_INPUT_PER_MILLION: '0' }).variables).toContain(
+      'CHAT_FALLBACK_PRICE_INPUT_PER_MILLION',
+    );
+    expect(failure({ ...base, CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION: '0' }).variables).toContain(
+      'CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION',
+    );
+  });
+
+  it('the reservation TTL must be at least CHAT_DEADLINE_MS + 30 s, for any deadline', () => {
+    for (const [deadline, ttl, ok] of [
+      ['30000', '60', true],
+      ['30000', '59', false],
+      ['1', '31', true],
+      ['1', '30', false],
+    ] as const) {
+      const env = { CHAT_DEADLINE_MS: deadline, CHAT_RESERVATION_TTL_SECONDS: ttl };
+      if (ok) expect(loadConfig(validEnv(env))).toBeTruthy();
+      else expect(failure(env).variables).toContain('CHAT_RESERVATION_TTL_SECONDS');
+    }
   });
 
   it('fallback prices are required exactly when a fallback is configured', () => {

@@ -22,6 +22,7 @@ import {
 } from './chat-harness.ts';
 import { fakeProviderError } from '../../helpers/fake-ai.ts';
 import { UsageLedger } from '../../../api/src/services/conversations.ts';
+import { normaliseHistory, selectHistory } from '../../../api/src/services/llm.ts';
 
 afterEach(closeApps);
 
@@ -80,10 +81,11 @@ describe('usage ledger and settlement (D2, D3)', () => {
   });
 
   it('releases the reservation only when nothing was spent', async () => {
+    // Prices must be positive, so a zero-cost request is one whose calls report zero tokens.
     const { h } = await run({
       chunks: [],
       moderationUsage: null,
-      env: { EMBEDDING_PRICE_PER_MILLION_TOKENS: '0' },
+      embeddingOptions: { inputTokens: 0 },
     });
     expect(usage(h)).toHaveLength(2); // still a row per call, at zero cost
     expect(costOf(usage(h))).toBe(0);
@@ -297,6 +299,10 @@ describe('server-owned history (A5, E2)', () => {
     created_at: '2026-11-10T10:00:00.000000+00:00',
     has_more: false,
   });
+  const CURRENT = row('user', 'How much is the standard plan?', 'complete', USER_MESSAGE);
+  const priorOf = (h: ReturnType<typeof setup>) =>
+    (h.chatProvider.requests[0]?.messages ?? []).slice(0, -1);
+  const roles = (h: ReturnType<typeof setup>) => priorOf(h).map((m) => m.role);
 
   it('puts at most CHAT_HISTORY_MAX_MESSAGES prior messages, oldest first, in the prompt', async () => {
     const history = [
@@ -308,28 +314,33 @@ describe('server-owned history (A5, E2)', () => {
       row('assistant', '', 'failed'),
       row('user', 'q4'),
       row('assistant', 'a4'),
-      row('user', 'How much is the standard plan?', 'complete', USER_MESSAGE),
+      CURRENT,
     ];
     const { h } = await run({ history }, chatBody({ conversation_id: CONVERSATION }));
+    // Over-fetched (the question just stored is one row, dropped rows are others), up to 100.
     expect(h.calls('get_conversation_history')[0]?.args).toMatchObject({
       p_conversation_id: CONVERSATION,
       p_before: null,
-      p_limit: h.config.chatHistoryMaxMessages + 1,
+      p_limit: Math.min(100, h.config.chatHistoryMaxMessages * 2 + 1),
     });
     const messages = h.chatProvider.requests[0]?.messages ?? [];
+    // P7-D1 fix 4: only complete answers go back (partial and failed ones do not), and the
+    // questions left without an answer are merged into one user message, so the roles alternate.
     expect(messages.slice(0, -1).map((m) => m.content)).toEqual([
-      'q2',
-      'a2 partial text',
-      'q3',
-      'q4',
+      'q1',
+      'a1',
+      'q2\n\nq3\n\nq4',
       'a4',
     ]);
+    expect(roles(h)).toEqual(['user', 'assistant', 'user', 'assistant']);
     expect(messages.slice(0, -1).length).toBeLessThanOrEqual(h.config.chatHistoryMaxMessages);
-    expect(messages.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
+    expect(messages.at(-1)?.role).toBe('user');
     expect(messages.at(-1)?.content).toContain('How much is the standard plan?');
   });
 
-  it('takes only the newest CHAT_HISTORY_MAX_MESSAGES messages', async () => {
+  it('takes only the newest CHAT_HISTORY_MAX_MESSAGES messages; an odd window starts with a user message', async () => {
+    // Window of 3: the newest three are assistant, user, assistant. The leading assistant message
+    // has lost its question, so it is dropped and the prompt starts with a user message.
     const history = Array.from({ length: 12 }, (_, i) =>
       row(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
     );
@@ -337,8 +348,75 @@ describe('server-owned history (A5, E2)', () => {
       { history, env: { CHAT_HISTORY_MAX_MESSAGES: '3' } },
       chatBody({ conversation_id: CONVERSATION }),
     );
-    const prior = (h.chatProvider.requests[0]?.messages ?? []).slice(0, -1);
-    expect(prior.map((m) => m.content)).toEqual(['m9', 'm10', 'm11']);
+    expect(priorOf(h).map((m) => m.content)).toEqual(['m10', 'm11']);
+    expect(roles(h)).toEqual(['user', 'assistant']);
+  });
+
+  it('an even window keeps whole question and answer pairs', async () => {
+    const history = Array.from({ length: 12 }, (_, i) =>
+      row(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
+    );
+    const { h } = await run(
+      { history, env: { CHAT_HISTORY_MAX_MESSAGES: '4' } },
+      chatBody({ conversation_id: CONVERSATION }),
+    );
+    expect(priorOf(h).map((m) => m.content)).toEqual(['m8', 'm9', 'm10', 'm11']);
+  });
+
+  it('drops a question that moderation refused together with its refusal (R2-4)', async () => {
+    const history = [
+      row('user', 'q1'),
+      row('assistant', 'a1'),
+      row('user', 'REFUSED-QUESTION-TEXT'),
+      row('assistant', 'Please contact our team.', 'blocked'),
+      row('user', 'q3'),
+      row('assistant', 'a3'),
+      CURRENT,
+    ];
+    const { h } = await run({ history }, chatBody({ conversation_id: CONVERSATION }));
+    const wire = JSON.stringify(h.chatProvider.requests[0]?.messages);
+    expect(wire).not.toContain('REFUSED-QUESTION-TEXT');
+    expect(wire).not.toContain('Please contact our team.');
+    expect(priorOf(h).map((m) => m.content)).toEqual(['q1', 'a1', 'q3', 'a3']);
+  });
+
+  it('keeps only complete assistant messages: partial, failed and blocked never go back', async () => {
+    const history = [
+      row('user', 'q1'),
+      row('assistant', 'PARTIAL-TEXT', 'partial'),
+      row('user', 'q2'),
+      row('assistant', 'FAILED-TEXT', 'failed'),
+      row('user', 'q3'),
+      row('assistant', 'a3'),
+      CURRENT,
+    ];
+    const { h } = await run({ history }, chatBody({ conversation_id: CONVERSATION }));
+    const wire = JSON.stringify(h.chatProvider.requests[0]?.messages);
+    expect(wire).not.toContain('PARTIAL-TEXT');
+    expect(wire).not.toContain('FAILED-TEXT');
+    expect(priorOf(h).map((m) => m.content)).toEqual(['q1\n\nq2\n\nq3', 'a3']);
+  });
+
+  it('the list handed to the provider starts with a user message and ends before the new question with an assistant message', async () => {
+    const history = [
+      row('assistant', 'orphan answer'),
+      row('user', 'q1'),
+      row('assistant', 'a1'),
+      row('assistant', 'a1 again'),
+      row('user', 'q2 never answered'),
+      CURRENT,
+    ];
+    const { h } = await run({ history }, chatBody({ conversation_id: CONVERSATION }));
+    expect(priorOf(h).map((m) => m.content)).toEqual(['q1', 'a1\n\na1 again']);
+    const all = h.chatProvider.requests[0]?.messages ?? [];
+    expect(all[0]?.role).toBe('user');
+    for (let i = 1; i < all.length; i += 1) expect(all[i]?.role).not.toBe(all[i - 1]?.role);
+  });
+
+  it('a conversation with nothing usable sends the question alone', async () => {
+    const history = [row('user', 'q1'), row('assistant', 'x', 'failed'), CURRENT];
+    const { h } = await run({ history }, chatBody({ conversation_id: CONVERSATION }));
+    expect(h.chatProvider.requests[0]?.messages).toHaveLength(1);
   });
 
   it('loads no history for a new conversation or when the setting is 0', async () => {
@@ -352,14 +430,94 @@ describe('server-owned history (A5, E2)', () => {
     expect(off.h.chatProvider.requests[0]?.messages).toHaveLength(1);
   });
 
-  it('drops the oldest history first when the context budget is tight', async () => {
+  it('never asks the database for more than its limit of 100 rows', async () => {
+    const { h } = await run(
+      { history: [], env: { CHAT_HISTORY_MAX_MESSAGES: '50' } },
+      chatBody({ conversation_id: CONVERSATION }),
+    );
+    expect(h.calls('get_conversation_history')[0]?.args['p_limit']).toBe(100);
+  });
+
+  it('drops the oldest pair first when the context budget is tight', async () => {
+    const history = [
+      row('user', 'x'.repeat(4000)),
+      row('assistant', 'old answer'),
+      row('user', 'recent question'),
+      row('assistant', 'recent short answer'),
+    ];
+    const { h } = await run(
+      { history, env: { CHAT_CONTEXT_MAX_TOKENS: '1400' } },
+      chatBody({ conversation_id: CONVERSATION }),
+    );
+    const prior = priorOf(h).map((m) => m.content);
+    expect(prior).not.toContain('x'.repeat(4000));
+    expect(prior).toEqual(['recent question', 'recent short answer']);
+  });
+
+  it('a budget cut between a question and its answer never leaves an answer first', async () => {
     const history = [row('user', 'x'.repeat(4000)), row('assistant', 'recent short answer')];
     const { h } = await run(
       { history, env: { CHAT_CONTEXT_MAX_TOKENS: '1400' } },
       chatBody({ conversation_id: CONVERSATION }),
     );
-    const prior = (h.chatProvider.requests[0]?.messages ?? []).slice(0, -1).map((m) => m.content);
-    expect(prior).not.toContain('x'.repeat(4000));
-    expect(prior).toEqual(['recent short answer']);
+    expect(priorOf(h)).toEqual([]);
+  });
+});
+
+describe('history helpers (P7-D1 fix 4)', () => {
+  const m = (role: 'user' | 'assistant', content: string, status = 'complete') => ({
+    role,
+    content,
+    status,
+  });
+
+  it('normaliseHistory merges same-role runs, drops empty messages, leading assistants and trailing users', () => {
+    expect(
+      normaliseHistory([
+        { role: 'assistant', content: 'lost' },
+        { role: 'user', content: 'a' },
+        { role: 'user', content: '   ' },
+        { role: 'user', content: 'b' },
+        { role: 'assistant', content: 'c' },
+        { role: 'user', content: 'd' },
+      ]),
+    ).toEqual([
+      { role: 'user', content: 'a\n\nb' },
+      { role: 'assistant', content: 'c' },
+    ]);
+    expect(normaliseHistory([])).toEqual([]);
+    expect(normaliseHistory([{ role: 'user', content: 'only' }])).toEqual([]);
+  });
+
+  it('selectHistory handles every window size without breaking the alternation', () => {
+    const rows = Array.from({ length: 9 }, (_, i) =>
+      m(i % 2 === 0 ? 'user' : 'assistant', `m${i}`),
+    );
+    for (let max = 0; max <= 12; max += 1) {
+      const out = selectHistory(rows, max);
+      expect(out.length).toBeLessThanOrEqual(max);
+      if (out.length > 0) {
+        expect(out[0]?.role).toBe('user');
+        expect(out.at(-1)?.role).toBe('assistant');
+      }
+      for (let i = 1; i < out.length; i += 1) expect(out[i]?.role).not.toBe(out[i - 1]?.role);
+    }
+  });
+
+  it('selectHistory skips a blocked pair even at the start of the window', () => {
+    expect(
+      selectHistory(
+        [
+          m('user', 'bad'),
+          m('assistant', 'refusal', 'blocked'),
+          m('user', 'q'),
+          m('assistant', 'a'),
+        ],
+        6,
+      ),
+    ).toEqual([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'a' },
+    ]);
   });
 });

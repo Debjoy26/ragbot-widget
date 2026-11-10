@@ -17,7 +17,8 @@ export type RateKeyKind =
   | 'session_create_ip'
   | 'session_create_bot'
   | 'message_session'
-  | 'message_ip';
+  | 'message_ip'
+  | 'history_session';
 
 /**
  * 64-char lowercase hex HMAC-SHA256 of `kind` and `parts` under `secret`. The input is encoded

@@ -1,0 +1,1 @@
+dist child ok: pdf_text x1-pdfjs-6.4.299 pages 2 chars 156

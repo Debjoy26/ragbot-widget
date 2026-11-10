@@ -322,6 +322,12 @@ export interface ChatUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cachedInputTokens?: number;
+  /**
+   * True when the provider stopped because it hit the output-token limit (Gemini `MAX_TOKENS`,
+   * OpenAI `finish_reason: length`, Anthropic `stop_reason: max_tokens`), so the reply is cut
+   * short. Undefined otherwise. The caller stores such a turn as partial.
+   */
+  readonly truncated?: boolean;
 }
 
 /**
