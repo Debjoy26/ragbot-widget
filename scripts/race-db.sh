@@ -94,7 +94,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 fail=0; warn=0; n=0; retrying=0
-EXPECTED=47
+EXPECTED=51
 
 # Fresh fixture: one enabled bot (begin_request_run and reserve_request_budget refuse a disabled one, migration 011) with settings and a session, two conversations, two questions in C1.
 fixture() { # extra setup SQL
@@ -611,6 +611,46 @@ V_ORPH_SETTLE="select case
   else 'CONSISTENT: the holder settled the old row at 0.7, the sweep skipped it, the newest row is untouched' end"
 run_order "orphan sweep in flight, holder settle"   "$ORPH_FIX"              "$SWEEP_ORPH"  "$SETTLE_ORPH" "$V_ORPH_SWEEP"  "" "RB003" yes
 run_order "holder settle in flight, orphan sweep"   "$ORPH_FIX"              "$SETTLE_ORPH" "$SWEEP_ORPH"  "$V_ORPH_SETTLE" "" ""      fast
+
+# ---- P7 (migration 013): the chat turn functions ----
+# One running run (RUN, owned by SESS) and the conversation C1 owned by SESS. start_chat_turn and finish_chat_turn take
+# the run row (FOR NO KEY UPDATE) and then the conversation row (FOR NO KEY UPDATE), so two calls for one run take turns, and
+# admin_delete_conversation, which locks the conversation FOR UPDATE and deletes it, either runs before a turn (the turn finds
+# no conversation: RB037) or after it (the delete removes the conversation with the turn's message). The delete is
+# done here as the same two statements the admin function runs (the admin function itself needs a signed-in admin).
+# Two finishes of one message id: the second waits for the run lock, then the primary key refuses it (23505): one row.
+# Two finishes of one run under different ids: the second gets RB030: one answer.
+CHAT_START_FIX="$RUN_ROW
+  update public.conversations set visitor_session_id = '$SESS' where id = '$C1';"
+CHAT_FINISH_FIX="$CHAT_START_FIX
+  update public.messages set request_id = '$RUN' where id = '$U';"
+FINISH_A="select public.finish_chat_turn('$BOT', '$SESS', '$RUN', '$A', '$C1', '$U', 'answer', 'complete', null, null, null, '[]'::jsonb);"
+FINISH_A2="select public.finish_chat_turn('$BOT', '$SESS', '$RUN', '$A2', '$C1', '$U', 'answer', 'complete', null, null, null, '[]'::jsonb);"
+START_C1="select * from public.start_chat_turn('$BOT', '$SESS', '$RUN', '$C1', 'question');"
+DELETE_C1="select 1 from public.conversations where id = '$C1' for update; delete from public.conversations where id = '$C1';"
+V_FINISH_SAME="select case
+  when (select count(*) from public.messages where id = '$A') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.messages where id = '$A') || ' rows for one message id'
+  when (select count(*) from public.messages where request_id = '$RUN' and role = 'assistant') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.messages where request_id = '$RUN' and role = 'assistant') || ' answers for one run'
+  else 'CONSISTENT: exactly one assistant row for the message id' end"
+V_FINISH_OTHER="select case
+  when (select count(*) from public.messages where request_id = '$RUN' and role = 'assistant') <> 1
+    then 'VIOLATION: ' || (select count(*) from public.messages where request_id = '$RUN' and role = 'assistant') || ' answers for one run'
+  when not exists (select 1 from public.messages where id = '$A') then 'VIOLATION: the first call did not win'
+  else 'CONSISTENT: one answer for the run, the second id was refused' end"
+V_START_DELETE="select case
+  when exists (select 1 from public.conversations where id = '$C1') then 'VIOLATION: the conversation survived the delete'
+  when exists (select 1 from public.messages where conversation_id = '$C1' or request_id = '$RUN') then 'VIOLATION: a message of the deleted conversation is left'
+  else 'CONSISTENT: the turn finished first, the delete took the conversation and its message with it' end"
+V_DELETE_START="select case
+  when exists (select 1 from public.conversations where id = '$C1') then 'VIOLATION: the conversation survived the delete'
+  when exists (select 1 from public.messages where conversation_id = '$C1' or request_id = '$RUN') then 'VIOLATION: the start wrote a message into a deleted conversation'
+  else 'CONSISTENT: the delete finished first, the start found no conversation (RB037) and wrote nothing' end"
+run_order "finish in flight, second finish (same id)"  "$CHAT_FINISH_FIX" "$FINISH_A"  "$FINISH_A"  "$V_FINISH_SAME"  "" "23505" yes
+run_order "finish in flight, second finish (other id)" "$CHAT_FINISH_FIX" "$FINISH_A"  "$FINISH_A2" "$V_FINISH_OTHER" "" "RB030" yes
+run_order "start in flight, conversation delete"       "$CHAT_START_FIX"  "$START_C1"  "$DELETE_C1" "$V_START_DELETE" "" ""      yes
+run_order "conversation delete in flight, start"       "$CHAT_START_FIX"  "$DELETE_C1" "$START_C1"  "$V_DELETE_START" "" "RB037" yes
 
 echo "race-db: $n orderings, $fail problem(s), $warn warning(s)"
 [ "$n" -eq "$EXPECTED" ] || { echo "race-db: expected $EXPECTED orderings, ran $n" >&2; exit 1; }

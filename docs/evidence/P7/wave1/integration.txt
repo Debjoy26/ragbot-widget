@@ -1,0 +1,11 @@
+npm notice run ragbot-widget@0.1.0 test:integration
+npm notice run vitest run --project integration
+
+ RUN  v5.1.0 /home/kali/Desktop/rag-bot/ragbot-widget
+
+
+ Test Files  13 passed (13)
+      Tests  684 passed (684)
+   Start at  12:09:08
+   Duration  156.96s (tests 99%, import 1%)
+

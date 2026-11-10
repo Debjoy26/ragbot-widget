@@ -267,6 +267,6 @@ describe('create-first-admin against the local stack', () => {
       body: '{}',
     });
     expect(ver.status).toBe(200);
-    expect(await ver.json()).toBe(12);
+    expect(await ver.json()).toBe(13);
   });
 });

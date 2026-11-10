@@ -112,3 +112,67 @@ Export from `@ragbot/shared/ai`:
   19. Usage rows for every call.
   20. Settle the budget, finish the run, then `done`.
 - **Handoff message:** `escalation_messages[lang]`, then `escalation_messages[supported_languages[0]]`. If neither exists: no handoff message (log `handoff_message_missing`, code only), but still send the event with an empty message.
+
+### [P7-AI] 2026-11-10 11:37 CLAIM: chat, moderation and pricing adapters
+Owning `shared/src/ai/{chat,moderation,pricing,http}.ts`, `shared/src/ai/index.ts` (exports only) and `tests/unit/shared-ai/**`.
+Embedding adapter will be refactored only to reuse helpers if that is behaviour-neutral (likely left untouched).
+Options object follows Frozen interface 2: `{ fetch?, requestTimeoutMs? }`.
+
+### [P7-DB] 2026-11-10 CLAIM: migration 013 and the local database stack
+- Owned: `supabase/migrations/013_chat.sql`, `supabase/tests/database/260_chat.test.sql`, `scripts/race-db.sh` (orderings only), the schema_version 12 -> 13 expectations in existing pgTAP/integration tests.
+- I am the only worker that resets or tests the local Supabase stack. A NOTICE will precede every reset.
+- Branch `p7/db` @ 6a37a25 (worktree, no commits).
+
+### [P7-API] 2026-11-10 11:45 CLAIM: API chat/history routes and services
+Branch `p7/api` (worktree) @ 6a37a25. Owned: api/src/routes/{chat,conversations}.ts, api/src/services/{chat,moderation,retrieval,handoff,llm,citations,conversations,output-moderation}.ts, api/src/lib/{sse,ai}.ts, edits to api/src/lib/config.ts, app.ts, main.ts, api/.env.example, tests/helpers/fake-ai.ts, tests/unit/api/* (new + config tests / helpers.ts validEnv), scripts/api-smoke.mjs (env only).
+Note: server.ts is not mine, so the chat and history routes are registered in app.ts (createApp) on the instance buildServer returns.
+Imports of `createChatProvider` / `createModerationProvider` are confined to api/src/lib/ai.ts.
+
+### [P7-DB] 2026-11-10 NOTICE: resetting the local Supabase stack now
+- `supabase db reset` (local only) from the P7-DB worktree, applying 001..013. Local data is wiped. Do not run db tests or integration tests against the local stack until I post the next entry (expect a few minutes).
+
+### [P7-AI] 2026-11-10 12:05 INTERFACE: exported signatures (compile clean with tsc -b; tests still being written)
+All from `@ragbot/shared/ai`:
+- `createChatProvider(config: ProviderConfig, options?: { fetch?: typeof fetch; requestTimeoutMs?: number }): ChatProvider` (default timeout `CHAT_REQUEST_TIMEOUT_MS` = 120000 for the whole request and stream; byte cap `MAX_CHAT_STREAM_BYTES` = 8 MiB).
+- `createModerationProvider(config: ModerationConfig, options?: same): ModerationProvider` (default timeout `MODERATION_REQUEST_TIMEOUT_MS` = 30000). `endpoint` mode needs provider `openai` (plain Error otherwise). Empty/whitespace text returns allow without a call.
+- `estimateCostUsd(usage: ChatUsage, price: ModelPrice): number`; `interface ModelPrice { inputPerMillion: number; outputPerMillion: number }`. Throws RangeError. Ignores cachedInputTokens (all input at full rate).
+- Also exported: `type ChatProviderOptions`, `type ModerationProviderOptions`, `type AiRequestOptions`, `parseSse`, `SseEvent`, `CLASSIFIER_SYSTEM_PROMPT`, `CLASSIFIER_MAX_OUTPUT_TOKENS`.
+Behaviour the API should know:
+- `stream()` validates synchronously: `maxOutputTokens` positive integer and non-empty `messages`, else RangeError. Nothing is sent until the first `next()`.
+- Abort (before or during) throws an `AbortError` (a fresh DOMException, never the caller's reason). Check `signal.aborted` yourself to tell disconnect from deadline.
+- `ProviderError.billed` is true for every error after a 2xx: stream error event, truncated stream (no finish/[DONE]/message_stop, including an empty stream: transient), timeout mid-stream, oversize, safety/refusal stop (permanent). Before a 2xx: false.
+- A safety/content-filter/refusal stop is a permanent billed error even after text was emitted (a filtered reply is never reported complete); the text of the chunk carrying the stop is dropped.
+- Error event mid-stream after text: transient. Before text: classified from the event when it says (rate_limit, auth, billing, ...), else transient.
+- Usage when the provider omits it (some openai_compatible servers): estimated at 1 token per 3 characters (over-counts on purpose). `inputTokens` includes cached input.
+- Moderation classifier: reply must be exactly `ALLOW` after trim else `block`; usage always set; provider errors propagate (the API decides fail-closed).
+
+### [P7-DB] 2026-11-10 NOTICE: second reset of the local Supabase stack (final run)
+- Migration 013 applied once already and the 279 pgTAP cases of 260 pass. Now the ordered final run from a clean reset: `db reset`, `db test`, `db lint`, `db race`. Do not touch the local stack until I post DONE.
+
+### [P7-AI] 2026-11-10 11:50 DONE: chat, moderation, pricing adapters implemented and unit-tested (self-reported)
+Branch `p7/ai` in worktree `.claude/worktrees/agent-abfb19bc8e542dbdd`, based on 6a37a25, uncommitted. Signatures as in the INTERFACE entry above (unchanged).
+Checks in that worktree: `npx tsc -b` 0, `npx tsc -p tests --noEmit` 0, eslint (--no-ignore on shared/src/ai and tests/unit/shared-ai) 0, prettier --check 0, `npm test` 0 (51 files, 2514 tests), shared-ai alone 357 tests x6 runs stable.
+Files: shared/src/ai/{chat,moderation,pricing,http}.ts, shared/src/ai/index.ts (4 export lines), tests/unit/shared-ai/{helpers,chat,sse,moderation,pricing}.
+`embeddings.ts` untouched. Tests import adapters by relative path (`../../../shared/src/ai/index.ts`), as the worker tests do.
+Not verified: any real provider (no network). Wire formats follow the vendors' documented streaming formats from memory of the docs.
+
+### [P7-DB] 2026-11-10 DONE: migration 013 and its tests; the local stack is free again
+- Local stack is at migration 013 (clean reset). `db reset`, `db test` (26 files, 3344 cases, incl. 260_chat 279 cases), `db lint` and `db race` (51 orderings, 0 problems) all exit 0, in that order.
+- Files: `supabase/migrations/013_chat.sql`, `supabase/tests/database/260_chat.test.sql`, `scripts/race-db.sh` (+4 orderings), schema_version 12 -> 13 in `220_admin_settings.test.sql`, `250_ingestion.test.sql`, `tests/integration/first-admin.test.ts`, `tests/integration/admin-real-session.test.ts`. Nothing committed.
+- Signatures are exactly Frozen interface 1. Additions beyond the frozen text (all additive, none changes a signature or an error code in the text):
+  - `start_chat_turn`: a second call for a run that already has its `user` message raises RB030 (a retry never stores the question twice). It also stores the trimmed content, and checks the session row first (RB037 if the session is not of this bot).
+  - `finish_chat_turn`: besides run and conversation ownership, `p_user_message_id` must be a `user` message of `p_conversation_id` written for `p_run_id` (else RB037). The run must be `reserved` or `running`, the conversation `open`. A different `p_message_id` for a run that already has an assistant message raises RB030; the same `p_message_id` again is the primary key's 23505. `last_message_at` moves to the answer. `p_sources` null or not an array is 22023; the chunk rows are locked FOR KEY SHARE until commit.
+  - `record_request_usage`: the run may be in any state (usage after `finish` is fine). `p_input_tokens`, `p_output_tokens` and `p_estimated_cost` are required (null is 22023); `p_latency_ms` may be null; cost must be below 100000000; provider up to 100 and model up to 200 characters.
+  - `get_chat_context`: unknown bot RB037; null bot 22023. A missing `client_settings` or `public_bot_config` row is RB036 whether or not the bot is enabled.
+  - `get_conversation_history`: `p_before` must be a `user` or `assistant` message of the conversation (a system message or another conversation's message is RB037). Order is (created_at, id).
+  - Lock order: session (KEY SHARE, start only), run (NO KEY UPDATE), conversation (NO KEY UPDATE), chunks (KEY SHARE).
+
+### [P7-API] 2026-11-10 12:10 DONE: API chat/history (worktree branch p7/api @ 6a37a25, uncommitted)
+Routes: POST /v1/chat (SSE), GET /v1/conversations/:id. Registered in createApp (app.ts), not server.ts.
+Typecheck: only api/src/lib/ai.ts fails here (createChatProvider/createModerationProvider not in this worktree's shared); Opus wires it at integration. tests/unit/api/app-wiring.test.ts fails for the same reason (createApp builds the providers) until then.
+Contract notes for Opus (details in the report):
+- The shared `handoff` schema needs a non-empty message, so a missing escalation message omits the handoff event (code handoff_message_missing logged) instead of sending an empty one.
+- GET /v1/conversations/:id answers 404 INVALID_REQUEST for not-found / not-owned / bad `before`; chat start answers 400.
+- finish_chat_turn is called before `sources`/`handoff` are written; 22023 retries once with sources [] (sources event then empty).
+- finish_chat_turn gets p_provider/p_model null for turns with no chat call.
+New env: RETRIEVAL_TOP_K, RETRIEVAL_MIN_SIMILARITY, CHAT_CONTEXT_MAX_TOKENS, CHAT_HISTORY_MAX_MESSAGES, CHAT_MAX_OUTPUT_TOKENS, CHAT_PRICE_{INPUT,OUTPUT}_PER_MILLION, CHAT_FALLBACK_PRICE_{INPUT,OUTPUT}_PER_MILLION (only with a fallback), MODERATION_PRICE_{INPUT,OUTPUT}_PER_MILLION, EMBEDDING_PRICE_PER_MILLION_TOKENS, CHAT_RESERVATION_TTL_SECONDS (> CHAT_DEADLINE_MS), CHAT_PROVIDER_ATTEMPTS, HISTORY_PAGE_SIZE.

@@ -314,6 +314,9 @@ describe('provider keys are non-enumerable inside config.ai (P4-D3 R-9, R-10)', 
       validEnv({
         CHAT_FALLBACK_PROVIDER: 'gemini',
         CHAT_FALLBACK_MODEL: 'fake-fallback-model',
+        // P7: a configured fallback needs its own prices.
+        CHAT_FALLBACK_PRICE_INPUT_PER_MILLION: '0.2',
+        CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION: '0.8',
       }),
     );
     const fb = withFallback.ai.chatFallback;

@@ -39,7 +39,30 @@ export interface AppConfig {
   readonly turnstileTimeoutMs: number;
   readonly chatDeadlineMs: number;
   readonly providerMaxAttempts: number;
+  /** Chat pipeline limits (P7). All required, no defaults. */
+  readonly retrievalTopK: number;
+  readonly retrievalMinSimilarity: number;
+  /** Upper bound (estimated tokens) on one chat prompt: system, history, evidence and question. */
+  readonly chatContextMaxTokens: number;
+  readonly chatHistoryMaxMessages: number;
+  readonly chatMaxOutputTokens: number;
+  readonly chatReservationTtlSeconds: number;
+  /** Total attempts per provider before the first token (1..3), including the first. */
+  readonly chatProviderAttempts: number;
+  readonly historyPageSize: number;
+  /** USD per million tokens. */
+  readonly chatPrice: TokenPrice;
+  /** Null exactly when no fallback provider is configured. */
+  readonly chatFallbackPrice: TokenPrice | null;
+  readonly moderationPrice: TokenPrice;
+  readonly embeddingPricePerMillionTokens: number;
   readonly ai: ApiAiConfig;
+}
+
+/** USD per one million tokens. */
+export interface TokenPrice {
+  readonly inputPerMillion: number;
+  readonly outputPerMillion: number;
 }
 
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
@@ -75,6 +98,19 @@ const integer = (min: number, max: number) =>
     .regex(/^\d{1,10}$/)
     .transform((v) => Number(v))
     .pipe(z.number().int().min(min).max(max));
+
+/** A non-negative decimal such as `0.25` (digits only: no sign, no exponent), within [min, max]. */
+const decimal = (min: number, max: number) =>
+  nonEmpty
+    .regex(/^\d{1,9}(?:\.\d{1,9})?$/)
+    .transform((v) => Number(v))
+    .pipe(z.number().min(min).max(max));
+
+/** Largest USD-per-million price accepted. A typo such as 1e9 must not pass as a price. */
+const MAX_PRICE_PER_MILLION = 100_000;
+const price = decimal(0, MAX_PRICE_PER_MILLION);
+/** Fallback prices are required only when a fallback provider is configured (checked in loadConfig). */
+const optionalPrice = z.preprocess((v) => (v === '' ? undefined : v), price.optional());
 
 /** Rejects `.env.example` placeholders such as `<server-only-secret-key>`. */
 const secret = (minBytes: number) =>
@@ -149,6 +185,24 @@ const envSchema = z.object({
   TURNSTILE_TIMEOUT_MS: integer(1, MAX_INT32),
   CHAT_DEADLINE_MS: integer(1, MAX_INT32),
   PROVIDER_MAX_ATTEMPTS: integer(1, 10),
+  // P7 chat pipeline. match_document_chunks accepts a count of 1..50 and a similarity of -1..1.
+  RETRIEVAL_TOP_K: integer(1, 50),
+  RETRIEVAL_MIN_SIMILARITY: decimal(0, 1),
+  CHAT_CONTEXT_MAX_TOKENS: integer(1, 10_000_000),
+  CHAT_HISTORY_MAX_MESSAGES: integer(0, 50),
+  CHAT_MAX_OUTPUT_TOKENS: integer(1, 1_000_000),
+  CHAT_PRICE_INPUT_PER_MILLION: price,
+  CHAT_PRICE_OUTPUT_PER_MILLION: price,
+  CHAT_FALLBACK_PRICE_INPUT_PER_MILLION: optionalPrice,
+  CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION: optionalPrice,
+  MODERATION_PRICE_INPUT_PER_MILLION: price,
+  MODERATION_PRICE_OUTPUT_PER_MILLION: price,
+  EMBEDDING_PRICE_PER_MILLION_TOKENS: price,
+  // reserve_request_budget accepts a TTL of 1..86400 seconds.
+  CHAT_RESERVATION_TTL_SECONDS: integer(1, 86_400),
+  CHAT_PROVIDER_ATTEMPTS: integer(1, 3),
+  // get_conversation_history accepts a limit of 1..100.
+  HISTORY_PAGE_SIZE: integer(1, 100),
 });
 
 function deepFreeze<T>(value: T): T {
@@ -250,6 +304,33 @@ export function loadConfig(env: Env): AppConfig {
     throw new ConfigError(placeholders, `Invalid AI configuration: ${placeholders.join(', ')}`);
   }
 
+  // Fallback prices are required exactly when a fallback is configured, and refused otherwise (a
+  // price with no provider is a typo). Names only, never values.
+  const fallbackPriceVars = [
+    'CHAT_FALLBACK_PRICE_INPUT_PER_MILLION',
+    'CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION',
+  ] as const;
+  const fallbackIn = v.CHAT_FALLBACK_PRICE_INPUT_PER_MILLION;
+  const fallbackOut = v.CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION;
+  if (ai.chatFallback !== null && (fallbackIn === undefined || fallbackOut === undefined)) {
+    const missing = fallbackPriceVars.filter(
+      (_, i) => (i === 0 ? fallbackIn : fallbackOut) === undefined,
+    );
+    throw new ConfigError(missing, `Invalid configuration: ${missing.join(', ')}`);
+  }
+  if (ai.chatFallback === null && (fallbackIn !== undefined || fallbackOut !== undefined)) {
+    throw new ConfigError(
+      [...fallbackPriceVars],
+      `Invalid configuration: ${fallbackPriceVars.join(', ')} (no fallback provider is configured)`,
+    );
+  }
+
+  // A reservation must outlive the request it covers, or the reaper could expire it mid-answer.
+  if (v.CHAT_RESERVATION_TTL_SECONDS * 1000 <= v.CHAT_DEADLINE_MS) {
+    const names = ['CHAT_RESERVATION_TTL_SECONDS', 'CHAT_DEADLINE_MS'];
+    throw new ConfigError(names, `Invalid configuration: ${names.join(', ')} (TTL must be longer)`);
+  }
+
   // CONNECTION_TIMEOUT_MS is the idle-socket timeout: while a handler runs and writes nothing, the
   // socket is idle, and Node destroys it when the timeout passes. A readiness probe that may run
   // as long as READY_TIMEOUT_MS therefore needs a shorter deadline than the socket's, or its 503
@@ -289,6 +370,27 @@ export function loadConfig(env: Env): AppConfig {
     turnstileTimeoutMs: v.TURNSTILE_TIMEOUT_MS,
     chatDeadlineMs: v.CHAT_DEADLINE_MS,
     providerMaxAttempts: v.PROVIDER_MAX_ATTEMPTS,
+    retrievalTopK: v.RETRIEVAL_TOP_K,
+    retrievalMinSimilarity: v.RETRIEVAL_MIN_SIMILARITY,
+    chatContextMaxTokens: v.CHAT_CONTEXT_MAX_TOKENS,
+    chatHistoryMaxMessages: v.CHAT_HISTORY_MAX_MESSAGES,
+    chatMaxOutputTokens: v.CHAT_MAX_OUTPUT_TOKENS,
+    chatReservationTtlSeconds: v.CHAT_RESERVATION_TTL_SECONDS,
+    chatProviderAttempts: v.CHAT_PROVIDER_ATTEMPTS,
+    historyPageSize: v.HISTORY_PAGE_SIZE,
+    chatPrice: {
+      inputPerMillion: v.CHAT_PRICE_INPUT_PER_MILLION,
+      outputPerMillion: v.CHAT_PRICE_OUTPUT_PER_MILLION,
+    },
+    chatFallbackPrice:
+      fallbackIn === undefined || fallbackOut === undefined
+        ? null
+        : { inputPerMillion: fallbackIn, outputPerMillion: fallbackOut },
+    moderationPrice: {
+      inputPerMillion: v.MODERATION_PRICE_INPUT_PER_MILLION,
+      outputPerMillion: v.MODERATION_PRICE_OUTPUT_PER_MILLION,
+    },
+    embeddingPricePerMillionTokens: v.EMBEDDING_PRICE_PER_MILLION_TOKENS,
   };
   // Secrets are defined as non-enumerable, read-only properties (see AppConfig). They are frozen
   // here by hand because deepFreeze walks enumerable properties only.
