@@ -161,16 +161,47 @@ describe('model reply helpers', () => {
   it('parses the evidence header', () => {
     expect(parseEvidenceHeader('EVIDENCE: SUFFICIENT\nAnswer [[c1]]')).toEqual({
       insufficientEvidence: false,
+      outcome: 'answer',
       body: 'Answer [[c1]]',
     });
     expect(parseEvidenceHeader('EVIDENCE: INSUFFICIENT\nI do not have that information.')).toEqual({
       insufficientEvidence: true,
+      outcome: 'insufficient',
       body: 'I do not have that information.',
     });
   });
 
+  it('parses the rag-v2 scope and contact headers (P7)', () => {
+    expect(parseEvidenceHeader('SCOPE: OUT\nThat is outside what I can help with.')).toEqual({
+      insufficientEvidence: true,
+      outcome: 'out_of_scope',
+      body: 'That is outside what I can help with.',
+    });
+    expect(parseEvidenceHeader('CONTACT: REQUESTED')).toEqual({
+      insufficientEvidence: true,
+      outcome: 'contact_requested',
+      body: '',
+    });
+    expect(parseEvidenceHeader('scope: out\nx').outcome).toBeNull();
+    expect(parseEvidenceHeader('CONTACT: REQUESTED please').outcome).toBeNull();
+  });
+
+  it('tells the model every header (rag-v2)', () => {
+    const system = buildSystemPrompt(bot);
+    for (const h of [
+      'EVIDENCE: SUFFICIENT',
+      'EVIDENCE: INSUFFICIENT',
+      'SCOPE: OUT',
+      'CONTACT: REQUESTED',
+    ]) {
+      expect(system).toContain(`"${h}"`);
+    }
+    expect(PROMPT_TEMPLATE_VERSION).toBe('rag-v2');
+  });
+
   it('returns null (callers treat as insufficient) when the header is missing or altered', () => {
     expect(parseEvidenceHeader('Just an answer').insufficientEvidence).toBeNull();
+    expect(parseEvidenceHeader('Just an answer').outcome).toBeNull();
     expect(parseEvidenceHeader('evidence: sufficient\nx').insufficientEvidence).toBeNull();
     expect(parseEvidenceHeader('').insufficientEvidence).toBeNull();
   });

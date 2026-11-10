@@ -1,9 +1,17 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-const alias = {
-  '@ragbot/shared': fileURLToPath(new URL('./shared/src/index.ts', import.meta.url)),
-};
+// Array form, longest prefix first: '@ragbot/shared/ai' must not be caught by '@ragbot/shared'.
+const alias = [
+  {
+    find: /^@ragbot\/shared\/ai$/,
+    replacement: fileURLToPath(new URL('./shared/src/ai/index.ts', import.meta.url)),
+  },
+  {
+    find: /^@ragbot\/shared$/,
+    replacement: fileURLToPath(new URL('./shared/src/index.ts', import.meta.url)),
+  },
+];
 
 export default defineConfig({
   test: {

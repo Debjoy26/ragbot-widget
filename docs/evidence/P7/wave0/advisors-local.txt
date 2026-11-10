@@ -1,0 +1,7 @@
+npm notice run ragbot-widget@0.1.0 npx
+npm notice run 'supabase' db advisors --type all --level warn
+Target: local stack (127.0.0.1:54322) · default; pass --remote for RagBot (rbejeqwxyxtklehuzibv)
+No issues found
+{"results":[],"message":"db advisors","target":{"kind":"local","host":"127.0.0.1","port":54322}}
+A new version of Supabase CLI is available: v3.1.0 (currently installed v3.0.0)
+We recommend updating regularly for new features and bug fixes: https://supabase.com/docs/guides/cli/getting-started#updating-the-supabase-cli
