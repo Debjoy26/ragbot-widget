@@ -70,7 +70,7 @@ Export from `@ragbot/shared/ai`:
   - `llm_classifier` mode: a fixed classifier prompt on a chat provider, with a strict one-word reply `ALLOW` or `BLOCK`. Anything else means `block` (fails closed). `usage` is set.
 - **`createEmbeddingProvider`** already exists (P6). The API uses it with `taskType: 'query'`.
 - **Pricing helper:** `estimateCostUsd(usage: ChatUsage, price: { inputPerMillion: number; outputPerMillion: number }) => number`.
-- **Fakes for tests:** `tests/helpers/fake-ai.ts`, labelled FAKE. In-memory fake chat, moderation and embedding providers with scripted replies, failures after N chunks, and abort recording. Both the API unit tests and the e2e tests use them.
+- **Fakes for tests:** `tests/helpers/fake-ai.ts` (owner **P7-API**: the fakes depend only on the shared interfaces in `@ragbot/shared`), labelled FAKE. In-memory fake chat, moderation and embedding providers with scripted replies, failures after N chunks, and abort recording. Both the API unit tests and the e2e tests use them.
 
 ## Frozen interface 3: API (`api/`, owner P7-API)
 - **Routes:**
