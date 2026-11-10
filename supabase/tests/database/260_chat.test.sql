@@ -8,7 +8,7 @@
 -- Ids end in 000000000260. Prefix by kind: bots b0, sessions a0, runs d0, conversations c0, documents e0, versions f0,
 -- chunks 90, user messages 81, other messages 82, assistant messages 83. The number after the prefix is the fixture's name.
 begin;
-select plan(279);
+select plan(283);
 
 
 insert into public.bot_profiles (id, slug, identity_prompt, tone, scope, allowed_languages, embedding_model, embedding_dimensions, enabled) values
@@ -490,6 +490,24 @@ reset role;
 set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
 select throws_ok($q$select page_number, section from public.message_sources$q$, '42501', null, 'anon: reading page_number and section is denied');
+reset role;
+
+-- ===== P7-D2: a question refused by moderation is marked blocked itself =====
+insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash, state) values
+  ('d00000d1-0000-4000-8000-000000000260', 'b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', '00000000-0000-4000-8000-0000000000d1', repeat('a', 64), 'running'),
+  ('d00000d2-0000-4000-8000-000000000260', 'b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', '00000000-0000-4000-8000-0000000000d2', repeat('a', 64), 'running');
+set local role service_role;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select set_config('t.d1', (select row(t.conversation_id, t.user_message_id)::text from public.start_chat_turn('b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', 'd00000d1-0000-4000-8000-000000000260', null, 'a refused question') t), true);
+select lives_ok(format($q$select public.finish_chat_turn('b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', 'd00000d1-0000-4000-8000-000000000260', '830000d1-0000-4000-8000-000000000260', %L, %L, 'policy message', 'blocked', null, null, 'blocked', '[]'::jsonb)$q$,
+  split_part(trim(both '()' from current_setting('t.d1')), ',', 1), split_part(trim(both '()' from current_setting('t.d1')), ',', 2)),
+  'D2: finish with status blocked and handoff_reason blocked');
+select is((select status from public.messages where id = split_part(trim(both '()' from current_setting('t.d1')), ',', 2)::uuid), 'blocked', 'D2: the refused question is marked blocked itself');
+select set_config('t.d2', (select row(t.conversation_id, t.user_message_id)::text from public.start_chat_turn('b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', 'd00000d2-0000-4000-8000-000000000260', null, 'an ordinary question') t), true);
+select lives_ok(format($q$select public.finish_chat_turn('b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', 'd00000d2-0000-4000-8000-000000000260', '830000d2-0000-4000-8000-000000000260', %L, %L, '', 'failed', null, null, 'unavailable', '[]'::jsonb)$q$,
+  split_part(trim(both '()' from current_setting('t.d2')), ',', 1), split_part(trim(both '()' from current_setting('t.d2')), ',', 2)),
+  'D2: finish with another outcome');
+select is((select status from public.messages where id = split_part(trim(both '()' from current_setting('t.d2')), ',', 2)::uuid), 'complete', 'D2: any other outcome leaves the question complete');
 reset role;
 
 select * from finish();

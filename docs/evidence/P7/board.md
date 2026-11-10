@@ -222,3 +222,8 @@ Checks there: `npx tsc -b` 0, `npx tsc -p tests --noEmit` 0, `npm test` 0 (62 fi
 New required API env: CHAT_MAX_OUTPUT_CHARS (>=100), HISTORY_RATE_PER_SESSION_LIMIT, HISTORY_RATE_WINDOW_SECONDS. Config rules tightened: all prices > 0, CHAT_CONTEXT_MAX_TOKENS >= 256, CHAT_RESERVATION_TTL_SECONDS*1000 >= CHAT_DEADLINE_MS + 30000.
 Interfaces for Opus: ChatService gains `checkBot(visitor, slug)` and `prepare` takes `ctx` (the route calls checkBot before the rate limit); `Limits.consumeHistory(visitor)`; `createLimits({ history? })` (optional so tests/integration still compile; absent means consumeHistory fails closed); new RateKeyKind `history_session`; `ChatDeps.hasFallback` removed, `ChatDeps.sleep?` added; `LlmControl` gains `released()` and `onRestart()`. `ChatUsage.truncated` is read through a local type, so it works before and after P7-D1-B lands.
 Merge note: chat.ts passes the contact allowlist to `buildSources` as the optional third parameter through a small cast (`sourcesFor`), so it compiles against both the base and the D1-B citations.ts; after merge the cast can become a plain call. I did not need `shared` changes: `truncated` is read via a local type and works with the new `ChatUsage.truncated?`.
+
+### [main] 2026-11-10 INTERFACE: debug cycle P7-D2 (from re-review P7-R3)
+- Confirmed by Opus on this system: `urlEnd` is quadratic on a URL followed by `)`×N (10k: 84 ms; 40k: 1459 ms).
+- Opus changed 013 (local only): `finish_chat_turn` with `p_status = 'blocked'` and `p_handoff_reason = 'blocked'` also marks the question `status = 'blocked'`. History therefore excludes user rows whose own status is `blocked`. pgTAP 260 covers it (fails on the old function).
+- Owner of every `api/**` file and the API unit tests: **P7-D2**.

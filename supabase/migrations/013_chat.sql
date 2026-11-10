@@ -211,7 +211,8 @@ $$;
 -- null. Each chunk must exist, belong to that version, and that version's document must belong to THIS bot; otherwise
 -- 22023 and nothing is written. The chunk rows are locked FOR KEY SHARE until commit, so a chunk cannot vanish between
 -- the check and the insert.
--- conversations.last_message_at moves to the reply's time.
+-- conversations.last_message_at moves to the reply's time. A 'blocked' reply with handoff_reason 'blocked' also marks the
+-- question 'blocked' (P7-D2), so history excludes it by status.
 -- ---------------------------------------------------------------------------
 create function public.finish_chat_turn(
   p_bot_id             uuid,
@@ -348,6 +349,12 @@ begin
                                handoff_reason, created_at)
   values (p_message_id, p_conversation_id, p_run_id, p_user_message_id, 'assistant', p_content, p_status, p_provider, p_model,
           p_handoff_reason, v_now);
+
+  -- P7-D2: a question refused by moderation is marked 'blocked' itself, so the history sent to the model can exclude
+  -- it by its own status instead of by its position (two turns of one conversation may interleave).
+  if p_status = 'blocked' and p_handoff_reason = 'blocked' then
+    update public.messages m set status = 'blocked' where m.id = p_user_message_id and m.role = 'user';
+  end if;
 
   insert into public.message_sources (message_id, chunk_id, document_version_id, source_label, excerpt, page_number, section)
   select p_message_id,
