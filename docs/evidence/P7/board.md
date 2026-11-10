@@ -176,3 +176,12 @@ Contract notes for Opus (details in the report):
 - finish_chat_turn is called before `sources`/`handoff` are written; 22023 retries once with sources [] (sources event then empty).
 - finish_chat_turn gets p_provider/p_model null for turns with no chat call.
 New env: RETRIEVAL_TOP_K, RETRIEVAL_MIN_SIMILARITY, CHAT_CONTEXT_MAX_TOKENS, CHAT_HISTORY_MAX_MESSAGES, CHAT_MAX_OUTPUT_TOKENS, CHAT_PRICE_{INPUT,OUTPUT}_PER_MILLION, CHAT_FALLBACK_PRICE_{INPUT,OUTPUT}_PER_MILLION (only with a fallback), MODERATION_PRICE_{INPUT,OUTPUT}_PER_MILLION, EMBEDDING_PRICE_PER_MILLION_TOKENS, CHAT_RESERVATION_TTL_SECONDS (> CHAT_DEADLINE_MS), CHAT_PROVIDER_ATTEMPTS, HISTORY_PAGE_SIZE.
+
+### [main] 2026-11-10 INTERFACE: debug cycle P7-D1 (from reviews P7-R1 and P7-R2)
+Confirmed by Opus on this system: the human-request matcher misfires on four ordinary questions; the delink regexes are quadratic (5k chars 22 ms, 20k chars 352 ms). The rest are confirmed by reading.
+- Additive contract changes (Opus-approved):
+  - `ChatUsage.truncated?: boolean` (providers.ts): the provider stopped at its output-token limit (Gemini MAX_TOKENS, OpenAI `length`, Anthropic `max_tokens`). The API stores such a turn as `partial` and sends `done(partial)`.
+  - `chatRequestSchema.message` refuses U+0000 and lone surrogates.
+- Owner of `api/src/services/citations.ts`, `shared/src/ai/*.ts`, `shared/src/providers.ts` (the `ChatUsage` field only) and `shared/src/schemas.ts` (the message refinement only): **P7-D1-B**.
+- Owner of every other `api/**` file and the API unit tests: **P7-D1-A**.
+- `citations.ts` keeps its exported names and signatures. P7-D1-B may add exports; post an INTERFACE if so.
