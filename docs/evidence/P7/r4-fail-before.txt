@@ -1,0 +1,8 @@
+     × matches "How can I contact the team by email?" 6ms
+     × matches "can I call the office on Monday?" 1ms
+     × matches "I want to message the support team via WhatsApp" 1ms
+     × matches "How do I email the company through the website?" 0ms
+     × keeps the legitimate question B in the order u_A(blocked), u_B, a_A(blocked), a_B (P7-R4 #1) 7ms
+     × a link after thousands of unterminated `](` pairs is not left as a link 11ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  6 failed | 82 passed (88)

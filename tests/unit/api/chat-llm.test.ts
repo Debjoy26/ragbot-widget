@@ -21,6 +21,7 @@ import {
 } from './chat-harness.ts';
 import { fakeProviderError } from '../../helpers/fake-ai.ts';
 import { createLlm, LlmFailure, type LlmAttempt } from '../../../api/src/services/llm.ts';
+import { MODERATION_PROMPT_OVERHEAD_TOKENS } from '../../../api/src/services/moderation.ts';
 import { FakeChatProvider } from '../../helpers/fake-ai.ts';
 
 afterEach(closeApps);
@@ -602,9 +603,11 @@ describe('client disconnect (C4)', () => {
     expect(h.limits.release).not.toHaveBeenCalled();
   }, 20_000);
 
-  it('a disconnect before generation fails the run, stores no text and releases the reservation', async () => {
+  it('a disconnect before generation fails the run, stores no text and settles only the aborted moderation call', async () => {
     // Moderation and the embedding wait for the abort, so the client always leaves first: the one
-    // possible outcome is a failed run with nothing spent. Nothing here is a race.
+    // possible outcome is a failed run. P7-D2 F7b: the moderation request was SENT and then aborted,
+    // so its input estimate counts as spent (it used to be recorded as 0 and the reservation was
+    // released); the embedding is not billed on an abort. Nothing here is a race.
     const h = setup({
       moderation: () => 'hang',
       embeddingOptions: { hang: true },
@@ -620,8 +623,16 @@ describe('client disconnect (C4)', () => {
       p_content: '',
     });
     expect(h.chatProvider.calls).toBe(0);
-    await vi.waitFor(() => expect(h.limits.release).toHaveBeenCalledTimes(1), { timeout: 8000 });
-    expect(h.limits.settle).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(h.limits.settle).toHaveBeenCalledTimes(1), { timeout: 8000 });
+    expect(h.limits.release).not.toHaveBeenCalled();
+    // The settled amount is the aborted moderation call's input estimate: the classifier prompt
+    // plus the question, at 1 character = 1 token, at the moderation input price (0.1 per million).
+    const message = chatBody()['message'] as string;
+    const settled = (h.limits.settle.mock.calls[0] as unknown as [string, string, number])[2];
+    expect(settled).toBeCloseTo(
+      ((MODERATION_PROMPT_OVERHEAD_TOKENS + message.length) * 0.1) / 1e6,
+      9,
+    );
     expect(h.moderationProvider.abortedCalls).toBe(1);
     expect(h.embedding.abortedCalls).toBe(1);
   }, 20_000);

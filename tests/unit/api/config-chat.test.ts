@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../../../api/src/lib/config.ts';
+import { MIN_CHAT_CONTEXT_TOKENS } from '../../../api/src/lib/context-budget.ts';
 import { validEnv } from './helpers.ts';
 
 // The P7 chat settings: all required, no defaults, validated at startup (handover section 4).
@@ -108,14 +109,14 @@ describe('chat settings in loadConfig', () => {
         CHAT_PROVIDER_ATTEMPTS: '3',
         HISTORY_PAGE_SIZE: '100',
         CHAT_PRICE_INPUT_PER_MILLION: '0.000000001',
-        CHAT_CONTEXT_MAX_TOKENS: '256',
+        CHAT_CONTEXT_MAX_TOKENS: String(MIN_CHAT_CONTEXT_TOKENS),
       }),
     );
     expect(c.retrievalTopK).toBe(50);
     expect(c.retrievalMinSimilarity).toBe(0);
     expect(c.chatHistoryMaxMessages).toBe(0);
     expect(c.chatPrice.inputPerMillion).toBe(0.000000001);
-    expect(c.chatContextMaxTokens).toBe(256);
+    expect(c.chatContextMaxTokens).toBe(MIN_CHAT_CONTEXT_TOKENS);
     expect(loadConfig(validEnv({ RETRIEVAL_MIN_SIMILARITY: '1' })).retrievalMinSimilarity).toBe(1);
   });
 

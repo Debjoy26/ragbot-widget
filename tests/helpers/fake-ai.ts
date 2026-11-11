@@ -153,18 +153,22 @@ export class FakeModerationProvider implements ModerationProvider {
   abortedCalls = 0;
   readonly #decide: (text: string, callIndex: number) => FakeModerationAction;
   readonly #usage: ChatUsage | null;
+  readonly #abortDelayMs: number;
 
   /**
    * @param decide  verdict (or failure) for a call
    * @param usage   what each call reports: null mimics the free endpoint mode
+   * @param identity.abortDelayMs  a `hang` call reports its abort this many ms after the signal
+   *                fired (a provider that is slow to notice a cancellation)
    */
   constructor(
     decide: (text: string, callIndex: number) => FakeModerationAction = () => 'allow',
     usage: ChatUsage | null = { inputTokens: 600, outputTokens: 2 },
-    identity: { provider?: ProviderKind; model?: string } = {},
+    identity: { provider?: ProviderKind; model?: string; abortDelayMs?: number } = {},
   ) {
     this.#decide = decide;
     this.#usage = usage;
+    this.#abortDelayMs = identity.abortDelayMs ?? 0;
     this.provider = identity.provider ?? 'gemini';
     this.model = identity.model ?? 'fake-moderation-model';
   }
@@ -190,6 +194,7 @@ export class FakeModerationProvider implements ModerationProvider {
         await pause(2 ** 31 - 1, options?.signal);
       } catch (err) {
         this.abortedCalls += 1;
+        if (this.#abortDelayMs > 0) await pause(this.#abortDelayMs, undefined);
         throw err;
       }
     }

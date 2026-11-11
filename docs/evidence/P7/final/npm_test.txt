@@ -1,0 +1,14 @@
+npm notice run ragbot-widget@0.1.0 test
+npm notice run vitest run --project unit
+
+ RUN  v5.1.0 /home/kali/Desktop/rag-bot/ragbot-widget
+
+
+ Test Files  69 passed (69)
+      Tests  3133 passed (3133)
+   Start at  09:25:47
+   Duration  12.01s (tests 76%, import 21%, transform 2%, worker 1%)
+
+    Isolate  69 workers spawned · ~114ms startup each (spawn + environment, per file)
+             at least ~1.86s faster with isolate: false — reuses workers across files instead of one per file
+

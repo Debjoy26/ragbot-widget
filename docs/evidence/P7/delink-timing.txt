@@ -7,3 +7,11 @@ After (P7-D1-B citations.ts):
   'a+' x 100000: 38 ms
   '1 ' x 100000: 49 ms
   '_' x 100000:   7 ms
+
+P7-D2 F3 (urlEnd on a URL followed by ')'), measured by Opus on this system:
+Before (0d52f14): 'http://x' + ')'x10000 84 ms; x40000 1459 ms (quadratic).
+After (P7-D2): 'http://x' + ')'x200000 30 ms; 'a.com/' + ')'x200000 20 ms; 'a'x200000 58 ms; 'a.'x100000 33 ms; '1 'x100000 36 ms.
+
+P7-D2 F3 (urlEnd on a URL followed by ')'), measured by Opus on this system:
+Before (0d52f14): 'http://x' + ')'x10000 84 ms; x40000 1459 ms (quadratic).
+After (P7-D2): 'http://x' + ')'x200000 30 ms; 'a.com/' + ')'x200000 20 ms; 'a'x200000 58 ms; 'a.'x100000 33 ms; '1 'x100000 36 ms.

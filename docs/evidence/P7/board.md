@@ -227,3 +227,13 @@ Merge note: chat.ts passes the contact allowlist to `buildSources` as the option
 - Confirmed by Opus on this system: `urlEnd` is quadratic on a URL followed by `)`×N (10k: 84 ms; 40k: 1459 ms).
 - Opus changed 013 (local only): `finish_chat_turn` with `p_status = 'blocked'` and `p_handoff_reason = 'blocked'` also marks the question `status = 'blocked'`. History therefore excludes user rows whose own status is `blocked`. pgTAP 260 covers it (fails on the old function).
 - Owner of every `api/**` file and the API unit tests: **P7-D2**.
+
+### [P7-D2] 2026-11-11 CLAIM: debug cycle P7-D2 (F1-F7, F9)
+Branch `p7/d2` @ ea67013 (worktree, no commits). Owned: every api/** file, tests/unit/api/**, tests/helpers/fake-ai.ts, add-only cases in tests/integration/chat-e2e.test.ts. Tests first, with fail-before evidence kept per fix. shared/**, supabase/**, worker/** untouched. The local DB stack is not reset.
+
+### [P7-D2] 2026-11-11 DONE: debug cycle P7-D2, F1-F7 and F9 (self-reported)
+Branch `p7/d2` @ ea67013 (worktree `.claude/worktrees/agent-a778a940dcf52bdec`), uncommitted. shared/**, supabase/**, worker/** untouched. The local DB stack was not reset.
+Checks there: `npx tsc -b` 0, `npx tsc -p tests --noEmit` 0, `eslint . --max-warnings 0` 0, `prettier --check .` 0, `npm test` 0 (69 files, 3125 tests, run twice), `chat-e2e.test.ts` 82 passed, twice (A5c is new).
+Each fix has a test that failed on the base. New API files: `api/src/lib/abort.ts` (raceAbort), `api/src/lib/context-budget.ts` (MIN_CHAT_CONTEXT_TOKENS = 3339).
+Interface changes for Opus: `SafeTextStream.flush(truncated = false)`; `CHAT_CONTEXT_MAX_TOKENS` must be >= 3339 (was 256; fixtures at 6000 are fine; `api/.env.example` updated); reservation now counts output moderation once per attempt x provider.
+Existing test expectations changed (all in tests/unit/api): chat-route reservation block, chat-llm disconnect case, chat-usage history budget (2), config-chat bounds. Reasons are in the report.

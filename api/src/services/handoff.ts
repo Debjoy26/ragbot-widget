@@ -77,7 +77,9 @@ export function noKnowledgeReason(
 //  * a second-person possessive in front of a contact noun ("your phone number"), or
 //  * a first-person request for a person ("I need a human").
 // Nouns and verbs alone ("contact information", "customer service", "phone number format",
-// "contact support hours") never match: those are ordinary questions. A subtler request is caught
+// "contact support hours") never match: those are ordinary questions. So do a group noun followed
+// by a preposition ("reach the office by train") and "phone", "mobile" or "cell" without a contact
+// trailer ("does this case fit your phone?"): the phone is then a device (P7-D2 F6). A subtler request is caught
 // by the model's `CONTACT: REQUESTED` header instead. All patterns are linear: bounded
 // alternations joined by single literal spaces (the text is whitespace-collapsed first).
 
@@ -88,8 +90,19 @@ const PERSON_NP = `(?:(?:a|an|the|your|some|any|one\\s+of\\s+your)\\s+)?(?:(?:re
 /** A team or organisation, for contact verbs ("contact the team", "reach your support team"). */
 const GROUP_NP =
   '(?:(?:the|your|a)\\s+(?:(?:support|sales|customer\\s+service|customer\\s+care|customer\\s+support)\\s+)?(?:team|company|office|staff|business))';
-/** What a visitor may contact: you, a team, or a person. */
-const CONTACT_OBJECT = `(?:you(?:\\s+(?:guys|folks|all|directly))?|${GROUP_NP}|${PERSON_NP})`;
+/** "team" and "staff" with or without an article: groups too, not people (P7-D2 F6). */
+const TEAM_NP = '(?:(?:a|an|the|your|some|any)\\s+)?(?:team|staff)';
+/** Persons without the group words, so a group never inherits the lenient end of a person. */
+const PERSON_ONLY =
+  '(?:human|person|people|agent|representative|rep|operator|employee|advis[eo]r|consultant|someone|somebody|manager|support|owner|sales|customer\\s+(?:service|support|care))(?!\\s+resources)\\b';
+const PERSON_ONLY_NP = `(?:(?:a|an|the|your|some|any|one\\s+of\\s+your)\\s+)?(?:(?:real|live|actual)\\s+)?${PERSON_ONLY}`;
+/** What a visitor may contact: you or a person. A preposition may follow ("contact you by email"). */
+const CONTACT_PERSON = `(?:you(?:\\s+(?:guys|folks|all|directly))?|${PERSON_ONLY_NP})`;
+/**
+ * A team or organisation. NO preposition may follow it: "reach the office by train" is a question
+ * about the journey, not a request for contact details (P7-D2 F6).
+ */
+const CONTACT_GROUP = `(?:${GROUP_NP}|${TEAM_NP})`;
 
 const ADVERBS = '(?:(?:just|really|actually|also|quickly|directly|best|urgently|simply)\\s+)*';
 /** Phrases that put an intent in front of a bare verb. */
@@ -127,8 +140,14 @@ const CONTACT_NOUN_PREFIX =
   '(?:(?:customer\\s+(?:service|support|care)|support|sales|service|office|main|business|company)\\s+)?';
 const CONTACT_NOUN = '(?:phone|telephone|mobile|cell|e-?mail|whatsapp|contact)';
 const CONTACT_TRAILER = '(?:number|address|details|info|information|id)';
-/** "phone", "email address", "customer service phone number". */
-const CONTACT_NP = `${CONTACT_NOUN_PREFIX}${CONTACT_NOUN}(?:\\s+${CONTACT_TRAILER})?`;
+/**
+ * "phone", "mobile" and "cell" are also devices ("does this case fit your phone?"): they name
+ * contact details only together with a contact trailer (P7-D2 F6).
+ */
+const DEVICE_NOUN = '(?:phone|telephone|mobile|cell)';
+const DEVICE_TRAILER = '(?:numbers?|no\\.?|line|hotline|details|info|information|call)';
+/** "email", "email address", "customer service phone number" (never a bare "phone"). */
+const CONTACT_NP = `${CONTACT_NOUN_PREFIX}(?:(?:e-?mail|whatsapp|contact)(?:\\s+${CONTACT_TRAILER})?|${DEVICE_NOUN}\\s+${DEVICE_TRAILER})`;
 /** The same, but only with a trailer ("phone number", not "phone"). */
 const CONTACT_NP_STRICT = `${CONTACT_NOUN_PREFIX}${CONTACT_NOUN}\\s+${CONTACT_TRAILER}`;
 
@@ -139,12 +158,23 @@ const HUMAN_REQUEST_PATTERNS: readonly RegExp[] = [
   new RegExp(
     `\\b(?:connect|transfer|forward|redirect|escalate)\\s+me\\s+(?:to|with)\\s+${PERSON_NP}|\\bput\\s+me\\s+(?:through|on)\\s+(?:to|with)\\s+${PERSON_NP}|\\bget\\s+me\\s+(?:connected|transferred)\\s+(?:to|with)\\s+${PERSON_NP}`,
   ),
-  // how can I contact you / I want to call you / can I email the team
+  // how can I contact you / I want to call you / can I email support
   new RegExp(
-    `${GUARD}(?:contact|call|phone|e-?mail|mail|whatsapp|text|reach(?:\\s+out\\s+to)?|message|ring)\\s+${CONTACT_OBJECT}${END_REQUEST}`,
+    `${GUARD}(?:contact|call|phone|e-?mail|mail|whatsapp|text|reach(?:\\s+out\\s+to)?|message|ring)\\s+${CONTACT_PERSON}${END_REQUEST}`,
+  ),
+  // can I email the team / how do I reach the office (no preposition after a group)
+  new RegExp(
+    `${GUARD}(?:contact|call|phone|e-?mail|mail|whatsapp|text|reach(?:\\s+out\\s+to)?|message|ring)\\s+${CONTACT_GROUP}${END_NOUN}`,
+  ),
+  // how can I contact the team by email / can I call the office on Monday (P7-R4 #2): a channel or
+  // time after a group is still a contact request, except after "reach" ("reach the office by train").
+  new RegExp(
+    `${GUARD}(?:contact|call|phone|e-?mail|mail|whatsapp|text|message|ring)\\s+${CONTACT_GROUP}(?=\\s+(?:by|via|on|over|through|at)\\b)`,
   ),
   // how do I get in touch (with ...)
-  new RegExp(`${GUARD}get\\s+in\\s+touch(?:\\s+with\\s+${CONTACT_OBJECT})?${END_REQUEST}`),
+  new RegExp(
+    `${GUARD}get\\s+in\\s+touch(?:\\s+with\\s+(?:${CONTACT_PERSON}|${CONTACT_GROUP}))?${END_REQUEST}`,
+  ),
   // your phone number / your email address / the company's contact details
   new RegExp(`\\b(?:your|ur)\\s+${CONTACT_NP}${END_NOUN}`),
   new RegExp(

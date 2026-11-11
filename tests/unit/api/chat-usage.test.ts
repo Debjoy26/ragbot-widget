@@ -367,7 +367,8 @@ describe('server-owned history (A5, E2)', () => {
     const history = [
       row('user', 'q1'),
       row('assistant', 'a1'),
-      row('user', 'REFUSED-QUESTION-TEXT'),
+      // Migration 013 stores a moderation-refused question as `blocked` itself (P7-D2, P7-R4 #1).
+      row('user', 'REFUSED-QUESTION-TEXT', 'blocked'),
       row('assistant', 'Please contact our team.', 'blocked'),
       row('user', 'q3'),
       row('assistant', 'a3'),
@@ -440,24 +441,24 @@ describe('server-owned history (A5, E2)', () => {
 
   it('drops the oldest pair first when the context budget is tight', async () => {
     const history = [
-      row('user', 'x'.repeat(4000)),
+      row('user', 'x'.repeat(9000)),
       row('assistant', 'old answer'),
       row('user', 'recent question'),
       row('assistant', 'recent short answer'),
     ];
     const { h } = await run(
-      { history, env: { CHAT_CONTEXT_MAX_TOKENS: '1400' } },
+      { history, env: { CHAT_CONTEXT_MAX_TOKENS: '3400' } },
       chatBody({ conversation_id: CONVERSATION }),
     );
     const prior = priorOf(h).map((m) => m.content);
-    expect(prior).not.toContain('x'.repeat(4000));
+    expect(prior).not.toContain('x'.repeat(9000));
     expect(prior).toEqual(['recent question', 'recent short answer']);
   });
 
   it('a budget cut between a question and its answer never leaves an answer first', async () => {
-    const history = [row('user', 'x'.repeat(4000)), row('assistant', 'recent short answer')];
+    const history = [row('user', 'x'.repeat(9000)), row('assistant', 'recent short answer')];
     const { h } = await run(
-      { history, env: { CHAT_CONTEXT_MAX_TOKENS: '1400' } },
+      { history, env: { CHAT_CONTEXT_MAX_TOKENS: '3400' } },
       chatBody({ conversation_id: CONVERSATION }),
     );
     expect(priorOf(h)).toEqual([]);
@@ -508,7 +509,7 @@ describe('history helpers (P7-D1 fix 4)', () => {
     expect(
       selectHistory(
         [
-          m('user', 'bad'),
+          m('user', 'bad', 'blocked'),
           m('assistant', 'refusal', 'blocked'),
           m('user', 'q'),
           m('assistant', 'a'),

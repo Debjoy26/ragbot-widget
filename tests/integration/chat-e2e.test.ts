@@ -472,6 +472,74 @@ describe('A. pipeline and SSE contract', () => {
     expect.soft(last(body, 'last message').role).toBe('user');
   });
 
+  it('A5c P7-D2: two turns running at once in one conversation; the refused question never goes back to the model', async () => {
+    const c = await scenario();
+    await c.bot.setFlags({ output_moderation_mode: 'buffer' });
+    // The harness allows one request at a time per session; this case needs two (the full policy is
+    // rewritten because the column is replaced as a whole).
+    await h.rest.patch(`client_settings?bot_id=eq.${c.bot.id}`, {
+      rate_policy: {
+        session_create_per_ip: { limit: 1000, window_seconds: 3600 },
+        session_create_per_bot: { limit: 100_000, window_seconds: 3600 },
+        message_per_session: { limit: 1000, window_seconds: 600 },
+        message_per_ip: { limit: 5000, window_seconds: 3600 },
+        concurrent_requests_per_session: 2,
+      },
+    });
+    h.primary.queueChat(answerScript(`${RMARK()} Two years [[${c.chunkA.id}]].`));
+    const r0 = await c.ask(c.question('A5c-zero', 'warranty'));
+    expect(terminal(r0)).toBe('complete');
+    const conversationId = metaOf(r0).conversation_id;
+    const chatsBefore = h.primary.count('chat');
+
+    // Turn A streams slowly and its text is refused by OUTPUT moderation (buffer mode: nothing was
+    // released, so the turn is stored `blocked` and so is its question). Turn B is started while A
+    // is still streaming and finishes first, so the stored order is
+    //   question A, question B, answer B, answer A (refusal)
+    // and the refusal does not follow its question.
+    const refusedQuestion = `${c.question('A5c-A')} REFUSED-QUESTION-MARKER`;
+    h.primary.embedAs(refusedQuestion, 'warranty');
+    h.primary.queueChat({
+      pieces: pieces(`EVIDENCE: SUFFICIENT\nBLOCKME ${plainText(300)}`, 30),
+      pieceDelayMs: 150,
+    });
+    const turnA = c.ask(refusedQuestion, { conversationId });
+    await h.primary.waitFor('turn A reached the chat provider', () => {
+      return h.primary.count('chat') > chatsBefore;
+    });
+    h.primary.queueChat(answerScript(`${RMARK()} Returns within thirty days [[${c.chunkB.id}]].`));
+    const rB = await c.ask(c.question('A5c-B', 'warranty'), { conversationId });
+    const rA = await turnA;
+    expect(terminal(rB)).toBe('complete');
+    expect(terminal(rA)).toBe('blocked');
+
+    const rows = await c.bot.messages(conversationId);
+    const at = (predicate: (m: (typeof rows)[number]) => boolean): number =>
+      rows.findIndex(predicate);
+    const questionA = at((m) => m.role === 'user' && m.content.includes('REFUSED-QUESTION-MARKER'));
+    const questionB = at((m) => m.role === 'user' && m.content.includes('A5c-B'));
+    const answerA = at((m) => m.id === metaOf(rA).message_id);
+    expect(questionA).toBeGreaterThan(-1);
+    expect(questionA, 'question A is stored before question B').toBeLessThan(questionB);
+    expect(answerA, 'the refusal is stored after question B').toBeGreaterThan(questionB);
+    expect(rows[questionA]?.status, 'migration 013 marks the refused question itself').toBe(
+      'blocked',
+    );
+
+    // Turn C: its prompt holds neither the refused question nor the refusal.
+    h.primary.queueChat(answerScript(`${RMARK()} Fine [[${c.chunkA.id}]].`));
+    const rC = await c.ask(c.question('A5c-C', 'warranty'), { conversationId });
+    expect(terminal(rC)).toBe('complete');
+    const sent = (
+      h.primary.of('chat').at(-1)?.body as { messages: { role: string; content: string }[] }
+    ).messages;
+    const wire = JSON.stringify(sent.slice(1));
+    expect.soft(wire).not.toContain('REFUSED-QUESTION-MARKER');
+    expect.soft(wire).not.toContain('BLOCKME');
+    expect.soft(wire).not.toContain(ESCALATION_EN);
+    expect.soft(wire).toContain('A5c-B'); // the legitimate concurrent question is still there
+  });
+
   it.each(['history', 'system', 'context', 'api_key', 'messages', 'bot_id', 'role'])(
     'A6: a browser-supplied "%s" key is refused with 400 before any spend',
     async (key) => {

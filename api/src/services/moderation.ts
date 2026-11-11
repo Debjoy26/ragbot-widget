@@ -5,7 +5,7 @@
 // `ModerationFailure`, and callers fail CLOSED: text that could not be checked is not released and
 // not generated from. `endpoint` mode is free (the provider reports no usage); `llm_classifier`
 // mode is billed as a chat call and is priced from the usage it reports, or estimated when a
-// billed call fails.
+// billed call fails or when a call that was sent is aborted (its input is counted, as for chat).
 //
 // The text being moderated is never logged and never put in an error.
 
@@ -82,6 +82,9 @@ export function createModerator(options: CreateModeratorOptions): Moderator {
         cost: mode === 'endpoint' ? 0 : costUsd({ inputTokens, outputTokens }, price),
         latencyMs: Math.max(0, now() - started),
       });
+      // The request goes out only when the signal is still live at this point; a call started on an
+      // aborted signal is never sent and costs nothing.
+      const sent = !signal.aborted;
       try {
         const result = await provider.moderate(text, { signal });
         usage.record(
@@ -92,16 +95,16 @@ export function createModerator(options: CreateModeratorOptions): Moderator {
         return result.verdict;
       } catch (err) {
         const billed = err instanceof ProviderError && err.billed;
-        // A billed failure (2xx, then a bad body) was charged: count the estimate. A failure
-        // before that, or an abort, costs nothing but still gets its row.
-        usage.record(
-          billed && mode === 'llm_classifier'
-            ? entry(
-                MODERATION_PROMPT_OVERHEAD_TOKENS + worstCaseTokens(text.length),
-                MODERATION_OUTPUT_TOKENS,
-              )
-            : entry(0, 0),
-        );
+        const estimate = MODERATION_PROMPT_OVERHEAD_TOKENS + worstCaseTokens(text.length);
+        // A billed failure (2xx, then a bad body) was charged in full: count the estimate with
+        // the output cap. A call that was sent and then aborted may have been charged for its
+        // input, the same way an aborted chat call is: count the input estimate (nothing was
+        // received, so no output). A failure before the request went out costs nothing but still
+        // gets its row.
+        if (mode !== 'llm_classifier') usage.record(entry(0, 0));
+        else if (billed) usage.record(entry(estimate, MODERATION_OUTPUT_TOKENS));
+        else if (sent && signal.aborted) usage.record(entry(estimate, 0));
+        else usage.record(entry(0, 0));
         if (signal.aborted) throw err;
         throw new ModerationFailure(err instanceof ProviderError ? err.kind : 'unexpected');
       }

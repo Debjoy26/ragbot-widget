@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { loadApiAiConfig, ProviderConfigError, type ApiAiConfig, type Env } from '@ragbot/shared';
+import { MIN_CHAT_CONTEXT_TOKENS } from './context-budget.js';
 
 /**
  * Validated API configuration (P4). Every limit and secret must be set explicitly:
@@ -195,8 +196,9 @@ const envSchema = z.object({
   // P7 chat pipeline. match_document_chunks accepts a count of 1..50 and a similarity of -1..1.
   RETRIEVAL_TOP_K: integer(1, 50),
   RETRIEVAL_MIN_SIMILARITY: decimal(0, 1),
-  // A floor below which not even the system prompt and one question fit.
-  CHAT_CONTEXT_MAX_TOKENS: integer(256, 10_000_000),
+  // A floor below which not even the system prompt, a 2000-character question and one evidence
+  // chunk fit (computed from the real prompt template, see lib/context-budget.ts).
+  CHAT_CONTEXT_MAX_TOKENS: integer(MIN_CHAT_CONTEXT_TOKENS, 10_000_000),
   CHAT_HISTORY_MAX_MESSAGES: integer(0, 50),
   CHAT_MAX_OUTPUT_TOKENS: integer(1, 1_000_000),
   CHAT_MAX_OUTPUT_CHARS: integer(100, 10_000_000),

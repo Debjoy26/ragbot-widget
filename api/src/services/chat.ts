@@ -38,6 +38,7 @@ import {
   ProviderError,
 } from '@ragbot/shared';
 import type { AppConfig } from '../lib/config.js';
+import { raceAbort } from '../lib/abort.js';
 import { AppError, toAppError } from '../lib/errors.js';
 import { DbError } from '../lib/supabase.js';
 import type { SseWriter } from '../lib/sse.js';
@@ -244,7 +245,9 @@ export function createChatService(deps: ChatDeps): ChatService {
    *    prompt that can be sent, counted here at 1 character = 1 token) and the full output cap;
    *  * input moderation and the query embedding, twice each (one retry);
    *  * output moderation of an answer of CHAT_MAX_OUTPUT_CHARS characters (1 char = 1 token), in
-   *    rolling batches or one call, each call with the classifier's real prompt and output cap.
+   *    rolling batches or one call, each call with the classifier's real prompt and output cap,
+   *    and once for EVERY chat attempt that can produce text (CHAT_PROVIDER_ATTEMPTS for each
+   *    configured provider), because a retried or fallback answer is moderated again.
    */
   function reservationAmount(messageChars: number, mode: OutputMode): number {
     const promptTokens = worstCaseTokens(config.chatContextMaxTokens * CHARS_PER_TOKEN);
@@ -260,18 +263,22 @@ export function createChatService(deps: ChatDeps): ChatService {
     }
     const outputChars = config.chatMaxOutputChars;
     const outputCalls = mode === 'buffer' ? 1 : Math.ceil(outputChars / ROLLING_BATCH_CHARS) + 1;
+    // Every attempt that can produce text can have its text moderated: a retry or a fallback
+    // restarts the answer and its moderation (P7-D2 F7a).
+    const textAttempts = config.chatProviderAttempts * prices.length;
     const total =
       INPUT_STAGE_CALLS *
         worstCaseModerationCost(messageChars, deps.moderationMode, config.moderationPrice, 1) +
       (INPUT_STAGE_CALLS * worstCaseTokens(messageChars) * config.embeddingPricePerMillionTokens) /
         1_000_000 +
       chat +
-      worstCaseModerationCost(
-        outputChars,
-        deps.moderationMode,
-        config.moderationPrice,
-        outputCalls,
-      );
+      textAttempts *
+        worstCaseModerationCost(
+          outputChars,
+          deps.moderationMode,
+          config.moderationPrice,
+          outputCalls,
+        );
     return Math.max(MIN_RESERVATION_USD, Math.ceil(total * 1e6) / 1e6);
   }
 
@@ -479,25 +486,6 @@ export function createChatService(deps: ChatDeps): ChatService {
         : undefined;
     }
 
-    /** Rejects when `signal` aborts, even if `promise` never settles (a provider that ignores it). */
-    function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-      if (signal.aborted) return Promise.reject(new DOMException('aborted', 'AbortError'));
-      return new Promise<T>((resolve, reject) => {
-        const onAbort = (): void => reject(new DOMException('aborted', 'AbortError'));
-        signal.addEventListener('abort', onAbort, { once: true });
-        promise.then(
-          (value) => {
-            signal.removeEventListener('abort', onAbort);
-            resolve(value);
-          },
-          (err: unknown) => {
-            signal.removeEventListener('abort', onAbort);
-            reject(err);
-          },
-        );
-      });
-    }
-
     /** One retry of a call that failed with a transient error, if time and the signal allow. */
     async function withOneRetry<T>(
       call: () => Promise<T>,
@@ -574,17 +562,18 @@ export function createChatService(deps: ChatDeps): ChatService {
       try {
         let verdict: 'allow' | 'block';
         try {
-          verdict = await raceAbort(
-            withOneRetry(
-              () => moderator.moderate(turn.message, modSignal, ledger),
-              (err) =>
-                err instanceof ModerationFailure &&
-                err.kind !== 'unexpected' &&
-                isRetryableErrorKind(err.kind),
-              modSignal,
-            ),
+          const moderation = withOneRetry(
+            () => moderator.moderate(turn.message, modSignal, ledger),
+            (err) =>
+              err instanceof ModerationFailure &&
+              err.kind !== 'unexpected' &&
+              isRetryableErrorKind(err.kind),
             modSignal,
           );
+          // The call may outlive this stage (the race below gives up on it at once when something
+          // else fails) and still writes its usage row: settlement waits for it (P7-D2 F7c).
+          work.push(moderation.catch(() => undefined));
+          verdict = await raceAbort(moderation, modSignal);
         } catch (err) {
           const failure = embedFailure as { readonly err: unknown } | null;
           if (failure !== null && !workSignal.aborted) throw failure.err;
@@ -676,10 +665,23 @@ export function createChatService(deps: ChatDeps): ChatService {
       const evidence = new Map<string, RetrievedChunk>(
         assembled.evidence.map((c) => [c.chunk_id, c]),
       );
+      // Every output moderation call is part of the drained work as well (P7-D2 F7c).
+      const trackedModerator: Moderator = {
+        moderate: (text, signal, usage) => {
+          const call = moderator.moderate(text, signal, usage);
+          work.push(
+            call.then(
+              () => undefined,
+              () => undefined,
+            ),
+          );
+          return call;
+        },
+      };
       const newGate = (): OutputGate =>
         createOutputGate({
           mode: turn.outputMode,
-          moderator,
+          moderator: trackedModerator,
           signal: workSignal,
           usage: ledger,
         });
@@ -798,8 +800,9 @@ export function createChatService(deps: ChatDeps): ChatService {
         if (outcome === 'out_of_scope') return handoffTerminal('out_of_scope', 'complete');
         if (outcome !== 'answer') return handoffTerminal(missReason, 'complete'); // hedge or garbled
 
-        // 15-16. The remainder of the answer.
-        await deliver(await gate.push(safeText.flush()), false);
+        // 15-16. The remainder of the answer. A cut-off answer never ends in half a citation marker.
+        const cutOff = capped || lastAttempt?.truncated === true;
+        await deliver(await gate.push(safeText.flush(cutOff)), false);
         await deliver(await gate.finish(), false);
         if (out.text.trim() === '') return handoffTerminal(missReason, 'complete');
         return {

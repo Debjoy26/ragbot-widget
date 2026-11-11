@@ -129,8 +129,10 @@ export interface StoredMessage {
  *  * An assistant message is used only when it is `complete`. `partial` is excluded on purpose: it
  *    was cut by an error, the output cap or a moderation block part-way, so it is incomplete or
  *    contains text that was stopped; a `failed` one has no text; a `blocked` one is a refusal.
- *  * A user message whose reply is `blocked` is excluded with it: input that moderation refused
- *    must never be fed back to the model (the reply comes right after its question).
+ *  * A user message is excluded when it is itself `blocked`: input that moderation refused must
+ *    never be fed back to the model. Migration 013 sets that status on the question, so position
+ *    does not matter (P7-R4 #1 removed an adjacency rule that dropped the wrong question when two
+ *    turns interleave).
  *  * The result alternates, starts with a user message and ends with an assistant message.
  *
  * `rows` are oldest first and must not include the question being answered.
@@ -140,11 +142,9 @@ export function selectHistory(rows: readonly StoredMessage[], max: number): Prov
   for (let i = 0; i < rows.length; i += 1) {
     const m = rows[i] as StoredMessage;
     if (m.role === 'user') {
-      const next = rows[i + 1];
-      if (next !== undefined && next.role === 'assistant' && next.status === 'blocked') {
-        i += 1; // the refused question and its refusal
-        continue;
-      }
+      // Migration 013 marks a refused question `blocked` itself. Two turns running at once store
+      // their rows interleaved (u_A, u_B, a_A, a_B), so the refusal need not follow its question.
+      if (m.status === 'blocked') continue;
       kept.push({ role: 'user', content: m.content });
     } else if (m.status === 'complete') {
       kept.push({ role: 'assistant', content: m.content });

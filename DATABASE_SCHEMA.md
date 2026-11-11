@@ -152,7 +152,31 @@ Service role only: `reserve_index_budget`, `settle_index_budget` and `release_in
 - Maintenance (worker): every retention and purge function, `expire_abandoned_uploads` (then removes the objects), `settle_orphaned_index_reservations` (after `expire_stale_budget_reservations`), `fail_orphaned_index_versions`, `prune_superseded_chunks`, `purge_terminal_jobs`, `purge_expired_rate_limit_buckets`. Shutdown returns a running job's lease with `release_job_lease`.
 - Cleanup job: `cleanup_document` removes a deleted document's chunks in batches; objects come from `cleanup_storage_targets`, which never returns a path still used by a live document's version (reindexed versions share paths). An in-flight job for a deleted document is refused by the fence; its writes never land.
 - Batch limits: a batched delete takes its ids into an array first (`limit` with `for update skip locked`), then deletes them. The shape `where id in (select … limit n for update skip locked)` can overrun the batch when the planner re-runs the subquery per row. 012 uses the safe shape in `cleanup_document` and `prune_superseded_chunks` and replaces 005's `purge_expired_data_entries` with it.
-- `schema_version()` is 12.
+
+**Chat (P7, migration 013).** All functions are service role only, SECURITY INVOKER, `lock_timeout = 2s`, `search_path = ''`. Any ownership miss is RB037, with no hint about which check failed.
+- `get_chat_context(bot)` returns three objects:
+  - `bot`: the identity and model fields, `settings_version` and `corpus_version`.
+  - `settings`: `feature_flags` and `handoff_policy`.
+  - `contact`: the `public_bot_config` contact and escalation fields.
+  - A missing settings or public config row raises RB036. A disabled bot is returned with `enabled = false`.
+- `start_chat_turn(bot, session, run, conversation, content)`:
+  - Creates or reuses the session's open conversation and stores the trimmed question with `request_id = run`.
+  - Returns `prior_no_knowledge`, the count of earlier assistant rows with handoff reason `no_knowledge` or `repeated_no_knowledge`.
+  - Content is 1..2000 characters. A second user message for the same run is RB030.
+  - Lock order is session, then run, then conversation, matching 011.
+- `finish_chat_turn(...)`:
+  - Stores the assistant message under the id the API generated (the `meta` event carries it), with `reply_to` set to the question.
+  - Stores up to 20 source snapshots. Each must be a chunk of that version and of this bot, otherwise 22023 and nothing is stored.
+  - One answer per run (RB030).
+  - A reply with status `blocked` and handoff reason `blocked` also marks the question `blocked`, so history excludes it by its own status.
+- `record_request_usage(...)` writes `usage_events.request_id` for the operations `chat`, `embedding_query` and `moderation`.
+- `get_conversation_history(bot, session, conversation, before, limit)`:
+  - Returns `user` and `assistant` rows only, never `system`.
+  - Paged with `before`, `limit` 1..100, oldest first within a page, with a `has_more` flag.
+- `message_sources` gains `page_number` and `section` (B-9 snapshot). Members read them exactly as they read the other columns.
+- The `client_settings.handoff_policy` keys read by the API are `repeated_no_knowledge_threshold` (default 2, ADR 0013) and `triggers` (all six on by default). Unknown keys are ignored.
+- The `analyze_conversation` enqueue is P9.
+- `schema_version()` is 13.
 
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.

@@ -347,12 +347,20 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
   const oneCall = (inPrice: number, outPrice: number, ctx = 6000, out = 800) =>
     (ctx * 3 * inPrice + out * outPrice) / 1_000_000;
 
+  // P7-D2 F7a: output moderation of a whole answer (rolling: 21 calls of the classifier; at the
+  // default prices) is reserved once for EVERY attempt that can produce text, so each attempt adds
+  // a chat call AND an output moderation pass. (These expectations used to add the chat call only.)
+  const outputModeration = (calls = 21) =>
+    ((calls * (CLASSIFIER_SYSTEM_PROMPT.length + 64) + 8000) * 0.1 +
+      calls * CLASSIFIER_MAX_OUTPUT_TOKENS * 0.4) /
+    1_000_000;
+
   it('covers CHAT_PROVIDER_ATTEMPTS full calls on the primary provider', async () => {
     const two = await reserved({ env: { CHAT_PROVIDER_ATTEMPTS: '2' }, attempts: 2 });
     const three = await reserved({ env: { CHAT_PROVIDER_ATTEMPTS: '3' }, attempts: 3 });
-    expect(three - two).toBeCloseTo(oneCall(0.1, 0.4), 5);
+    expect(three - two).toBeCloseTo(oneCall(0.1, 0.4) + outputModeration(), 5);
     const one = await reserved({ env: { CHAT_PROVIDER_ATTEMPTS: '1' }, attempts: 1 });
-    expect(two - one).toBeCloseTo(oneCall(0.1, 0.4), 5);
+    expect(two - one).toBeCloseTo(oneCall(0.1, 0.4) + outputModeration(), 5);
   });
 
   it('covers the attempts of the fallback provider as well', async () => {
@@ -362,19 +370,23 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
       fallback: [{ chunks: ['unused'] }],
       attempts: 2,
     });
-    expect(withFallback - without).toBeCloseTo(2 * oneCall(0.2, 0.8), 5);
+    expect(withFallback - without).toBeCloseTo(2 * oneCall(0.2, 0.8) + 2 * outputModeration(), 5);
     const threeAttempts = await reserved({
       env: { CHAT_PROVIDER_ATTEMPTS: '3', ...FALLBACK_ENV },
       fallback: [{ chunks: ['unused'] }],
       attempts: 3,
     });
     // One more attempt on each of the two providers.
-    expect(threeAttempts - withFallback).toBeCloseTo(oneCall(0.1, 0.4) + oneCall(0.2, 0.8), 5);
+    expect(threeAttempts - withFallback).toBeCloseTo(
+      oneCall(0.1, 0.4) + oneCall(0.2, 0.8) + 2 * outputModeration(),
+      5,
+    );
   });
 
   it('counts the chat prompt at 1 character = 1 token over the longest allowed prompt', async () => {
-    const small = await reserved({ env: { CHAT_CONTEXT_MAX_TOKENS: '1000' } });
-    const big = await reserved({ env: { CHAT_CONTEXT_MAX_TOKENS: '2000' } });
+    // (Was 1000 and 2000: both are now below the smallest usable value, see chat-context-min-d2.)
+    const small = await reserved({ env: { CHAT_CONTEXT_MAX_TOKENS: '5000' } });
+    const big = await reserved({ env: { CHAT_CONTEXT_MAX_TOKENS: '6000' } });
     // 1000 more budget tokens = 3000 more characters = 3000 tokens, on each of the 2 attempts.
     expect(big - small).toBeCloseTo((2 * 3000 * 0.1) / 1_000_000, 5);
   });
@@ -388,8 +400,9 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
 
   it('prices every moderation call with the classifier real prompt and output cap', async () => {
     const overhead = CLASSIFIER_SYSTEM_PROMPT.length + 64;
-    // Rolling is the default: 2 input-stage calls, then ceil(8000 / 400) + 1 = 21 batches.
-    const calls = 2 + 21;
+    // Rolling is the default: 2 input-stage calls, then ceil(8000 / 400) + 1 = 21 batches for each
+    // of the 2 attempts (P7-D2 F7a; it was 21 once).
+    const calls = 2 + 2 * 21;
     const base = await reserved();
 
     const dearOutput = await reserved({ env: { MODERATION_PRICE_OUTPUT_PER_MILLION: '1.4' } });
@@ -400,7 +413,7 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
 
     // Input tokens: a prompt per call, plus the question twice and the answer cap, 1 char = 1 token.
     const dearInput = await reserved({ env: { MODERATION_PRICE_INPUT_PER_MILLION: '1.1' } });
-    const tokens = calls * overhead + 2 * MESSAGE.length + 8000;
+    const tokens = calls * overhead + 2 * MESSAGE.length + 2 * 8000;
     expect(dearInput - base).toBeCloseTo((tokens * 1.0) / 1_000_000, 5);
   });
 
@@ -410,9 +423,10 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
       env: { MODERATION_PRICE_INPUT_PER_MILLION: '1.1', CHAT_MAX_OUTPUT_CHARS: '16000' },
     });
     const overhead = CLASSIFIER_SYSTEM_PROMPT.length + 64;
-    // 8000 more characters = 8000 tokens, and 20 more batches, each with the fixed prompt.
+    // 8000 more characters = 8000 tokens, and 20 more batches, each with the fixed prompt; all of
+    // it for each of the 2 attempts (P7-D2 F7a).
     const expected =
-      ((8000 + 20 * overhead) * 1.1 + 20 * CLASSIFIER_MAX_OUTPUT_TOKENS * 0.4) / 1_000_000;
+      (2 * ((8000 + 20 * overhead) * 1.1 + 20 * CLASSIFIER_MAX_OUTPUT_TOKENS * 0.4)) / 1_000_000;
     expect(double - base).toBeCloseTo(expected, 5);
   });
 
@@ -422,8 +436,11 @@ describe('worst-case reservation (P7-D1 fix 5, R1-2 and R2-5)', () => {
     });
     const rolling = await reserved();
     const once = await reserved({ context: buffer });
+    // 20 more calls for each of the 2 attempts (P7-D2 F7a).
     expect(rolling - once).toBeCloseTo(
-      (20 * ((CLASSIFIER_SYSTEM_PROMPT.length + 64) * 0.1 + CLASSIFIER_MAX_OUTPUT_TOKENS * 0.4)) /
+      (2 *
+        20 *
+        ((CLASSIFIER_SYSTEM_PROMPT.length + 64) * 0.1 + CLASSIFIER_MAX_OUTPUT_TOKENS * 0.4)) /
         1_000_000,
       5,
     );

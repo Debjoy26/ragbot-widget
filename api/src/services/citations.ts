@@ -13,8 +13,11 @@
 //     host, after every second digit of a phone number). The text stays readable and copyable, but
 //     neither a markdown autolinker nor a phone/email detector sees a link any more. Markdown link
 //     and image syntax (`[text](dest)`, `![alt](src)`, `[text][ref]`) is reduced to its text, unless
-//     the destination is itself an allowed value. Allowed values are left as they are. Contact
-//     values come from server configuration only (handover section 4, W-16).
+//     the destination is itself an allowed value. An ORPHAN tail, `](dest)` whose opener is not in
+//     the text (the label was longer than the hold window, or went out in an earlier batch), loses
+//     its `](` and `)` and the destination stays as plain, de-linked text. A `mailto:` that carries
+//     a query is never allowed. Allowed values are left as they are. Contact values come from
+//     server configuration only (handover section 4, W-16).
 //
 // Detection runs on a normalised COPY of the text (HTML entities decoded, NFKC, invisible format
 // characters dropped, `[at]`/`(dot)` spelled out), and only the flagged tokens are replaced in the
@@ -27,7 +30,8 @@
 //
 // Known limits: digits of non-Latin scripts that NFKC leaves alone (Arabic-Indic and the like) are
 // not read as phone digits; spelled-out obfuscation ("name at host dot com") is not detected;
-// bare hosts are recognised only for a curated list of top-level domains.
+// bare hosts are recognised only for a curated list of top-level domains, written in lower case or
+// in capitals (a capitalised `.In`, `.It`, `.Is` after a full stop is a new sentence, not a host).
 //
 // Every scan below is linear in the input (bounded quantifiers or hand scans, no nested
 // unbounded repetition); the unit tests time the worst-case shapes. Nothing here logs or throws on
@@ -96,6 +100,11 @@ export function sanitiseModelText(text: string): string {
 
 /** A marker with at most one whitespace character before it, so removal leaves no gap before punctuation. */
 const MARKER = /\s?\[\[[A-Za-z0-9_-]{1,64}\]\]/g;
+
+/** An unfinished marker at the very end of the text: `[`, `[[`, `[[id` or `[[id]`. */
+const PARTIAL_MARKER_TAIL = /\s?\[(?:\[[A-Za-z0-9_-]{0,64}\]?)?$/;
+/** A marker is at most 70 characters, so only the end of the text needs looking at. */
+const PARTIAL_MARKER_WINDOW = 80;
 
 /** Removes every well-formed `[[id]]` marker (valid or invalid). */
 export function stripCitationMarkers(text: string): string {
@@ -290,10 +299,18 @@ export class SafeTextStream {
     return forced && out !== '' ? out + ZWSP : out;
   }
 
-  /** The rest of the text, at the end of the answer. */
-  flush(): string {
-    const out = stripCitationMarkers(sanitiseModelText(this.#pending));
+  /**
+   * The rest of the text, at the end of the answer. With `truncated` (the answer was cut by the
+   * output cap or by the provider's token limit) a `[[id` marker that the cut left unfinished is
+   * dropped too, so the visitor never sees the first half of a citation (P7-D2 F9).
+   */
+  flush(truncated = false): string {
+    let out = stripCitationMarkers(sanitiseModelText(this.#pending));
     this.#pending = '';
+    if (truncated) {
+      const from = Math.max(0, out.length - PARTIAL_MARKER_WINDOW);
+      out = out.slice(0, from) + out.slice(from).replace(PARTIAL_MARKER_TAIL, '');
+    }
     return out;
   }
 }
@@ -369,8 +386,11 @@ function allowedHosts(allow: AllowList): ReadonlySet<string> {
 }
 
 function urlAllowed(url: string, allow: AllowList): boolean {
-  if (/^mailto:/i.test(url))
-    return allow.emails.has(url.slice(7).split('?')[0]?.toLowerCase() ?? '');
+  if (/^mailto:/i.test(url)) {
+    // A query (`?cc=...`, `?bcc=...`) can add recipients: only the bare configured address passes.
+    const address = url.slice(7);
+    return !address.includes('?') && allow.emails.has(address.toLowerCase());
+  }
   if (/^tel:/i.test(url)) return allow.phoneDigits.has(digitsOf(url.slice(4)));
   const normal = normaliseUrl(url);
   return normal !== null && allow.urls.has(normal);
@@ -409,7 +429,29 @@ function neutraliseMarkdown(text: string, allow: AllowList): string {
   if (text.indexOf(']') === -1) return text;
   let budget = 64 * n + 4096;
   const open: number[] = [];
-  const cuts: Array<[number, number]> = [];
+  /** Ranges to remove, each with an optional replacement. */
+  const cuts: Array<[number, number, string?]> = [];
+  /** Index of the `)` that closes the destination opened by the `(` at `i + 1`, or -1. */
+  const destinationEnd = (i: number): number => {
+    let depth = 1;
+    let j = i + 2;
+    const limit = Math.min(n, i + 2 + MAX_DEST_CHARS);
+    while (j < limit && budget > 0) {
+      budget -= 1;
+      const d = text.charCodeAt(j);
+      if (d === 0x5c) {
+        j += 2;
+        continue;
+      }
+      if (d === 0x28) depth += 1;
+      else if (d === 0x29) {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      j += 1;
+    }
+    return j < limit && depth === 0 && text.charCodeAt(j) === 0x29 ? j : -1;
+  };
   let i = 0;
   while (i < n) {
     const c = text.charCodeAt(i);
@@ -421,28 +463,28 @@ function neutraliseMarkdown(text: string, allow: AllowList): string {
       open.push(i);
     } else if (c === 0x5d) {
       const start = open.pop();
-      if (start !== undefined) {
+      if (start === undefined) {
+        // An orphan link tail: `](dest)` whose opener is not in this text (the label was longer
+        // than the hold window, or the opener went out in an earlier batch). Dropping the `](` and
+        // the `)` leaves the destination as plain text, which the detectors below then de-link.
+        // The scan goes on inside the destination, so a link nested in it is still neutralised.
+        if (text.charCodeAt(i + 1) === 0x28) {
+          const j = destinationEnd(i);
+          if (j !== -1) {
+            // A space in place of `](` keeps the label and the destination apart, so the
+            // destination is read (and an allowed one kept) as a token of its own.
+            const spaced = i > 0 && !WHITESPACE.test(text.charAt(i - 1));
+            cuts.push(spaced ? [i, i + 2, ' '] : [i, i + 2], [j, j + 1]);
+            i += 2;
+            continue;
+          }
+        }
+      } else {
         const next = text.charCodeAt(i + 1);
         const bang = start > 0 && text.charCodeAt(start - 1) === 0x21 ? 1 : 0;
         if (next === 0x28) {
-          let depth = 1;
-          let j = i + 2;
-          const limit = Math.min(n, i + 2 + MAX_DEST_CHARS);
-          while (j < limit && budget > 0) {
-            budget -= 1;
-            const d = text.charCodeAt(j);
-            if (d === 0x5c) {
-              j += 2;
-              continue;
-            }
-            if (d === 0x28) depth += 1;
-            else if (d === 0x29) {
-              depth -= 1;
-              if (depth === 0) break;
-            }
-            j += 1;
-          }
-          if (j < limit && depth === 0 && text.charCodeAt(j) === 0x29) {
+          const j = destinationEnd(i);
+          if (j !== -1) {
             if (!destinationAllowed(text.slice(i + 2, j), allow)) {
               cuts.push([start - bang, start + 1], [i, j + 1]);
             }
@@ -468,16 +510,21 @@ function neutraliseMarkdown(text: string, allow: AllowList): string {
     }
     i += 1;
   }
-  if (cuts.length === 0) return text;
-  cuts.sort((a, b) => a[0] - b[0]);
-  let out = '';
-  let from = 0;
-  for (const [a, b] of cuts) {
-    if (a < from) continue;
-    out += text.slice(from, a);
-    from = b;
+  let out = text;
+  if (cuts.length > 0) {
+    cuts.sort((a, b) => a[0] - b[0]);
+    out = '';
+    let from = 0;
+    for (const [a, b, replacement] of cuts) {
+      if (a < from) continue;
+      out += text.slice(from, a) + (replacement ?? '');
+      from = b;
+    }
+    out += text.slice(from);
   }
-  return out + text.slice(from);
+  // Fails closed (P7-R4 #4): when the work budget ran out, links after that point were not
+  // examined. A space between `]` and `(` or `[` stops any remaining one from being a link.
+  return budget > 0 ? out : out.replaceAll('](', '] (').replaceAll('][', '] [');
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +759,13 @@ const TLDS = new Set(
   ).split(' '),
 );
 
+/** `In`, `It`, `Is`: an upper-case letter followed only by lower-case ones (two or more letters). */
+function isTitleCase(word: string): boolean {
+  const first = word.charCodeAt(0);
+  const rest = word.slice(1);
+  return word.length >= 2 && first >= 0x41 && first <= 0x5a && rest === rest.toLowerCase();
+}
+
 function isAsciiLetter(c: number): boolean {
   return (c | 0x20) >= 0x61 && (c | 0x20) <= 0x7a;
 }
@@ -737,23 +791,27 @@ function isUrlStop(c: number): boolean {
   );
 }
 
-/** End of a URL that starts at or before `from`, without trailing sentence punctuation. */
+/**
+ * End of a URL that starts at or before `from`, without trailing sentence punctuation. Linear: the
+ * parenthesis balance is counted once while the URL is read and then updated as trailing
+ * characters are stripped (only a stripped `)` changes it), never recounted (P7-D2 F3).
+ */
 function urlEnd(text: string, from: number): number {
   const n = text.length;
   let e = from;
-  while (e < n && !isUrlStop(text.charCodeAt(e))) e += 1;
-  for (;;) {
-    const last = text.charAt(e - 1);
-    if (e <= from || !TRAILING_PUNCTUATION.test(last)) break;
-    if (last === ')') {
+  let balance = 0;
+  while (e < n) {
+    const c = text.charCodeAt(e);
+    if (isUrlStop(c)) break;
+    if (c === 0x28) balance += 1;
+    else if (c === 0x29) balance -= 1;
+    e += 1;
+  }
+  while (e > from && TRAILING_PUNCTUATION.test(text.charAt(e - 1))) {
+    if (text.charCodeAt(e - 1) === 0x29) {
       // Keep a closing parenthesis that balances one inside the URL.
-      let balance = 0;
-      for (let k = from; k < e; k += 1) {
-        const c = text.charCodeAt(k);
-        if (c === 0x28) balance += 1;
-        else if (c === 0x29) balance -= 1;
-      }
       if (balance >= 0) break;
+      balance += 1;
     }
     e -= 1;
   }
@@ -876,7 +934,10 @@ function findBareHosts(text: string, allow: AllowList, out: Span[]): void {
       const label = chain.labels[k];
       if (label === undefined) continue;
       const word = text.slice(label[0], label[1]);
-      if (/^[A-Za-z]+$/.test(word) && TLDS.has(word.toLowerCase())) {
+      // A capitalised word after a full stop ("end.In the morning") starts a sentence. A bare host
+      // needs a lower-case or an all-capitals TLD (P7-D2 F9); with a scheme or a path it is a URL
+      // whatever the case, and those are found elsewhere.
+      if (/^[A-Za-z]+$/.test(word) && !isTitleCase(word) && TLDS.has(word.toLowerCase())) {
         hostEnd = label[1];
         break;
       }

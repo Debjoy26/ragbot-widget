@@ -112,6 +112,8 @@ export interface Options {
   fallback?: FakeChatScript[];
   moderation?: (text: string, i: number) => FakeModerationAction;
   moderationUsage?: { inputTokens: number; outputTokens: number } | null;
+  /** A hanging moderation call reports its abort this many ms late (a slow cancellation). */
+  moderationAbortDelayMs?: number;
   embeddingModel?: string;
   embeddingFail?: Error;
   /** Extra FakeEmbeddingProvider options (delay, hang, failTimes, ...). */
@@ -122,6 +124,7 @@ export interface Options {
   consume?: () => Promise<void>;
   consumeHistory?: () => Promise<void>;
   settle?: (botId: string, reservationId: string, amount: number) => Promise<void>;
+  release?: (botId: string, reservationId: string) => Promise<void>;
   reserve?: () => Promise<string>;
   markRunning?: () => Promise<boolean>;
   attempts?: number;
@@ -199,6 +202,9 @@ export function setup(options: Options = {}) {
     options.moderationUsage === undefined
       ? { inputTokens: 600, outputTokens: 2 }
       : options.moderationUsage,
+    options.moderationAbortDelayMs === undefined
+      ? {}
+      : { abortDelayMs: options.moderationAbortDelayMs },
   );
   const embedding = new FakeEmbeddingProvider({
     model: options.embeddingModel ?? 'fake-embedding-model',
@@ -218,7 +224,9 @@ export function setup(options: Options = {}) {
       options.settle ??
         (async (_botId: string, _reservationId: string, _amount: number) => undefined),
     ),
-    release: vi.fn(async () => undefined),
+    release: vi.fn(
+      options.release ?? (async (_botId: string, _reservationId: string) => undefined),
+    ),
   };
   const runs = {
     beginRun: vi.fn(
