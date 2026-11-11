@@ -1,0 +1,20 @@
+table    public_bot_config                  200
+table    bot_profiles                       401
+table    client_settings                    401
+table    conversations                      401
+table    messages                           401
+table    message_sources                    401
+table    request_runs                       401
+table    usage_events                       401
+table    budget_reservations                401
+table    document_chunks                    401
+rpc      get_chat_context                   401 "code":"42501"
+rpc      start_chat_turn                    401 "code":"42501"
+rpc      finish_chat_turn                   401 "code":"42501"
+rpc      record_request_usage               401 "code":"42501"
+rpc      get_conversation_history           401 "code":"42501"
+rpc      match_document_chunks              404 "code":"PGRST202"
+rpc      schema_version                     401 "code":"42501"
+rpc      admin_list_bots                    401 "code":"42501"
+storage  upload knowledge (anon)            400 "message":"new row violates row-level security policy
+storage  list knowledge (anon)              200 []

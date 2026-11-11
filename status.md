@@ -1,7 +1,7 @@
 # Status — ragbot_widget
 
 > Last updated: **2026-11-11**
-> Overall: **🟡 P0 to P6 approved by owner and on `main` (P6 pushed as `eac6392`, 2026-11-08). Migrations 001–012 applied to the hosted dev project (012 on 2026-11-08; nothing pending). P6-D7 flaky-test fix merged to `main` and pushed (§2). P7 retrieval and chat built, tested and debugged on `phase/p7` @ `4b65a6d` (2026-11-11): not owner-accepted, not on `main`, not pushed; migration 013 local only (hosted at 012); evaluation-set baseline not done (§3a bt). Awaiting owner approval to merge, push and apply 013 (§7). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
+> Overall: **🟡 P0–P6 approved by owner and on `main`. P7 retrieval and chat is on `main` and pushed as `41997a9` (owner approved the merge, push and migration 013 on 2026-11-11); not yet accepted by owner at the phase gate. Migrations 001–013 applied to the hosted dev project (013 on 2026-11-11; nothing pending). Post-push checks passed (`docs/evidence/P7/post-push.md`). Evaluation-set baseline not done (needs owner approval for real provider calls and paid-tier Gemini billing, §3a bt). Public signup still on, TOTP unknown (§3a bj). Next phase only on owner go-ahead.**
 > Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
 
 Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
@@ -20,7 +20,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P4 | API foundation | ✅ | Merge approved by owner 2026-11-06; on `main`. Evidence `docs/evidence/P4/SUMMARY.md`. Open: §3a bn, bo |
 | P5 | Visitor sessions & abuse controls | ✅ | Approved by owner and merged to `main` 2026-11-07; migration 011 on the hosted dev project. Evidence `docs/evidence/P5/SUMMARY.md`, `docs/evidence/P5-remote/SUMMARY.md`. Open: §3a bp |
 | P6 | Ingestion pipeline (worker) | ✅ | Accepted by owner 2026-11-08. On `main` @ `eac6392` (pushed). Migration 012 applied to the hosted dev project 2026-11-08 (hosted at 012, nothing pending). Post-push checks passed: `docs/evidence/P6/post-push.md`. Evidence `docs/evidence/P6/SUMMARY.md`. P6-D7 flaky-test fix on `p6/d7` (§2). Open: §3a ae (cleanup part done), br, bs. OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
-| P7 | Retrieval & chat | 🟡 | Built, tested and debugged on `phase/p7` @ `4b65a6d`. Not owner-accepted, not on `main`, not pushed. Migration 013 local only (hosted at 012). Awaiting owner approval to merge, push and apply 013. Evidence `docs/evidence/P7/SUMMARY.md`. **Evaluation-set baseline not done** (needs owner approval for real calls and paid-tier Gemini billing, §3a n). Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c). Open: §3a bt |
+| P7 | Retrieval & chat | 🟡 | Owner approved the merge and push on 2026-11-11. On `main` @ `41997a9` (code merged by owner approval). Migration 013 applied to the hosted dev project 2026-11-11 (hosted at 013, nothing pending). Not owner-accepted at the phase gate. Evidence `docs/evidence/P7/SUMMARY.md`; post-push `docs/evidence/P7/post-push.md`. **Evaluation-set baseline not done** (needs owner approval for real calls and paid-tier Gemini billing, §3a n). Providers decided (ADRs 0003, 0004); no independent fallback configured (§3a o); D1 validation pending (§3a c). Open: §3a bt |
 | P7.5 | Caching & latency | ⬜ | D13 decided (ADR 0012); C7 answer cache off by default; schema additions go into P3 |
 | P8 | Widget | ⬜ | Markdown off (ADR 0008), sessionStorage + history endpoint (ADR 0009), feedback deferred (ADR 0011); UI_SCHEMA §3/§7 edits pending |
 | P9 | Analysis, entries, retention | ⬜ | Settings moved to P3.5 (ADR 0017). Retention periods set (ADR 0006); jurisdiction per client and DPAs open (§3a b) |
@@ -68,6 +68,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 - [x] P6 pushed and accepted 2026-11-08 (owner-approved): `phase/p6` fast-forwarded into `main` and pushed (`eac6392`). Migration 012 applied to the hosted dev project (`make db-plan` listed only 012; `supabase db push --remote` with no seed). Hosted project at 012, nothing pending. Post-push checks (`rules.md §5`) on `eac6392`: local suite on `main` exit 0 for every command (db-test 25 files, 3065 passed; db-race 47 orderings, 0 problems; npm test 2155 passed; integration 684 passed; api-smoke 35 passed; test-make 116 passed; secret scan no hits; local advisors no issues); catalog fingerprint identical local vs hosted; advisors unchanged; anonymous probes: only `public_bot_config` readable. Not run against the hosted database: pgTAP, race tests, API. Evidence: `docs/evidence/P6/post-push.md`, `docs/evidence/P6-remote/`. Recorded by Opus.
 - [x] P6-D7 (2026-11-08): flaky unit test `tests/unit/api/rate-key.test.ts` fixed on branch `p6/d7`. The test checked for fragment `203` in a random HMAC digest, which failed by chance in 1.52% of runs (CI failed twice on it). It now checks the whole identifier. Merged to `main` and pushed after the full suite passed (owner-approved). Recorded by Opus.
 - [x] P7 retrieval and chat (`POST /v1/chat`, `GET /v1/conversations/:id`) built, tested and debugged on `phase/p7` @ `4b65a6d` (2026-11-10 to 2026-11-11; not owner-accepted; not on `main`; not pushed; migration 013 local only, hosted at 012). Debug cycles P7-D1 and P7-D2, Opus fixes (including the three P7-R4 fixes), reviews P7-R1 to R4 (static, self-reported). Gates on the final tree (`ea67013` plus the working tree that became `4b65a6d`; Node 24.22.2; local stack at 013; Opus runs; every check exit 0): `npm run build`, `lint`, `format:check`, `typecheck`; `make db-test` 26 files, 3348 passed; `make db-lint` no schema errors; `make db-race` 51 orderings, 0 problems; `npm test` 69 files, 3133 passed; `npm run test:integration` 14 files, 766 passed (82 chat end-to-end tests against the built API); `node scripts/api-smoke.mjs` 35 passed; `node scripts/worker-dist-check.mjs` passed; `make test-make` 116 passed; secret scan no hits; local advisors no issues. **Evaluation-set baseline not done** (§3a bt). Evidence: `docs/evidence/P7/SUMMARY.md`, `docs/evidence/P7/final/`.
+- [x] 2026-11-11: P7 merge and push approved by owner. `phase/p7` fast-forwarded into `main` and pushed (`41997a9`). Migration 013 applied to the hosted dev project (`make db-plan` listed only 013; no seed); hosted at 013, nothing pending. Post-push checks (`rules.md §5`) on `41997a9`: local suite on `main` exit 0 for every command (db-test 26 files, 3348 passed; db-race 51 orderings, 0 problems; npm test 3133 passed; integration 766 passed; api-smoke 35 passed; worker-dist-check passed; test-make 116 passed; secret scan no hits; local advisors no issues). Catalog fingerprint identical local vs hosted; advisors unchanged; anonymous probes: only `public_bot_config` readable, and the five 013 functions service_role only. Not run against the hosted database: pgTAP, race tests, API. No API deploy; no real provider call. Evidence: `docs/evidence/P7/post-push.md`, `docs/evidence/P7-remote/`. Recorded by Opus.
 
 ## 3. Open decisions (P0)
 
@@ -108,7 +109,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 - **o)** No independent chat fallback configured. A Gemini-only setup shares one quota. Real failover needs a second provider key.
 - **p)** LLM-classifier moderation is weaker than a dedicated moderation endpoint. Residual risk, covered by the P11 evaluation (ADR 0014).
 - **q)** ~~Runtime guard refusing an embedding model that differs from the stored corpus model is not implemented (P3/P7).~~ Superseded by `v`.
-- **r)** ~~Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).~~ Embedding adapters built in P6 on `phase/p6` (gemini, openai, openai_compatible; fake provider only, no real call made). ~~Chat adapters, streaming and query embeddings remain for P7.~~ Chat adapters (streaming, error kinds, retries) built in P7 on `phase/p7`: not merged, fake providers only, no real call made (§3a bt). The API's query embedding uses the shared embedding adapter on the same branch (`docs/evidence/P7/SUMMARY.md`).
+- **r)** ~~Provider adapters (actual API calls, streaming, retries) not implemented (P6/P7).~~ Embedding adapters built in P6 on `phase/p6` (gemini, openai, openai_compatible; fake provider only, no real call made). ~~Chat adapters, streaming and query embeddings remain for P7.~~ Chat adapters (streaming, error kinds, retries) built in P7 and on `main` (`41997a9`), fake providers only, no real call made (§3a bt). The API's query embedding uses the shared embedding adapter (`docs/evidence/P7/SUMMARY.md`).
 - **s)** ~~Migration naming~~ withdrawn 2026-11-04: CLI accepts `001_…` names (verified with a probe migration, since removed); only `.gitkeep` is skipped (harmless warning).
 - **t)** P2 contract notes: invented request/response shapes for admin, session and entry routes and job payloads need confirmation. Model evidence flag is the first line `EVIDENCE: SUFFICIENT/INSUFFICIENT`; P7 must hold that line back. Settings cross-field validation must re-run on the merged config (P3.5, ADR 0017).
 - **u)** ~~M1~~ Resolved in P3-D1 (ADR 0015: aal2 enforced in the DB for every private read and the three aggregate RPCs; see DATABASE_SCHEMA "Security hardening (debug cycle P3-D1)").
@@ -181,7 +182,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
   - Accepted limits: a wrong-slug request costs one unmetered DB read (edge rate limiting is P10). Bare hosts with an unlisted or title-case TLD and no path stay as text; the widget must render plain text with an http(s)-only href allowlist (P8 obligation). `[a][b]` loses `b`. Digit groups of 8 or more get a zero-width space. `name at host dot com` without brackets is not detected. "reach the team via WhatsApp" falls through to the model's `CONTACT: REQUESTED` header.
   - Deferred: P7.5 (answer cache, Anthropic prompt caching); P9 (`analyze_conversation` enqueue).
   - Process slip: `ea67013` was committed after only pgTAP 260, before the full suite. The final gated run covers it.
-  - Hosted: migration 013 needs owner approval to apply. Post-push checks follow (`rules.md §5`), recorded in `docs/evidence/P7/post-push.md`.
+  - Hosted: migration 013 applied 2026-11-11 (owner-approved). Post-push checks in `docs/evidence/P7/post-push.md`. pgTAP, race tests and the API not run on the hosted database.
 
 ### 3b. P3-D5 backlog
 
@@ -322,13 +323,12 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Security test matrix executed | ⬜ | — |
 
 ## 7. Next actions
-1. Owner approves merge of `phase/p7` to `main`, push, and apply migration 013 (§3a bt). Command plan: `make db-plan PROJECT_REF=rbejeqwxyxtklehuzibv`, then `npx --no-install supabase db push --remote=rbejeqwxyxtklehuzibv --yes`. Then the `rules.md §5` post-push checks, recorded in `docs/evidence/P7/post-push.md`.
-2. Owner decision on real provider calls for the P7 evaluation-set baseline. It needs paid-tier Gemini billing (§3a n, bt). Not done.
-3. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
-4. Admin panel runs `contracts:sync` (§3a bm).
-5. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
-6. Later-phase obligations: `plan.md` P4 section and §3a ae (cleanup part done in P6), ac, av, az, bf.
-7. P7.5 only on owner go-ahead.
+1. Owner decision on real provider calls for the P7 evaluation-set baseline. It needs paid-tier Gemini billing (§3a n, bt). Not done.
+2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
+3. Admin panel runs `contracts:sync` (§3a bm).
+4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
+5. Later-phase obligations: `plan.md` P4 section and §3a ae (cleanup part done in P6), ac, av, az, bf.
+6. P7.5 only on owner go-ahead.
 
 ## 8. Change log
 | Date | Change |
@@ -361,6 +361,7 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | 2026-11-08 | P6 accepted by owner; `phase/p6` fast-forwarded into `main` and pushed (`eac6392`). Migration 012 applied to the hosted dev project (now at 012, nothing pending). Post-push checks passed. pgTAP, race and API not run on the hosted database. Evidence: `docs/evidence/P6/post-push.md`. P6-D7 (flaky test fix on `p6/d7`) recorded; merge pending. Recorded by Opus. |
 | 2026-11-08 | CI updated for P6 at the owner's request: one added step runs the compiled worker PDF extraction check (`scripts/worker-dist-check.mjs`, moved from the P6 evidence folder). CI already ran the P6 unit, database, race and ingestion end-to-end tests; run 42491782322 on `5e5aa1f` passed every step. Documented in `README.md` (CI) and `rules.md` §3. A CI result is still not a gate. Recorded by Opus. |
 | 2026-11-11 | P7 retrieval and chat (`POST /v1/chat`) built, tested and debugged on `phase/p7` @ `4b65a6d`. Not on `main`, not pushed; migration 013 local only (hosted at 012). Gates in §2; reviews static and self-reported; evaluation-set baseline not done; no real provider call. Awaiting owner approval (§7 item 1). Open: §3a bt. Evidence: `docs/evidence/P7/SUMMARY.md`. Recorded by Opus. |
+| 2026-11-11 | P7 merge and push approved by owner; `phase/p7` fast-forwarded into `main` and pushed (`41997a9`). Migration 013 applied to the hosted dev project (now at 013, nothing pending). Post-push checks passed (`docs/evidence/P7/post-push.md`). Evaluation-set baseline not done. Recorded by Opus. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.
