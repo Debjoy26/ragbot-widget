@@ -142,7 +142,7 @@ export interface Conversations {
 import type { ConfigCache } from './config-cache.js';
 
 export interface CreateConversationsOptions {
-  readonly db: Pick<Db, 'rpc'>;
+  readonly db: Pick<Db, 'rpc' | 'selectOne'>;
   readonly configCache?: ConfigCache<ChatContext>;
 }
 
@@ -164,10 +164,25 @@ export function createConversations(options: CreateConversationsOptions): Conver
   return {
     async loadContext(botId) {
       // C2 — check in-process config cache before DB (bot_id+settings_version key, 30-60s TTL, kill switch).
+      // Cheap version read (single indexed row, 2 ints) so a settings/contact change busts immediately
+      // instead of serving stale contact details until TTL (B8 regression). Fail open on DB error.
       if (configCache) {
-        // Cheap version fetch would be ideal; without it we still use TTL-only get.
-        const hit = configCache.get(botId);
-        if (hit !== undefined) return hit;
+        try {
+          const ver = await db.selectOne<{ settings_version: number }>(
+            'bot_profiles',
+            { id: botId },
+            ['settings_version'],
+          );
+          if (ver !== null && typeof ver.settings_version === 'number') {
+            const hit = configCache.get(botId, ver.settings_version);
+            if (hit !== undefined) return hit;
+          }
+        } catch {
+          // version check failed — fall through to full fetch (fail open, never serve stale on error)
+        }
+        // No version (unknown bot) or miss/expired/bust — fall through to get_chat_context below.
+        // Note: we do NOT return TTL-only hits here; version-gated get above is the only hit path,
+        // so a bumped settings_version can never serve stale config.
       }
       const raw = await db.rpc<unknown>('get_chat_context', { p_bot_id: botId });
       const rows = rowsOf(raw);
