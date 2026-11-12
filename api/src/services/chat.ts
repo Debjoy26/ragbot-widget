@@ -102,6 +102,7 @@ import type { EmbeddingCache } from './embedding-cache.js';
 import type { ModerationCache } from './moderation-cache.js';
 import type { RetrievalCache } from './retrieval-cache.js';
 import type { ConfigCache } from './config-cache.js';
+import { queryEmbeddingHash } from './retrieval-cache.js';
 import type { EmbeddedQuery, RetrievedChunk, Retrieval } from './retrieval.js';
 import type { Limits } from './limits.js';
 import type { Runs } from './runs.js';
@@ -129,6 +130,8 @@ export type ChatConfig = Pick<
   | 'chatFallbackPrice'
   | 'moderationPrice'
   | 'embeddingPricePerMillionTokens'
+  | 'retrievalTopK'
+  | 'retrievalMinSimilarity'
 >;
 
 /** The subset of the request logger used here. */
@@ -704,7 +707,45 @@ export function createChatService(deps: ChatDeps): ChatService {
 
       // 11. Retrieval. No evidence above the threshold means no generation.
       const query = stage.query;
-      const chunks = await retrieval.match(turn.botId, query.vector, workSignal);
+      // C5 — retrieval cache L1 check (ordered IDs+scores, re-read by ID on hit via getHydrated when L2 fetcher available).
+      let chunks: RetrievedChunk[];
+      if (deps.retrievalCache) {
+        const embeddingHash = queryEmbeddingHash(query.vector);
+        const cachePolicy =
+          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
+          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
+        const cachedRefs = deps.retrievalCache.getL1(
+          turn.botId,
+          turn.ctx.bot.corpus_version,
+          embeddingHash,
+          config.retrievalTopK,
+          config.retrievalMinSimilarity,
+          turn.language ?? '',
+          cachePolicy,
+        );
+        if (cachedRefs !== undefined && cachedRefs.length > 0) {
+          // L1 hit: refs without text — rehydrate would fetch by ID (pending getChunksByIds RPC).
+          // For now, fall through to full vector search and treat hit as prefetch hint; still set after.
+        }
+        chunks = await retrieval.match(turn.botId, query.vector, workSignal);
+        const refs = chunks.map((c) => ({
+          chunk_id: c.chunk_id,
+          document_version_id: c.document_version_id,
+          similarity: c.similarity,
+        }));
+        deps.retrievalCache.setL1(
+          turn.botId,
+          turn.ctx.bot.corpus_version,
+          embeddingHash,
+          config.retrievalTopK,
+          config.retrievalMinSimilarity,
+          turn.language ?? '',
+          refs,
+          cachePolicy,
+        );
+      } else {
+        chunks = await retrieval.match(turn.botId, query.vector, workSignal);
+      }
       if (clientSignal.aborted) return { kind: 'aborted' };
       const missReason = noKnowledgeReason(turn.priorNoKnowledge, turn.policy);
       if (chunks.length === 0) return handoffTerminal(missReason, 'complete');
