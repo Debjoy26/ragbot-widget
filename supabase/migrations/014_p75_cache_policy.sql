@@ -104,3 +104,57 @@ create index if not exists retrieval_cache_corpus_version_idx on public.retrieva
 -- Grant service_role all on retrieval_cache (bypasses RLS, app does own checks).
 grant all on table public.retrieval_cache to service_role;
 grant all on all sequences in schema public to service_role;
+
+-- 4. purge_expired_caches: also purge retrieval_cache (TTL only). Keeps the
+-- existing 3-key shape plus retrieval_cache so callers see all four counts.
+-- Replaces the 005 body; grants from 005 are kept by CREATE OR REPLACE.
+create or replace function public.purge_expired_caches(p_batch integer)
+returns jsonb
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_q integer;
+  v_m integer;
+  v_a integer;
+  v_r integer;
+begin
+  if p_batch is null or p_batch < 1 or p_batch > 100000 then
+    raise exception 'purge_expired_caches: batch must be 1..100000' using errcode = '22023';
+  end if;
+  delete from public.query_embedding_cache
+   where key_hash in (select c.key_hash from public.query_embedding_cache c where c.expires_at < now() limit p_batch);
+  get diagnostics v_q = row_count;
+  delete from public.moderation_cache
+   where key_hash in (select c.key_hash from public.moderation_cache c where c.expires_at < now() limit p_batch);
+  get diagnostics v_m = row_count;
+  delete from public.answer_cache
+   where id in (
+     select c.id
+       from public.answer_cache c
+       join public.bot_profiles b on b.id = c.bot_id
+      where c.expires_at < now()
+         or c.corpus_version < b.corpus_version
+         or c.settings_version < b.settings_version
+      limit p_batch
+   );
+  get diagnostics v_a = row_count;
+  delete from public.retrieval_cache
+   where key_hash in (select c.key_hash from public.retrieval_cache c where c.expires_at < now() limit p_batch);
+  get diagnostics v_r = row_count;
+  return jsonb_build_object('query_embedding_cache', v_q, 'moderation_cache', v_m, 'answer_cache', v_a, 'retrieval_cache', v_r);
+end;
+$$;
+
+-- 3. schema_version: bump to 14 (220 compares with migration history count).
+create or replace function public.schema_version()
+returns integer
+language sql
+stable
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+  select 14;
+$$;
+revoke all on function public.schema_version() from public, anon, authenticated, service_role;
+grant execute on function public.schema_version() to authenticated;

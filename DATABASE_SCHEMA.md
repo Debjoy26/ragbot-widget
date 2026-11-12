@@ -176,7 +176,7 @@ Service role only: `reserve_index_budget`, `settle_index_budget` and `release_in
 - `message_sources` gains `page_number` and `section` (B-9 snapshot). Members read them exactly as they read the other columns.
 - The `client_settings.handoff_policy` keys read by the API are `repeated_no_knowledge_threshold` (default 2, ADR 0013) and `triggers` (all six on by default). Unknown keys are ignored.
 - The `analyze_conversation` enqueue is P9.
-- `schema_version()` is 13.
+- `schema_version()` is 14 (014 adds `cache_policy` to `get_chat_context` and `retrieval_cache`).
 
 ## Storage
 - Private bucket `knowledge`; path pattern `{bot_id}/{document_id}/{version_id}/{generated_filename}`.

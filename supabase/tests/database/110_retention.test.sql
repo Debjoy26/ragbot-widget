@@ -100,7 +100,7 @@ select is(public.expire_visitor_sessions(100, 5), 1, 'retention (L9): a shorter 
 select is((select count(*)::int from public.visitor_sessions where id = 'a2000000-0000-4000-8000-0000000000ab'), 1, 'retention: live session kept');
 select is(public.purge_expired_rate_limit_buckets(100), 1, 'retention: expired rate-limit bucket deleted');
 select is((select count(*)::int from public.rate_limit_buckets where key_hash = repeat('b', 64)), 1, 'retention: live bucket kept');
-select is(public.purge_expired_caches(100), '{"answer_cache": 1, "moderation_cache": 1, "query_embedding_cache": 0}'::jsonb, 'retention: only expired cache rows are purged');
+select is(public.purge_expired_caches(100), '{"answer_cache": 1, "moderation_cache": 1, "query_embedding_cache": 0, "retrieval_cache": 0}'::jsonb, 'retention: only expired cache rows are purged');
 select is((select count(*)::int from public.answer_cache where cache_key_hash = repeat('b', 64)), 1, 'retention: live cache row kept');
 
 -- L7: answer_cache rows from an older corpus_version / settings_version are purged although unexpired.
