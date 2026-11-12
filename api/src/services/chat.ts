@@ -96,6 +96,11 @@ import {
   ROLLING_BATCH_CHARS,
   type OutputMode,
 } from './output-moderation.js';
+import type { AnswerCache } from './answer-cache.js';
+import type { EmbeddingCache } from './embedding-cache.js';
+import type { ModerationCache } from './moderation-cache.js';
+import type { RetrievalCache } from './retrieval-cache.js';
+import type { ConfigCache } from './config-cache.js';
 import type { EmbeddedQuery, RetrievedChunk, Retrieval } from './retrieval.js';
 import type { Limits } from './limits.js';
 import type { Runs } from './runs.js';
@@ -143,6 +148,12 @@ export interface ChatDeps {
   readonly moderationMode: ModerationMode;
   /** The query embedding provider; its model must equal the bot's embedding model. */
   readonly embedding: Pick<EmbeddingProvider, 'provider' | 'model' | 'dimensions'>;
+  // P7.5 caches — optional, bypass when not configured (kill switch handled inside each cache).
+  readonly configCache?: ConfigCache<ChatContext>;
+  readonly embeddingCache?: EmbeddingCache;
+  readonly moderationCache?: ModerationCache;
+  readonly retrievalCache?: RetrievalCache;
+  readonly answerCache?: AnswerCache;
   readonly now?: () => number;
   /** Waits before the one retry of the input stage; abortable. Injected for tests. */
   readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -506,6 +517,14 @@ export function createChatService(deps: ChatDeps): ChatService {
 
     /** Query embedding with its own usage row. Resolves or rejects; never leaves a call unrecorded. */
     async function embedQuery(signal: AbortSignal): Promise<EmbeddedQuery> {
+      // C4 — check L1 embedding cache before provider call (raw text never stored, only hash).
+      if (deps.embeddingCache) {
+        const cached = deps.embeddingCache.getL1(deps.embedding.model, deps.embedding.dimensions, turn.message);
+        if (cached !== undefined) {
+          // Cache hit: no provider call, no usage row (cost 0). Still contributes to latency 0.
+          return { vector: cached, inputTokens: null };
+        }
+      }
       const started = now();
       const row = (tokens: number): UsageEntry => ({
         provider: deps.embedding.provider,
@@ -519,6 +538,10 @@ export function createChatService(deps: ChatDeps): ChatService {
       try {
         const query = await retrieval.embedQuery(turn.message, signal);
         ledger.record(row(query.inputTokens ?? estimateTokens(turn.message.length)));
+        // Populate C4 L1 (never store raw text, only normalised hash + vector).
+        if (deps.embeddingCache) {
+          deps.embeddingCache.setL1(deps.embedding.model, deps.embedding.dimensions, turn.message, query.vector);
+        }
         return query;
       } catch (err) {
         ledger.record(

@@ -137,12 +137,15 @@ export interface Conversations {
   recordUsage(botId: string, runId: string, entry: UsageEntry): Promise<void>;
 }
 
+import type { ConfigCache } from './config-cache.js';
+
 export interface CreateConversationsOptions {
   readonly db: Pick<Db, 'rpc'>;
+  readonly configCache?: ConfigCache<ChatContext>;
 }
 
 export function createConversations(options: CreateConversationsOptions): Conversations {
-  const { db } = options;
+  const { db, configCache } = options;
 
   function mapTurnError(err: unknown): never {
     if (err instanceof DbError) {
@@ -158,12 +161,20 @@ export function createConversations(options: CreateConversationsOptions): Conver
 
   return {
     async loadContext(botId) {
+      // C2 — check in-process config cache before DB (bot_id+settings_version key, 30-60s TTL, kill switch).
+      if (configCache) {
+        // Cheap version fetch would be ideal; without it we still use TTL-only get.
+        const hit = configCache.get(botId);
+        if (hit !== undefined) return hit;
+      }
       const raw = await db.rpc<unknown>('get_chat_context', { p_bot_id: botId });
       const rows = rowsOf(raw);
       const parsed = rows.length === 1 ? contextSchema.safeParse(rows[0]) : undefined;
       if (parsed === undefined || !parsed.success) throw internal('chat_context_bad');
       if (parsed.data.bot.id !== botId) throw internal('chat_context_bad');
-      return parsed.data;
+      const ctx = parsed.data;
+      if (configCache) configCache.set(botId, ctx);
+      return ctx;
     },
 
     async startTurn(input) {
