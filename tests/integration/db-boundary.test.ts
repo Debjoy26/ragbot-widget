@@ -31,6 +31,7 @@ const OTHER_TABLES = [
   'query_embedding_cache',
   'moderation_cache',
   'answer_cache',
+  'retrieval_cache',
 ] as const;
 
 // Statuses PostgREST uses for "refused": no grant (401/403) or relation not exposed (404).
@@ -61,7 +62,7 @@ describe('anon role boundary over HTTP (local stack)', () => {
       }
     }
     expect([ALLOWED, ...OTHER_TABLES].sort()).toEqual([...created].sort());
-    expect(OTHER_TABLES).toHaveLength(21);
+    expect(OTHER_TABLES).toHaveLength(22);
   });
 
   it('anon can read public_bot_config (200, JSON array)', async () => {
