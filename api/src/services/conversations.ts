@@ -49,10 +49,12 @@ const contextSchema = z.looseObject({
     embedding_model: z.string(),
     embedding_dimensions: z.int(),
     settings_version: z.int(),
+    corpus_version: z.number().int().min(0),
   }),
   settings: z.looseObject({
     feature_flags: z.record(z.string(), z.unknown()),
     handoff_policy: z.record(z.string(), z.unknown()),
+    cache_policy: z.record(z.string(), z.unknown()).optional(),
   }),
   contact: z.looseObject({
     supported_languages: z.array(z.string()),

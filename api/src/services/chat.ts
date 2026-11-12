@@ -28,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import {
   isRetryableErrorKind,
   parseEvidenceHeader,
+  PROMPT_TEMPLATE_VERSION,
   toErrorEnvelope,
   type ChatRequest,
   type EmbeddingProvider,
@@ -96,7 +97,7 @@ import {
   ROLLING_BATCH_CHARS,
   type OutputMode,
 } from './output-moderation.js';
-import type { AnswerCache } from './answer-cache.js';
+import type { AnswerCache, AnswerSourceRef } from './answer-cache.js';
 import type { EmbeddingCache } from './embedding-cache.js';
 import type { ModerationCache } from './moderation-cache.js';
 import type { RetrievalCache } from './retrieval-cache.js';
@@ -585,18 +586,37 @@ export function createChatService(deps: ChatDeps): ChatService {
       try {
         let verdict: 'allow' | 'block';
         try {
-          const moderation = withOneRetry(
-            () => moderator.moderate(turn.message, modSignal, ledger),
-            (err) =>
-              err instanceof ModerationFailure &&
-              err.kind !== 'unexpected' &&
-              isRetryableErrorKind(err.kind),
-            modSignal,
-          );
-          // The call may outlive this stage (the race below gives up on it at once when something
-          // else fails) and still writes its usage row: settlement waits for it (P7-D2 F7c).
-          work.push(moderation.catch(() => undefined));
-          verdict = await raceAbort(moderation, modSignal);
+          // C6 — check L1 moderation cache before provider (raw text never stored, only hash).
+          if (deps.moderationCache) {
+            const cached = deps.moderationCache.getL1('moderation', 'v1', turn.message);
+            if (cached !== undefined) {
+              verdict = cached;
+            } else {
+              const moderation = withOneRetry(
+                () => moderator.moderate(turn.message, modSignal, ledger),
+                (err) =>
+                  err instanceof ModerationFailure &&
+                  err.kind !== 'unexpected' &&
+                  isRetryableErrorKind(err.kind),
+                modSignal,
+              );
+              work.push(moderation.catch(() => undefined));
+              verdict = await raceAbort(moderation, modSignal);
+              // Populate C6 L1 on success (verdict allow/block).
+              deps.moderationCache.setL1('moderation', 'v1', turn.message, verdict);
+            }
+          } else {
+            const moderation = withOneRetry(
+              () => moderator.moderate(turn.message, modSignal, ledger),
+              (err) =>
+                err instanceof ModerationFailure &&
+                err.kind !== 'unexpected' &&
+                isRetryableErrorKind(err.kind),
+              modSignal,
+            );
+            work.push(moderation.catch(() => undefined));
+            verdict = await raceAbort(moderation, modSignal);
+          }
         } catch (err) {
           const failure = embedFailure as { readonly err: unknown } | null;
           if (failure !== null && !workSignal.aborted) throw failure.err;
@@ -622,6 +642,65 @@ export function createChatService(deps: ChatDeps): ChatService {
       // 10. The visitor asks for a person: answer with the contact card, no retrieval or model.
       if (stage.query === null) return handoffTerminal('human_requested', 'complete');
       if (clientSignal.aborted) return { kind: 'aborted' };
+
+      // C7 — answer cache check before retrieval/generation (first-turn only, opt-in, 9 rules).
+      // Input moderation already ran via inputStage (safety rule 6), so cache hit may skip retrieval + generation.
+      if (deps.answerCache && !turn.hadConversation) {
+        const cachePolicy =
+          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
+          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
+        const cached = await deps.answerCache.get(
+          turn.botId,
+          turn.ctx.bot.corpus_version,
+          turn.ctx.bot.settings_version,
+          PROMPT_TEMPLATE_VERSION,
+          'chat', // placeholder model; real wiring uses chat provider model via deps.llm
+          turn.language ?? '',
+          turn.message,
+          {
+            isFirstTurn: true,
+            cachePolicy,
+            areDocsActive: async () => true, // L1 hit does not re-check; L2 re-check inside cache.get handles purge
+          },
+        );
+        if (cached) {
+          // Record cache hit usage (cost 0, no budget reservation beyond minimal hold already done in prepare).
+          ledger.record({
+            provider: 'cache',
+            model: 'answer_cache',
+            operation: 'chat',
+            inputTokens: 0,
+            outputTokens: 0,
+            cost: 0,
+            latencyMs: 0,
+          });
+          if (cached.handoffReason) {
+            return handoffTerminal(cached.handoffReason as HandoffReason, 'complete');
+          }
+          evidenceForSources = new Map(
+            cached.sourceRefs.map((r) => [
+              r.chunk_id,
+              {
+                chunk_id: r.chunk_id,
+                document_id: '',
+                document_version_id: r.document_version_id,
+                document_title: r.source_label ?? '',
+                chunk_index: 0,
+                content: '',
+                page_number: null,
+                section: null,
+                similarity: 1,
+              } as RetrievedChunk,
+            ]),
+          );
+          await deliver(cached.answerText, false);
+          return {
+            kind: 'answer',
+            cited: cached.sourceRefs.map((r) => r.chunk_id),
+            truncated: false,
+          };
+        }
+      }
 
       // 11. Retrieval. No evidence above the threshold means no generation.
       const query = stage.query;
@@ -877,6 +956,47 @@ export function createChatService(deps: ChatDeps): ChatService {
         },
       });
       terminal = await pipeline();
+      // C7 — store in answer cache if eligible (first-turn only, opt-in, completed, PII filtered inside set).
+      if (deps.answerCache && !turn.hadConversation && (terminal.kind === 'answer' || terminal.kind === 'handoff')) {
+        const cachePolicy =
+          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
+          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
+        const sourceRefs =
+          terminal.kind === 'answer'
+            ? terminal.cited.map((id) => {
+                const chunk = evidenceForSources.get(id);
+                const base = {
+                  chunk_id: id,
+                  document_version_id: chunk?.document_version_id ?? '',
+                } as AnswerSourceRef;
+                return chunk?.document_title
+                  ? { ...base, source_label: chunk.document_title }
+                  : base;
+              })
+            : [];
+        const handoffReason = terminal.kind === 'handoff' ? terminal.plan.reason : null;
+        // out.text is the delivered text (answer or handoff message) — already filtered for PII at write.
+        const answerText = out.text;
+        if (answerText.length > 0) {
+          await deps.answerCache
+            .set({
+              botId: turn.botId,
+              corpusVersion: turn.ctx.bot.corpus_version,
+              settingsVersion: turn.ctx.bot.settings_version,
+              promptTemplateVersion: PROMPT_TEMPLATE_VERSION,
+              chatModel: 'chat',
+              language: turn.language ?? '',
+              rawQuestion: turn.message,
+              answerText,
+              sourceRefs,
+              handoffReason,
+              status: 'complete',
+              moderated: true,
+              cachePolicy,
+            })
+            .catch(() => undefined);
+        }
+      }
     } catch (err) {
       terminal = classify(err);
       if (terminal.kind === 'error') {
