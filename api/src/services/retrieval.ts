@@ -47,6 +47,11 @@ export interface Retrieval {
   embedQuery(text: string, signal: AbortSignal): Promise<EmbeddedQuery>;
   /** At most `topK` chunks with similarity >= the minimum, best first. */
   match(botId: string, vector: readonly number[], signal: AbortSignal): Promise<RetrievedChunk[]>;
+  /** Rehydrate cached chunk refs by ID (C5). Returns full chunks in cached order; missing => []. */
+  hydrate(
+    refs: readonly { readonly chunk_id: string; readonly similarity: number }[],
+    signal: AbortSignal,
+  ): Promise<RetrievedChunk[]>;
 }
 
 export interface CreateRetrievalOptions {
@@ -114,6 +119,44 @@ export function createRetrieval(options: CreateRetrievalOptions): Retrieval {
         });
       }
       return chunks.sort((a, b) => b.similarity - a.similarity);
+    },
+
+    async hydrate(refs, signal) {
+      if (refs.length === 0) return [];
+      const raw = await db.rpc<unknown>(
+        'get_chunks_by_ids',
+        { p_chunk_ids: refs.map((r) => r.chunk_id) },
+        signal,
+      );
+      if (!Array.isArray(raw)) {
+        throw new AppError('INTERNAL_ERROR', { internalName: 'retrieval_hydrate_bad' });
+      }
+      const byId = new Map<string, RetrievedChunk>();
+      for (const row of raw) {
+        const parsed = rowSchema.safeParse({ ...row, similarity: 1 });
+        if (!parsed.success) continue;
+        const r = parsed.data;
+        byId.set(r.chunk_id, {
+          chunk_id: r.chunk_id,
+          document_id: r.document_id,
+          document_version_id: r.document_version_id,
+          document_title: r.document_title,
+          chunk_index: r.chunk_index,
+          content: r.content,
+          page_number: r.page_number,
+          section: r.section,
+          similarity: 1,
+        });
+      }
+      // Preserve cached order; missing => drop (caller treats shortfall as miss via getHydrated purge).
+      const out: RetrievedChunk[] = [];
+      const simById = new Map(refs.map((r) => [r.chunk_id, r.similarity] as const));
+      for (const ref of refs) {
+        const c = byId.get(ref.chunk_id);
+        if (c === undefined) continue;
+        out.push({ ...c, similarity: simById.get(ref.chunk_id) ?? c.similarity });
+      }
+      return out;
     },
   };
 }

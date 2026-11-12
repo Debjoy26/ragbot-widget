@@ -6,8 +6,19 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerConversationRoutes } from './routes/conversations.js';
 import { buildServer } from './server.js';
 import { createVisitorAuth, type VisitorAuth } from './services/auth.js';
+import {
+  createAnswerL2,
+  createEmbeddingL2,
+  createModerationL2,
+  createRetrievalL2,
+} from './services/cache-l2.js';
+import { createAnswerCache } from './services/answer-cache.js';
 import { createChatService } from './services/chat.js';
-import { createConversations } from './services/conversations.js';
+import { createConfigCache } from './services/config-cache.js';
+import { createConversations, type ChatContext } from './services/conversations.js';
+import { createEmbeddingCache } from './services/embedding-cache.js';
+import { createModerationCache } from './services/moderation-cache.js';
+import { createRetrievalCache } from './services/retrieval-cache.js';
 import { createLimits, type Limits } from './services/limits.js';
 import { createLlm } from './services/llm.js';
 import { createModerator } from './services/moderation.js';
@@ -63,12 +74,23 @@ export function createApp(
 
   // Chat and history (P7). Registered here, on the instance buildServer returns, before it listens.
   const ai = buildAiProviders(config);
-  const conversations = createConversations({ db });
+  // P7.5 caches: L1 in-process + L2 Postgres (015 RPCs). Kill switches in client_settings.cache_policy.
+  const configCache = createConfigCache<ChatContext>();
+  const embeddingCache = createEmbeddingCache({ l2: createEmbeddingL2(db) });
+  const moderationCache = createModerationCache({ l2: createModerationL2(db) });
+  const retrievalCache = createRetrievalCache({ l2: createRetrievalL2(db) });
+  const answerCache = createAnswerCache({ l2: createAnswerL2(db) });
+  const conversations = createConversations({ db, configCache });
   const chat = createChatService({
     config,
     conversations,
     limits,
     runs,
+    configCache,
+    embeddingCache,
+    moderationCache,
+    retrievalCache,
+    answerCache,
     retrieval: createRetrieval({
       db,
       embedding: ai.embedding,

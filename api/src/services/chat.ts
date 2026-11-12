@@ -521,16 +521,21 @@ export function createChatService(deps: ChatDeps): ChatService {
 
     /** Query embedding with its own usage row. Resolves or rejects; never leaves a call unrecorded. */
     async function embedQuery(signal: AbortSignal): Promise<EmbeddedQuery> {
-      // C4 — check L1 embedding cache before provider call (raw text never stored, only hash).
+      // C4 — check L1+L2 embedding cache before provider call (raw text never stored, only hash).
+      // L2 failure is a miss, never fatal.
       if (deps.embeddingCache) {
-        const cached = deps.embeddingCache.getL1(
-          deps.embedding.model,
-          deps.embedding.dimensions,
-          turn.message,
-        );
-        if (cached !== undefined) {
-          // Cache hit: no provider call, no usage row (cost 0). Still contributes to latency 0.
-          return { vector: cached, inputTokens: null };
+        try {
+          const cached = await deps.embeddingCache.get(
+            deps.embedding.model,
+            deps.embedding.dimensions,
+            turn.message,
+          );
+          if (cached !== undefined) {
+            // Cache hit: no provider call, no usage row (cost 0).
+            return { vector: cached, inputTokens: null };
+          }
+        } catch {
+          // miss on L2 error
         }
       }
       const started = now();
@@ -546,14 +551,18 @@ export function createChatService(deps: ChatDeps): ChatService {
       try {
         const query = await retrieval.embedQuery(turn.message, signal);
         ledger.record(row(query.inputTokens ?? estimateTokens(turn.message.length)));
-        // Populate C4 L1 (never store raw text, only normalised hash + vector).
+        // Populate C4 L1+L2 (never store raw text, only normalised hash + vector).
         if (deps.embeddingCache) {
-          deps.embeddingCache.setL1(
-            deps.embedding.model,
-            deps.embedding.dimensions,
-            turn.message,
-            query.vector,
-          );
+          try {
+            await deps.embeddingCache.set(
+              deps.embedding.model,
+              deps.embedding.dimensions,
+              turn.message,
+              query.vector,
+            );
+          } catch {
+            // cache write failure never fails the request
+          }
         }
         return query;
       } catch (err) {
@@ -598,9 +607,15 @@ export function createChatService(deps: ChatDeps): ChatService {
       try {
         let verdict: 'allow' | 'block';
         try {
-          // C6 — check L1 moderation cache before provider (raw text never stored, only hash).
+          // C6 — check L1+L2 moderation cache before provider (raw text never stored, only hash).
+          // L2 failure is a miss, never fatal.
           if (deps.moderationCache) {
-            const cached = deps.moderationCache.getL1('moderation', 'v1', turn.message);
+            let cached: 'allow' | 'block' | undefined;
+            try {
+              cached = await deps.moderationCache.get('moderation', 'v1', turn.message);
+            } catch {
+              cached = undefined;
+            }
             if (cached !== undefined) {
               verdict = cached;
             } else {
@@ -614,8 +629,12 @@ export function createChatService(deps: ChatDeps): ChatService {
               );
               work.push(moderation.catch(() => undefined));
               verdict = await raceAbort(moderation, modSignal);
-              // Populate C6 L1 on success (verdict allow/block).
-              deps.moderationCache.setL1('moderation', 'v1', turn.message, verdict);
+              // Populate C6 L1+L2 on success (verdict allow/block).
+              try {
+                await deps.moderationCache.set('moderation', 'v1', turn.message, verdict);
+              } catch {
+                // cache write failure never fails the request
+              }
             }
           } else {
             const moderation = withOneRetry(
@@ -715,43 +734,58 @@ export function createChatService(deps: ChatDeps): ChatService {
       }
 
       // 11. Retrieval. No evidence above the threshold means no generation.
+      // C5 — L1+L2 retrieval cache (ordered IDs+scores, rehydrated by ID; deleted chunks purge).
       const query = stage.query;
-      // C5 — retrieval cache L1 check (ordered IDs+scores, re-read by ID on hit via getHydrated when L2 fetcher available).
       let chunks: RetrievedChunk[];
       if (deps.retrievalCache) {
         const embeddingHash = queryEmbeddingHash(query.vector);
         const cachePolicy =
           (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
           (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
-        const cachedRefs = deps.retrievalCache.getL1(
-          turn.botId,
-          turn.ctx.bot.corpus_version,
-          embeddingHash,
-          config.retrievalTopK,
-          config.retrievalMinSimilarity,
-          turn.language ?? '',
-          cachePolicy,
-        );
-        if (cachedRefs !== undefined && cachedRefs.length > 0) {
-          // L1 hit: refs without text — rehydrate would fetch by ID (pending getChunksByIds RPC).
-          // For now, fall through to full vector search and treat hit as prefetch hint; still set after.
+        let hydrated: readonly RetrievedChunk[] | undefined;
+        try {
+          hydrated = await deps.retrievalCache.getHydrated(
+            turn.botId,
+            turn.ctx.bot.corpus_version,
+            embeddingHash,
+            config.retrievalTopK,
+            config.retrievalMinSimilarity,
+            turn.language ?? '',
+            async (ids) => {
+              const refs = ids.map((id) => ({ chunk_id: id, similarity: 1 }));
+              const full = await retrieval.hydrate(refs, workSignal);
+              const map = new Map(full.map((c) => [c.chunk_id, c] as const));
+              return map;
+            },
+            cachePolicy,
+          );
+        } catch {
+          hydrated = undefined;
         }
-        chunks = await retrieval.match(turn.botId, query.vector, workSignal);
-        const refs = chunks.map((c) => ({
-          chunk_id: c.chunk_id,
-          document_version_id: c.document_version_id,
-          similarity: c.similarity,
-        }));
-        deps.retrievalCache.setL1(
-          turn.botId,
-          turn.ctx.bot.corpus_version,
-          embeddingHash,
-          config.retrievalTopK,
-          config.retrievalMinSimilarity,
-          turn.language ?? '',
-          refs,
-          cachePolicy,
-        );
+        if (hydrated !== undefined) {
+          chunks = [...hydrated];
+        } else {
+          chunks = await retrieval.match(turn.botId, query.vector, workSignal);
+          const refs = chunks.map((c) => ({
+            chunk_id: c.chunk_id,
+            document_version_id: c.document_version_id,
+            similarity: c.similarity,
+          }));
+          try {
+            await deps.retrievalCache.set(
+              turn.botId,
+              turn.ctx.bot.corpus_version,
+              embeddingHash,
+              config.retrievalTopK,
+              config.retrievalMinSimilarity,
+              turn.language ?? '',
+              refs,
+              cachePolicy,
+            );
+          } catch {
+            // cache write failure never fails the request
+          }
+        }
       } else {
         chunks = await retrieval.match(turn.botId, query.vector, workSignal);
       }
