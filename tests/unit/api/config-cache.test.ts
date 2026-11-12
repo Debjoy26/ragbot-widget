@@ -164,7 +164,9 @@ describe('C2 config cache — api/src/services/config-cache.ts', () => {
       // Use versionFetcher to force bust: current version 2 vs cached 1
       const versionFetcher = async () => 2;
       const fetched = await cache.load(id, fetcher, versionFetcher);
-      expect((fetched as unknown as Record<string, unknown>)['cache_policy']).toEqual({ enabled: false });
+      expect((fetched as unknown as Record<string, unknown>)['cache_policy']).toEqual({
+        enabled: false,
+      });
       expect(cache.size()).toBe(0); // disabled result not stored
     });
   });

@@ -219,7 +219,12 @@ export class RetrievalCache {
     if (typeof corpusVersion !== 'number' || !Number.isFinite(corpusVersion)) return false;
     if (typeof embeddingHash !== 'string' || !/^[0-9a-f]{64}$/.test(embeddingHash)) return false;
     if (typeof k !== 'number' || !Number.isInteger(k) || k < 1 || k > 50) return false;
-    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1)
+    if (
+      typeof threshold !== 'number' ||
+      !Number.isFinite(threshold) ||
+      threshold < 0 ||
+      threshold > 1
+    )
       return false;
     return true;
   }
@@ -236,7 +241,14 @@ export class RetrievalCache {
   ): readonly RetrievalCacheChunkRef[] | undefined {
     if (!isRetrievalCacheEnabled(cachePolicy)) return undefined;
     if (!this.#validateInputs(botId, corpusVersion, embeddingHash, k, threshold)) return undefined;
-    const keyHash = retrievalCacheKey({ botId, corpusVersion, embeddingHash, k, threshold, language });
+    const keyHash = retrievalCacheKey({
+      botId,
+      corpusVersion,
+      embeddingHash,
+      k,
+      threshold,
+      language,
+    });
     const entry = this.#map.get(keyHash);
     if (entry === undefined) return undefined;
     const now = this.#now();
@@ -280,7 +292,14 @@ export class RetrievalCache {
     for (const r of chunkRefs) {
       if (!isValidChunkRef(r)) return undefined;
     }
-    const keyHash = retrievalCacheKey({ botId, corpusVersion, embeddingHash, k, threshold, language });
+    const keyHash = retrievalCacheKey({
+      botId,
+      corpusVersion,
+      embeddingHash,
+      k,
+      threshold,
+      language,
+    });
     const now = this.#now();
     const entry: L1Entry = {
       botId,
@@ -314,7 +333,14 @@ export class RetrievalCache {
     const l1 = this.getL1(botId, corpusVersion, embeddingHash, k, threshold, language, cachePolicy);
     if (l1 !== undefined) return l1;
     if (this.#l2 === undefined) return undefined;
-    const keyHash = retrievalCacheKey({ botId, corpusVersion, embeddingHash, k, threshold, language });
+    const keyHash = retrievalCacheKey({
+      botId,
+      corpusVersion,
+      embeddingHash,
+      k,
+      threshold,
+      language,
+    });
     const rec = await this.#l2.get(keyHash);
     if (rec === null) return undefined;
     // Validate record matches request and is not stale.
@@ -360,7 +386,16 @@ export class RetrievalCache {
     chunkRefs: readonly RetrievalCacheChunkRef[],
     cachePolicy?: unknown,
   ): Promise<string | undefined> {
-    const keyHash = this.setL1(botId, corpusVersion, embeddingHash, k, threshold, language, chunkRefs, cachePolicy);
+    const keyHash = this.setL1(
+      botId,
+      corpusVersion,
+      embeddingHash,
+      k,
+      threshold,
+      language,
+      chunkRefs,
+      cachePolicy,
+    );
     if (keyHash === undefined) return undefined;
     if (this.#l2 === undefined) return keyHash;
     const now = this.#now();
@@ -391,28 +426,51 @@ export class RetrievalCache {
     k: number,
     threshold: number,
     language: string,
-    fetchByIds: (ids: readonly string[]) => Promise<ReadonlyMap<string, T> | readonly T[] | Map<string, T> | null>,
+    fetchByIds: (
+      ids: readonly string[],
+    ) => Promise<ReadonlyMap<string, T> | readonly T[] | Map<string, T> | null>,
     cachePolicy?: unknown,
   ): Promise<readonly T[] | undefined> {
-    const refs = await this.get(botId, corpusVersion, embeddingHash, k, threshold, language, cachePolicy);
+    const refs = await this.get(
+      botId,
+      corpusVersion,
+      embeddingHash,
+      k,
+      threshold,
+      language,
+      cachePolicy,
+    );
     if (refs === undefined || refs.length === 0) return refs as unknown as readonly T[] | undefined;
     const ids = refs.map((r) => r.chunk_id);
     const result = await fetchByIds(ids);
     if (result === null || result === undefined) {
       // Fetcher indicates total miss — treat as cache miss and purge.
-      const keyHash = retrievalCacheKey({ botId, corpusVersion, embeddingHash, k, threshold, language });
+      const keyHash = retrievalCacheKey({
+        botId,
+        corpusVersion,
+        embeddingHash,
+        k,
+        threshold,
+        language,
+      });
       this.#map.delete(keyHash);
       if (this.#l2?.delete) await this.#l2.delete(keyHash).catch(() => undefined);
       return undefined;
     }
-    const map: ReadonlyMap<string, T> =
-      Array.isArray(result)
-        ? new Map(result.map((c) => [c.chunk_id, c] as const))
-        : (result as ReadonlyMap<string, T>);
+    const map: ReadonlyMap<string, T> = Array.isArray(result)
+      ? new Map(result.map((c) => [c.chunk_id, c] as const))
+      : (result as ReadonlyMap<string, T>);
     // Deleted or missing chunk => purge and miss (prevents leaking deleted text, and stale scores).
     for (const id of ids) {
       if (!map.has(id)) {
-        const keyHash = retrievalCacheKey({ botId, corpusVersion, embeddingHash, k, threshold, language });
+        const keyHash = retrievalCacheKey({
+          botId,
+          corpusVersion,
+          embeddingHash,
+          k,
+          threshold,
+          language,
+        });
         this.#map.delete(keyHash);
         if (this.#l2?.delete) await this.#l2.delete(keyHash).catch(() => undefined);
         return undefined;
@@ -435,6 +493,8 @@ export class RetrievalCache {
   }
 }
 
-export function createRetrievalCache(options?: RetrievalCacheOptions & { l2?: RetrievalL2 }): RetrievalCache {
+export function createRetrievalCache(
+  options?: RetrievalCacheOptions & { l2?: RetrievalL2 },
+): RetrievalCache {
   return new RetrievalCache(options);
 }

@@ -16,9 +16,15 @@ import {
 function fakeL2(): { l2: RetrievalL2; store: Map<string, RetrievalCacheRecord> } {
   const store = new Map<string, RetrievalCacheRecord>();
   const l2: RetrievalL2 = {
-    async get(k) { return store.get(k) ?? null; },
-    async set(rec) { store.set(rec.key_hash, rec); },
-    async delete(k) { store.delete(k); },
+    async get(k) {
+      return store.get(k) ?? null;
+    },
+    async set(rec) {
+      store.set(rec.key_hash, rec);
+    },
+    async delete(k) {
+      store.delete(k);
+    },
   };
   return { l2, store };
 }
@@ -28,8 +34,16 @@ const BOT_B = '22222222-2222-2222-2222-222222222222';
 const EH = 'a'.repeat(64);
 const EH2 = 'b'.repeat(64);
 const CHUNK_REFS = [
-  { chunk_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', document_version_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', similarity: 0.92 },
-  { chunk_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', document_version_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', similarity: 0.81 },
+  {
+    chunk_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    document_version_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+    similarity: 0.92,
+  },
+  {
+    chunk_id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    document_version_id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    similarity: 0.81,
+  },
 ];
 
 describe('C5 retrieval cache — api/src/services/retrieval-cache.ts', () => {
@@ -136,7 +150,14 @@ describe('C5 retrieval cache — api/src/services/retrieval-cache.ts', () => {
       expect(createHash('sha256').update(v.join(','), 'utf8').digest('hex')).toBe(h);
     });
     it('retrievalCacheKey is sha256 of composite', () => {
-      const k = retrievalCacheKey({ botId: BOT_A, corpusVersion: 1, embeddingHash: EH, k: 5, threshold: 0.5, language: 'en' });
+      const k = retrievalCacheKey({
+        botId: BOT_A,
+        corpusVersion: 1,
+        embeddingHash: EH,
+        k: 5,
+        threshold: 0.5,
+        language: 'en',
+      });
       expect(k).toMatch(/^[0-9a-f]{64}$/);
     });
   });
@@ -175,7 +196,14 @@ describe('C5 retrieval cache — api/src/services/retrieval-cache.ts', () => {
       const c = new RetrievalCache({ l2 });
       await c.set(BOT_A, 1, EH, 5, 0.5, 'en', CHUNK_REFS);
       expect(store.size).toBe(1);
-      const key = retrievalCacheKey({ botId: BOT_A, corpusVersion: 1, embeddingHash: EH, k: 5, threshold: 0.5, language: 'en' });
+      const key = retrievalCacheKey({
+        botId: BOT_A,
+        corpusVersion: 1,
+        embeddingHash: EH,
+        k: 5,
+        threshold: 0.5,
+        language: 'en',
+      });
       // Hydrate with missing chunk -> purge L2
       const miss = await c.getHydrated(BOT_A, 1, EH, 5, 0.5, 'en', async () => new Map());
       expect(miss).toBeUndefined();
@@ -184,7 +212,9 @@ describe('C5 retrieval cache — api/src/services/retrieval-cache.ts', () => {
     it('does not leak deleted chunk text', async () => {
       // Simulate old cached text vs re-read text: cache stores IDs only, so old text cannot leak.
       const c = createRetrievalCache();
-      c.setL1(BOT_A, 1, EH, 5, 0.5, 'en', [{ chunk_id: 'aaaa', document_version_id: 'bbbb', similarity: 0.9 }]);
+      c.setL1(BOT_A, 1, EH, 5, 0.5, 'en', [
+        { chunk_id: 'aaaa', document_version_id: 'bbbb', similarity: 0.9 },
+      ]);
       const hydrated = await c.getHydrated(BOT_A, 1, EH, 5, 0.5, 'en', async (_ids) => {
         // Deleted: return empty for that ID -> miss
         return new Map();

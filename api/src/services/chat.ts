@@ -523,7 +523,11 @@ export function createChatService(deps: ChatDeps): ChatService {
     async function embedQuery(signal: AbortSignal): Promise<EmbeddedQuery> {
       // C4 — check L1 embedding cache before provider call (raw text never stored, only hash).
       if (deps.embeddingCache) {
-        const cached = deps.embeddingCache.getL1(deps.embedding.model, deps.embedding.dimensions, turn.message);
+        const cached = deps.embeddingCache.getL1(
+          deps.embedding.model,
+          deps.embedding.dimensions,
+          turn.message,
+        );
         if (cached !== undefined) {
           // Cache hit: no provider call, no usage row (cost 0). Still contributes to latency 0.
           return { vector: cached, inputTokens: null };
@@ -544,7 +548,12 @@ export function createChatService(deps: ChatDeps): ChatService {
         ledger.record(row(query.inputTokens ?? estimateTokens(turn.message.length)));
         // Populate C4 L1 (never store raw text, only normalised hash + vector).
         if (deps.embeddingCache) {
-          deps.embeddingCache.setL1(deps.embedding.model, deps.embedding.dimensions, turn.message, query.vector);
+          deps.embeddingCache.setL1(
+            deps.embedding.model,
+            deps.embedding.dimensions,
+            turn.message,
+            query.vector,
+          );
         }
         return query;
       } catch (err) {
@@ -998,7 +1007,11 @@ export function createChatService(deps: ChatDeps): ChatService {
       });
       terminal = await pipeline();
       // C7 — store in answer cache if eligible (first-turn only, opt-in, completed, PII filtered inside set).
-      if (deps.answerCache && !turn.hadConversation && (terminal.kind === 'answer' || terminal.kind === 'handoff')) {
+      if (
+        deps.answerCache &&
+        !turn.hadConversation &&
+        (terminal.kind === 'answer' || terminal.kind === 'handoff')
+      ) {
         const cachePolicy =
           (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
           (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;

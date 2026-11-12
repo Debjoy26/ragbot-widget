@@ -25,13 +25,20 @@ import type { JobHandler } from '../runtime.js';
 export interface WarmDeps {
   // Optional providers/caches — injected in tests, omitted in production smoke.
   readonly embedding?: {
-    embed(texts: readonly string[], opts: { taskType: 'query' | 'document'; signal?: AbortSignal }): Promise<{ vectors: number[][] }>;
+    embed(
+      texts: readonly string[],
+      opts: { taskType: 'query' | 'document'; signal?: AbortSignal },
+    ): Promise<{ vectors: number[][] }>;
     model?: string;
     dimensions?: number;
   };
   readonly retrieval?: {
     embedQuery?(text: string, signal: AbortSignal): Promise<{ vector: readonly number[] }>;
-    match?(botId: string, vector: readonly number[], signal: AbortSignal): Promise<readonly { chunk_id: string; document_version_id: string; similarity: number }[]>;
+    match?(
+      botId: string,
+      vector: readonly number[],
+      signal: AbortSignal,
+    ): Promise<readonly { chunk_id: string; document_version_id: string; similarity: number }[]>;
   };
   readonly fetcher?: {
     // Fetch suggested questions for a bot; injected for tests.
@@ -71,7 +78,11 @@ export function createWarmAnswerCacheHandler(deps: WarmDeps = {}): JobHandler {
         // For environments where suggested_questions is not reachable via get_chat_context,
         // the handler still completes (nothing to warm).
         try {
-          const rows = await ctx.db.rpc<unknown>('get_warm_suggested_questions', { p_bot_id: botId }, signal);
+          const rows = await ctx.db.rpc<unknown>(
+            'get_warm_suggested_questions',
+            { p_bot_id: botId },
+            signal,
+          );
           if (Array.isArray(rows)) {
             const flat: string[] = [];
             for (const r of rows) {
@@ -79,7 +90,11 @@ export function createWarmAnswerCacheHandler(deps: WarmDeps = {}): JobHandler {
               else if (r && typeof r === 'object' && 'question' in (r as Record<string, unknown>)) {
                 const q = (r as Record<string, unknown>)['question'];
                 if (typeof q === 'string') flat.push(q);
-              } else if (r && typeof r === 'object' && 'suggested_questions' in (r as Record<string, unknown>)) {
+              } else if (
+                r &&
+                typeof r === 'object' &&
+                'suggested_questions' in (r as Record<string, unknown>)
+              ) {
                 const qs = (r as Record<string, unknown>)['suggested_questions'];
                 if (Array.isArray(qs)) for (const q of qs) if (typeof q === 'string') flat.push(q);
               }
@@ -101,9 +116,16 @@ export function createWarmAnswerCacheHandler(deps: WarmDeps = {}): JobHandler {
     }
 
     // Deduplicate and cap (public_bot_config suggests max 6).
-    const uniq = [...new Set(suggested.map((q) => q.trim()).filter((q) => q.length > 0))].slice(0, 6);
+    const uniq = [...new Set(suggested.map((q) => q.trim()).filter((q) => q.length > 0))].slice(
+      0,
+      6,
+    );
 
-    ctx.log.info('warm_start', { bot_id: botId, corpus_version: corpusVersion, question_count: uniq.length });
+    ctx.log.info('warm_start', {
+      bot_id: botId,
+      corpus_version: corpusVersion,
+      question_count: uniq.length,
+    });
 
     // 2. For each question, best-effort warm each cache layer.
     // We do not fail the job on a single question failure; we log and continue.

@@ -277,7 +277,8 @@ export class AnswerCache {
     if (typeof botId !== 'string' || botId.length === 0) return false;
     if (typeof corpusVersion !== 'number' || !Number.isFinite(corpusVersion)) return false;
     if (typeof settingsVersion !== 'number' || !Number.isFinite(settingsVersion)) return false;
-    if (typeof promptTemplateVersion !== 'string' || promptTemplateVersion.length === 0) return false;
+    if (typeof promptTemplateVersion !== 'string' || promptTemplateVersion.length === 0)
+      return false;
     if (typeof chatModel !== 'string' || chatModel.length === 0) return false;
     return true;
   }
@@ -293,7 +294,9 @@ export class AnswerCache {
     language: string,
     rawQuestion: string,
   ): { entry: L1Entry; keyHash: string } | undefined {
-    if (!this.#validateIds(botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel)) {
+    if (
+      !this.#validateIds(botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel)
+    ) {
       return undefined;
     }
     const normalised = normalizeQuestion(rawQuestion);
@@ -347,11 +350,21 @@ export class AnswerCache {
       readonly isFirstTurn: boolean;
       readonly cachePolicy?: unknown;
     },
-  ): { answerText: string; sourceRefs: readonly AnswerSourceRef[]; handoffReason: string | null } | undefined {
+  ):
+    | { answerText: string; sourceRefs: readonly AnswerSourceRef[]; handoffReason: string | null }
+    | undefined {
     if (!isAnswerCacheEnabled(options.cachePolicy)) return undefined;
     if (!options.isFirstTurn) return undefined;
     // Moderation/rate limits still run outside; cache does not bypass them.
-    const found = this.#getEntry(botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel, language, rawQuestion);
+    const found = this.#getEntry(
+      botId,
+      corpusVersion,
+      settingsVersion,
+      promptTemplateVersion,
+      chatModel,
+      language,
+      rawQuestion,
+    );
     if (found === undefined) return undefined;
     this.#promote(found.keyHash, found.entry);
     return {
@@ -377,10 +390,22 @@ export class AnswerCache {
       readonly cachePolicy?: unknown;
       readonly areDocsActive?: (ids: readonly string[]) => Promise<boolean>;
     },
-  ): Promise<{ answerText: string; sourceRefs: readonly AnswerSourceRef[]; handoffReason: string | null } | undefined> {
+  ): Promise<
+    | { answerText: string; sourceRefs: readonly AnswerSourceRef[]; handoffReason: string | null }
+    | undefined
+  > {
     if (!isAnswerCacheEnabled(options.cachePolicy)) return undefined;
     if (!options.isFirstTurn) return undefined;
-    const l1 = this.getL1(botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel, language, rawQuestion, options);
+    const l1 = this.getL1(
+      botId,
+      corpusVersion,
+      settingsVersion,
+      promptTemplateVersion,
+      chatModel,
+      language,
+      rawQuestion,
+      options,
+    );
     if (l1 !== undefined) {
       // Even on L1 hit, re-check cited docs if checker provided.
       if (options.areDocsActive && l1.sourceRefs.length > 0) {
@@ -389,7 +414,13 @@ export class AnswerCache {
         if (!active) {
           const normalised = normalizeQuestion(rawQuestion);
           const keyHash = answerCacheKeyHash({
-            botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel, language, normalisedQuestion: normalised,
+            botId,
+            corpusVersion,
+            settingsVersion,
+            promptTemplateVersion,
+            chatModel,
+            language,
+            normalisedQuestion: normalised,
           });
           this.#map.delete(keyHash);
           if (this.#l2) await this.#l2.delete(keyHash).catch(() => undefined);
@@ -401,7 +432,13 @@ export class AnswerCache {
     if (this.#l2 === undefined) return undefined;
     const normalised = normalizeQuestion(rawQuestion);
     const keyHash = answerCacheKeyHash({
-      botId, corpusVersion, settingsVersion, promptTemplateVersion, chatModel, language, normalisedQuestion: normalised,
+      botId,
+      corpusVersion,
+      settingsVersion,
+      promptTemplateVersion,
+      chatModel,
+      language,
+      normalisedQuestion: normalised,
     });
     const rec = await this.#l2.get(keyHash);
     if (rec === null) return undefined;
@@ -471,7 +508,15 @@ export class AnswerCache {
   // Returns key hash or undefined when not cached.
   setL1(params: AnswerCacheSetParams): string | undefined {
     if (!isAnswerCacheEnabled(params.cachePolicy)) return undefined;
-    if (!this.#validateIds(params.botId, params.corpusVersion, params.settingsVersion, params.promptTemplateVersion, params.chatModel)) {
+    if (
+      !this.#validateIds(
+        params.botId,
+        params.corpusVersion,
+        params.settingsVersion,
+        params.promptTemplateVersion,
+        params.chatModel,
+      )
+    ) {
       return undefined;
     }
     // Rule 3: only cacheable answers.
