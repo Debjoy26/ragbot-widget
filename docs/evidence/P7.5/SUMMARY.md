@@ -1,6 +1,6 @@
-# P7.5 — Caching & latency — evidence (in progress, phase/p7.5@2e2d62b)
+# P7.5 — Caching & latency — evidence (on `main` @ `af3c1c3`, pushed)
 
-> Base `7febe1d` (`main` after P0-D1), branch `phase/p7.5` @ `2e2d62b` (standalone cache services, 140 tests). Not yet integrated L2 Postgres nor answer-cache chat wiring. Updated 2026-11-12.
+> Base `7febe1d` (`main` after P0-D1). Commits `2e2d62b` → `9b63f2b` → `de6dd5f` → `c5008a3` → `62c43db` → `b089ca0` → `13a95e8` → `d297381` → `3782631` → `af3c1c3` on `main`, pushed to `origin/main`. Migrations `014_p75_cache_policy.sql` and `015_p75_cache_l2.sql` local only (hosted still at 013). Full suite not re-run on the final `af3c1c3` tree; not yet accepted at gate. Updated 2026-11-13. The unit-test and static-check counts below were recorded at `phase/p7.5@2e2d62b` and were not re-run on the final tree.
 
 ## Scope (plan.md P7.5)
 
@@ -29,7 +29,9 @@
 - `npm run lint` exit 0 (`--max-warnings 0`)
 - `npx prettier --check` on owned files pass (after --write); full `npm run format:check` on Windows shows CRLF warnings (LF expected on Linux, same as P7)
 
-## Integration so far (phase/p7.5)
+## Integration — recorded at `phase/p7.5@2e2d62b` (superseded on `main`)
+
+> The wiring below was the state at `2e2d62b`. On `main` @ `af3c1c3` the remaining items landed: `de6dd5f` (C6/C7 L1 + `014`), `c5008a3` (C5 L1), `d297381` (`015` L2 RPCs + L1+L2 wiring, `schema_version` 15), `3782631` (integration fixes), `af3c1c3` (C2 version-gated). Full suite not re-run on the final tree.
 
 - `api/src/services/chat.ts:520` — `embedQuery` checks `embeddingCache.getL1` before `retrieval.embedQuery`, populates on success, hit returns `{vector, inputTokens:null}` with no usage row (cost 0).
 - `api/src/services/conversations.ts:160` — `loadContext` checks `configCache.get(botId)` before `get_chat_context` RPC, sets after fetch (TTL-only, no cheap version fetch yet).
@@ -42,9 +44,9 @@
 - `answer_cache` opt-in, first-turn only, PII never written, contact re-read from `public_bot_config` at serve time, cited `document_version_id` re-checked active on read + purge.
 - Secrets never in cache keys/values (hashes only).
 
-## Next
+## Next (as of `main` @ `af3c1c3`)
 
-- Migration `014` for L2 RPCs + `cache_policy` in `get_chat_context` settings jsonb.
-- Wire `moderationCache`, `retrievalCache`, `answerCache` into `chat.ts` pipeline + `conversations` versionFetcher for C2 immediate bust.
+- Owner decision on applying migrations `014`–`015` to the hosted dev project (still at 013).
+- Rerun the full suite on the final tree (`npm run build`, `lint`, `format:check`, `typecheck`, `make db-local`, `db-test`, `db-lint`, `db-race`, `npm test`, `test:integration`, `api-smoke`, `worker-dist-check`, `test-make`, secret scan, local advisors) and record results before gate.
 - `C3` widget edge, `C1` provider `cache_control`, pooling, measurement `p50/p95 TTFT` (P11).
 - Full suite on Node `24.22.2` Linux with local Supabase stack (`make db-local`, `db-test` 26 files, `db-race` 51 orderings) — same as P7 gates.
