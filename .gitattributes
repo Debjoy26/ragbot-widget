@@ -1,0 +1,4 @@
+# Normalize line endings so gates behave the same on every OS.
+# LF in the repo, LF on checkout: `format:check` (prettier, endOfLine lf)
+# must not depend on the developer's platform or core.autocrlf setting.
+* text=auto eol=lf

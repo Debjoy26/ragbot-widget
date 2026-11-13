@@ -26,7 +26,7 @@
     "dev:api": "npm run dev -w api",
     "dev:worker": "npm run dev -w worker",
     "dev:widget": "npm run dev -w widget",
-    "clean": "tsc -b --clean && rm -rf widget/dist",
+    "clean": "tsc -b --clean && node -e \"require('node:fs').rmSync('widget/dist',{recursive:true,force:true})\"",
     "test:db": "supabase test db",
     "secret-scan": "bash scripts/secret-scan.sh",
     "secret-scan:self-test": "bash scripts/secret-scan.sh --self-test"
