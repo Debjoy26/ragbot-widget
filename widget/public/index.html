@@ -4,9 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ragbot widget — demo host page</title>
+    <!-- Demo only: point data-* at a local stack or dev project. -->
+    <!--
+    <script
+      src="http://localhost:3000/v1.0.0/widget.js"
+      data-bot-slug="website-support"
+      data-api-url="http://localhost:3001"
+      data-supabase-url="http://localhost:54321"
+      data-supabase-publishable-key="sb_publishable_REPLACE_ME"
+      defer
+    ></script>
+    -->
   </head>
   <body>
     <h1>Demo host page</h1>
-    <!-- Demo only. The embed snippet is finalised in P8. -->
+    <p>
+      This page exercises the P8 embed contract (<code>data-bot-slug</code>,
+      <code>data-api-url</code>, <code>data-supabase-url</code>,
+      <code>data-supabase-publishable-key</code>). Widget state machine and ContactCard behaviour
+      are covered by <code>tests/unit/widget/</code>.
+    </p>
   </body>
 </html>

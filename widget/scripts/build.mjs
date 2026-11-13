@@ -1,11 +1,14 @@
 // Bundles the widget into one immutable, versioned IIFE: dist/v<version>/widget.js
 import { build, context } from 'esbuild';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
+// P8-D1: `new URL(...).pathname` yields `/D:/...` on Windows, which esbuild
+// cannot resolve. Convert file URLs to OS paths instead.
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const options = {
-  entryPoints: [new URL('../src/widget.ts', import.meta.url).pathname],
-  outfile: new URL(`../dist/v${pkg.version}/widget.js`, import.meta.url).pathname,
+  entryPoints: [fileURLToPath(new URL('../src/widget.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL(`../dist/v${pkg.version}/widget.js`, import.meta.url)),
   bundle: true,
   format: 'iife',
   platform: 'browser',

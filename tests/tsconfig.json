@@ -6,7 +6,12 @@
     "noEmit": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    // Type-level only: widget browser-safe modules are unit-tested from this
+    // node program via relative imports (P8). Runtime DOM stays out of unit
+    // tests (ui.ts and the widget entry boot are covered by Playwright E2E);
+    // vitest does not typecheck, so this changes no runtime behaviour.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": [".", "../vitest.config.ts", "../playwright.config.ts"]
 }
