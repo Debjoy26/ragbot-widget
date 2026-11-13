@@ -20,7 +20,7 @@ const SNIPPET = (extraCss = '') => `
   data-bot-slug="website-support"
   data-api-url="${API}"
   data-supabase-url="${SUPABASE}"
-  data-supabase-publishable-key="sb_publishable_0123456789abcdef"
+  data-supabase-publishable-key="sb_publishable_TEST_KEY_FOR_TESTS"
   defer></script>
 </body></html>`;
 

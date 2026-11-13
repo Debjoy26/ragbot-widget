@@ -39,7 +39,7 @@ describe('parseEmbedOptions', () => {
       'data-bot-slug': 'website-support',
       'data-api-url': 'https://client-a-api.example.com',
       'data-supabase-url': 'https://xyz.supabase.co',
-      'data-supabase-publishable-key': 'sb_publishable_0123456789abcdef',
+      'data-supabase-publishable-key': 'sb_publishable_TEST_KEY_FOR_TESTS',
     });
     expect(options.botSlug).toBe('website-support');
   });
@@ -50,7 +50,7 @@ describe('parseEmbedOptions', () => {
         'data-bot-slug': 'Website Support!',
         'data-api-url': 'https://x.example.com',
         'data-supabase-url': 'https://x.supabase.co',
-        'data-supabase-publishable-key': 'sb_publishable_0123456789abcdef',
+        'data-supabase-publishable-key': 'sb_publishable_TEST_KEY_FOR_TESTS',
       }),
     ).toThrow();
     expect(() =>
@@ -58,7 +58,7 @@ describe('parseEmbedOptions', () => {
         'data-bot-slug': 'website-support',
         'data-api-url': 'http://insecure.example.com',
         'data-supabase-url': 'https://x.supabase.co',
-        'data-supabase-publishable-key': 'sb_publishable_0123456789abcdef',
+        'data-supabase-publishable-key': 'sb_publishable_TEST_KEY_FOR_TESTS',
       }),
     ).toThrow();
   });
@@ -121,7 +121,7 @@ describe('loadPublicConfig', () => {
     }));
     const loaded = await loadPublicConfig({
       supabaseUrl: 'https://xyz.supabase.co',
-      publishableKey: 'sb_publishable_0123456789abcdef',
+      publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
       botSlug: 'website-support',
       fetchFn: first,
       storage,
@@ -137,7 +137,7 @@ describe('loadPublicConfig', () => {
     }));
     const again = await loadPublicConfig({
       supabaseUrl: 'https://xyz.supabase.co',
-      publishableKey: 'sb_publishable_0123456789abcdef',
+      publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
       botSlug: 'website-support',
       fetchFn: second,
       storage,
@@ -160,7 +160,7 @@ describe('loadPublicConfig', () => {
     });
     const stale = await loadPublicConfig({
       supabaseUrl: 'https://xyz.supabase.co',
-      publishableKey: 'sb_publishable_0123456789abcdef',
+      publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
       botSlug: 'website-support',
       fetchFn: failing,
       storage,
@@ -170,7 +170,7 @@ describe('loadPublicConfig', () => {
     await expect(
       loadPublicConfig({
         supabaseUrl: 'https://xyz.supabase.co',
-        publishableKey: 'sb_publishable_0123456789abcdef',
+        publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
         botSlug: 'other-bot',
         fetchFn: failing,
         storage: undefined,
@@ -188,7 +188,7 @@ describe('loadPublicConfig', () => {
     await expect(
       loadPublicConfig({
         supabaseUrl: 'https://xyz.supabase.co',
-        publishableKey: 'sb_publishable_0123456789abcdef',
+        publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
         botSlug: 'website-support',
         fetchFn,
         storage: undefined,
@@ -211,7 +211,7 @@ describe('loadPublicConfig', () => {
     }));
     const loaded = await loadPublicConfig({
       supabaseUrl: 'https://xyz.supabase.co',
-      publishableKey: 'sb_publishable_0123456789abcdef',
+      publishableKey: 'sb_publishable_TEST_KEY_FOR_TESTS',
       botSlug: 'website-support',
       fetchFn,
       storage: throwing,

@@ -120,14 +120,14 @@ describe('streamChat', () => {
     await streamChat({
       apiUrl: 'https://api.example.com',
       token: 'tok',
-      idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',
+      idempotencyKey: 'test-idempotency-key',
       botSlug: 'website-support',
       conversationId: null,
       message: 'Hi',
       fetchFn,
       onEvent: (event) => void seen.push(event),
     });
-    expect(capturedHeaders['idempotency-key']).toBe('123e4567-e89b-42d3-a456-426614174000');
+    expect(capturedHeaders['idempotency-key']).toBe('test-idempotency-key');
     expect(capturedHeaders['authorization']).toBe('Bearer tok');
     expect(seen.map((e) => e.event)).toEqual(['meta', 'done']);
   });

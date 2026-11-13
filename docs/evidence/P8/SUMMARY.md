@@ -96,6 +96,12 @@ Evidence links: `docs/evidence/P7/SUMMARY.md`, `docs/evidence/P7/post-push.md`, 
 - Conversation-id persistence was write-never/read-only: `meta` now persists it (best-effort) and reset clears it.
 - Gates: unit 45 passed, E2E 5/5, `typecheck`/`lint`/widget build/`prettier` green on owned files.
 
+## P8-D6: secret-scan fixtures (2026-11-13)
+
+- `bash scripts/secret-scan.sh` (exit 1, 11 hits, all `named-secret` in P8 test fixtures): the realistic-looking `sb_publishable_0123456789abcdef` literal and a UUID idempotency-key literal next to key-ish names.
+- Fix: obviously-fake values that still exercise the length checks (`sb_publishable_TEST_KEY_FOR_TESTS`, `test-idempotency-key`) + the missed assertion updated. No test weakened (same validation paths, same assertions).
+- After: `secret-scan` exit 0, `--include-untracked` exit 0 (Git Bash; the Windows `bash.exe` WSL stub cannot run the script on this box), unit 45 + E2E 5 still green.
+
 ## Not done / open
 
 - E2E 5 passed on this box (Chromium headless-shell, Windows); rerun on the pinned toolchain before gate.
