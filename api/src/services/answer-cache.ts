@@ -374,8 +374,11 @@ export class AnswerCache {
     };
   }
 
-  // Async get that also checks L2 and the cited-docs-still-active rule (rule 5).
-  // `areDocsActive` checks that every document_version_id in sourceRefs is still active.
+  // Async get that also checks L2 and the cited-chunk-still-servable rule (rule 5).
+  // `areDocsActive` receives the cited chunk ids and must confirm each one is
+  // still servable (ready version, non-deleted public document). Corpus and
+  // settings versions are already pinned by the key; this catches deletions
+  // and disclosure changes inside the same corpus version.
   // If any check fails, the entry is purged and miss is returned.
   async get(
     botId: string,
@@ -407,9 +410,9 @@ export class AnswerCache {
       options,
     );
     if (l1 !== undefined) {
-      // Even on L1 hit, re-check cited docs if checker provided.
+      // Even on L1 hit, re-check cited chunks if checker provided.
       if (options.areDocsActive && l1.sourceRefs.length > 0) {
-        const ids = l1.sourceRefs.map((s) => s.document_version_id);
+        const ids = l1.sourceRefs.map((s) => s.chunk_id);
         const active = await options.areDocsActive(ids);
         if (!active) {
           const normalised = normalizeQuestion(rawQuestion);
@@ -458,9 +461,9 @@ export class AnswerCache {
       await this.#l2.delete(keyHash).catch(() => undefined);
       return undefined;
     }
-    // Rule 5: cited docs must still be active.
+    // Rule 5: cited chunks must still be servable.
     if (options.areDocsActive && rec.source_refs.length > 0) {
-      const ids = rec.source_refs.map((s) => s.document_version_id);
+      const ids = rec.source_refs.map((s) => s.chunk_id);
       const active = await options.areDocsActive(ids);
       if (!active) {
         this.#map.delete(keyHash);

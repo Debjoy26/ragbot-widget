@@ -81,11 +81,19 @@ export function createApp(
   const retrievalCache = createRetrievalCache({ l2: createRetrievalL2(db) });
   const answerCache = createAnswerCache({ l2: createAnswerL2(db) });
   const conversations = createConversations({ db, configCache });
+  // P7-D2: the answer-cache key must pin the real chat model, so a model
+  // change invalidates cached answers (invariant §4.15).
+  const chatModelKey =
+    ai.chatFallback === null
+      ? `${ai.chatPrimary.provider}/${ai.chatPrimary.model}`
+      : `${ai.chatPrimary.provider}/${ai.chatPrimary.model}|${ai.chatFallback.provider}/${ai.chatFallback.model}`;
   const chat = createChatService({
     config,
     conversations,
     limits,
     runs,
+    db,
+    chatModelKey,
     configCache,
     embeddingCache,
     moderationCache,
@@ -111,6 +119,7 @@ export function createApp(
       price: config.moderationPrice,
     }),
     moderationMode: config.ai.moderation.mode,
+    moderationModelKey: `${ai.moderation.provider}/${ai.moderation.model}/${config.ai.moderation.mode}`,
     embedding: ai.embedding,
   });
   registerChatRoutes(app, { auth, limits, runs, chat });

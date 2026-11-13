@@ -42,6 +42,7 @@ import type { AppConfig } from '../lib/config.js';
 import { raceAbort } from '../lib/abort.js';
 import { AppError, toAppError } from '../lib/errors.js';
 import { DbError } from '../lib/supabase.js';
+import type { Db } from '../lib/supabase.js';
 import type { SseWriter } from '../lib/sse.js';
 import type { VisitorContext } from './auth.js';
 import {
@@ -152,6 +153,19 @@ export interface ChatDeps {
   readonly moderationMode: ModerationMode;
   /** The query embedding provider; its model must equal the bot's embedding model. */
   readonly embedding: Pick<EmbeddingProvider, 'provider' | 'model' | 'dimensions'>;
+  /**
+   * Moderation identity for C6 cache keys, e.g. `gemini/gemini-2.5-flash-lite/llm_classifier`.
+   * A provider/model/mode change must invalidate cached verdicts. P7-D3.
+   */
+  readonly moderationModelKey: string;
+  /** Service-role DB for the answer-cache cited-docs recheck (rule 5). P7-D1. */
+  readonly db: Pick<Db, 'rpc'>;
+  /**
+   * Chat model identity for answer-cache keys, e.g.
+   * `gemini/gemini-2.5-flash-lite` (plus `|fallback...` when configured).
+   * Changing the model must invalidate cached answers. P7-D2.
+   */
+  readonly chatModelKey: string;
   // P7.5 caches — optional, bypass when not configured (kill switch handled inside each cache).
   readonly configCache?: ConfigCache<ChatContext>;
   readonly embeddingCache?: EmbeddingCache;
@@ -608,11 +622,11 @@ export function createChatService(deps: ChatDeps): ChatService {
         let verdict: 'allow' | 'block';
         try {
           // C6 — check L1+L2 moderation cache before provider (raw text never stored, only hash).
-          // L2 failure is a miss, never fatal.
+          // L2 failure is a miss, never fatal. Keyed by the real model+mode (P7-D3).
           if (deps.moderationCache) {
             let cached: 'allow' | 'block' | undefined;
             try {
-              cached = await deps.moderationCache.get('moderation', 'v1', turn.message);
+              cached = await deps.moderationCache.get(deps.moderationModelKey, 'v1', turn.message);
             } catch {
               cached = undefined;
             }
@@ -631,7 +645,12 @@ export function createChatService(deps: ChatDeps): ChatService {
               verdict = await raceAbort(moderation, modSignal);
               // Populate C6 L1+L2 on success (verdict allow/block).
               try {
-                await deps.moderationCache.set('moderation', 'v1', turn.message, verdict);
+                await deps.moderationCache.set(
+                  deps.moderationModelKey,
+                  'v1',
+                  turn.message,
+                  verdict,
+                );
               } catch {
                 // cache write failure never fails the request
               }
@@ -676,6 +695,30 @@ export function createChatService(deps: ChatDeps): ChatService {
 
       // C7 — answer cache check before retrieval/generation (first-turn only, opt-in, 9 rules).
       // Input moderation already ran via inputStage (safety rule 6), so cache hit may skip retrieval + generation.
+      // Rule 5: every cited chunk must still be active — `get_chunks_by_ids`
+      // only returns ready, non-deleted, public chunks, so a missing id means
+      // the entry is stale and must miss (invariant §4.15). A checker failure
+      // also misses (fail closed); the fresh pipeline then fails normally if
+      // the database is truly down.
+      const areDocsActive = async (ids: readonly string[]): Promise<boolean> => {
+        if (ids.length === 0) return true;
+        try {
+          const raw = await deps.db.rpc<unknown>('get_chunks_by_ids', {
+            p_chunk_ids: [...ids],
+          });
+          const rows = (Array.isArray(raw) ? raw : [raw]) as readonly unknown[];
+          const found = new Set<string>();
+          for (const row of rows) {
+            if (typeof row === 'object' && row !== null && !Array.isArray(row)) {
+              const id = (row as Readonly<Record<string, unknown>>)['chunk_id'];
+              if (typeof id === 'string') found.add(id);
+            }
+          }
+          return ids.every((id) => found.has(id));
+        } catch {
+          return false;
+        }
+      };
       if (deps.answerCache && !turn.hadConversation) {
         const cachePolicy =
           (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
@@ -685,13 +728,13 @@ export function createChatService(deps: ChatDeps): ChatService {
           turn.ctx.bot.corpus_version,
           turn.ctx.bot.settings_version,
           PROMPT_TEMPLATE_VERSION,
-          'chat', // placeholder model; real wiring uses chat provider model via deps.llm
+          deps.chatModelKey,
           turn.language ?? '',
           turn.message,
           {
             isFirstTurn: true,
             cachePolicy,
-            areDocsActive: async () => true, // L1 hit does not re-check; L2 re-check inside cache.get handles purge
+            areDocsActive,
           },
         );
         if (cached) {
@@ -1072,7 +1115,7 @@ export function createChatService(deps: ChatDeps): ChatService {
               corpusVersion: turn.ctx.bot.corpus_version,
               settingsVersion: turn.ctx.bot.settings_version,
               promptTemplateVersion: PROMPT_TEMPLATE_VERSION,
-              chatModel: 'chat',
+              chatModel: deps.chatModelKey,
               language: turn.language ?? '',
               rawQuestion: turn.message,
               answerText,

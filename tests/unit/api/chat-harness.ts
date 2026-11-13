@@ -130,6 +130,20 @@ export interface Options {
   attempts?: number;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   visitorBot?: string;
+  /** P7-D1/D2: wire a real AnswerCache into the chat service (default: none). */
+  answerCache?: import('../../../api/src/services/answer-cache.ts').AnswerCache;
+  /** P7-D2: chat model key for answer-cache keys (default: 'test/chat-model'). */
+  chatModelKey?: string;
+  /** P7-D3: wire a real ModerationCache (default: none) + model key. */
+  moderationCache?: import('../../../api/src/services/moderation-cache.ts').ModerationCache;
+  moderationModelKey?: string;
+  /**
+   * P7-D1: chunk ids that `get_chunks_by_ids` reports as active (ready, not
+   * deleted, public). Absent ids are treated as deleted. When undefined the
+   * RPC throws `unexpected rpc`, preserving the old strictness for tests that
+   * never reach the answer-cache check.
+   */
+  activeChunkIds?: readonly string[];
 }
 
 export function setup(options: Options = {}) {
@@ -181,6 +195,17 @@ export function setup(options: Options = {}) {
           return options.chunks ?? [chunkRow(CHUNK_A)];
         case 'get_conversation_history':
           return (options.history ?? []).slice(-Number(args['p_limit']));
+        case 'get_chunks_by_ids': {
+          if (options.activeChunkIds === undefined) {
+            throw new Error('fake db: unexpected rpc get_chunks_by_ids');
+          }
+          const wanted = args['p_chunk_ids'];
+          if (!Array.isArray(wanted)) throw new Error('fake db: p_chunk_ids must be an array');
+          const active = new Set(options.activeChunkIds);
+          return (wanted as unknown[])
+            .filter((id) => typeof id === 'string' && active.has(id))
+            .map((id) => ({ chunk_id: id, document_version_id: VERSION_A }));
+        }
         default:
           throw new Error(`fake db: unexpected rpc ${name}`);
       }
@@ -241,6 +266,11 @@ export function setup(options: Options = {}) {
     conversations,
     limits,
     runs,
+    db,
+    chatModelKey: options.chatModelKey ?? 'test/chat-model',
+    moderationModelKey: options.moderationModelKey ?? 'test/moderation-model',
+    ...(options.answerCache === undefined ? {} : { answerCache: options.answerCache }),
+    ...(options.moderationCache === undefined ? {} : { moderationCache: options.moderationCache }),
     retrieval: createRetrieval({
       db,
       embedding,
