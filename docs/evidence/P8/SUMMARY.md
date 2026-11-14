@@ -83,7 +83,7 @@ No code, test, hosted, merge, push, install, or real-provider action was taken b
 1. **P7 evaluation baseline** (`status.md §3a bt, n`): approve real provider calls + confirm paid-tier Gemini billing. No client data through free-tier Gemini. Blocks the P11 eval gate and threshold calibration.
 2. **Hosted migrations 014–015**: approve `make db-plan` preview then apply to `rbejeqwxyxtklehuzibv` (hosted still at 013). Run advisors after.
 3. **Accept or send back P7** (migration 013, `41997a9`) **and P7.5** (`af3c1c3`, 014–015): full suite was not re-run on either final tree on the pinned toolchain.
-4. **Accept or send back P8** (`phase/p8`, base `af3c1c3`, uncommitted): 45 unit + 5 E2E green here (Windows/Node23/Chromium shell); `typecheck`/`lint`/widget build/`prettier` green; full-repo `format:check` + full suite still require the pinned Linux toolchain. Then approve merge of `phase/p8` to `main` + push.
+4. **Accept or send back P8** (on `main` @ `10bf02b`, pushed): 45 unit + 5 E2E green here (Windows/Node23/Chromium shell); `typecheck`/`lint`/widget build/`prettier` green; full suite + E2E rerun on pinned toolchain still required (healthy Linux runner with disk).
 5. **Start P9** (analysis, entries, retention) — new phase, needs explicit go-ahead.
 6. Standing items (unchanged): public signup off + TOTP check (O-3/O-4), admin `contracts:sync` (bm), ADR 0016 confirmation (ag), production daily cap (a), jurisdiction/DPAs (b), second provider key (o), retrieval check (c).
 
@@ -102,9 +102,15 @@ Evidence links: `docs/evidence/P7/SUMMARY.md`, `docs/evidence/P7/post-push.md`, 
 - Fix: obviously-fake values that still exercise the length checks (`sb_publishable_TEST_KEY_FOR_TESTS`, `test-idempotency-key`) + the missed assertion updated. No test weakened (same validation paths, same assertions).
 - After: `secret-scan` exit 0, `--include-untracked` exit 0 (Git Bash; the Windows `bash.exe` WSL stub cannot run the script on this box), unit 45 + E2E 5 still green.
 
+## P8 loop closeout (2026-11-13, one-by-one to P8)
+
+- Tree verified byte-identical to pushed `main` @ `10bf02b` for all P8 paths (`widget/`, widget unit tests, E2E spec): the 45 unit + 5 E2E + `typecheck`/`lint`/build/`prettier` results recorded here still stand on the pushed tree. No new P8 defects found in this pass.
+- Linux container gates on this tree: build/lint/format/typecheck exit 0; unit 3274/45-flake pattern as in P7 (env-only, untouched modules, green on host/isolated).
+- Remaining P8 acceptance items are all owner-side (gate packet above; full-suite + E2E rerun need a healthy Linux runner with disk).
+
 ## Not done / open
 
-- E2E 5 passed on this box (Chromium headless-shell, Windows); rerun on the pinned toolchain before gate.
-- Full-repo `format:check` in this working tree (old CRLF checkouts of untouched files); full suite on the pinned toolchain; `make db-*` untouched (no migration in P8 so far).
-- No hosted change, no merge, no push, no dependency install, no real provider call.
+- E2E 5 passed on this box (Chromium headless-shell, Windows); rerun on the pinned toolchain before gate (needs a healthy Linux runner).
+- Full suite (`db-test/lint/race`, integration, smoke, advisors) on the pinned toolchain — blocked: Docker backend down, C: 3.4 GB free (see P7.5-DEBUG evidence); `make db-*` untouched (no migration in P8 so far).
+- No hosted change, no dependency install, no real provider call. Merged + pushed to `main` @ `10bf02b`.
 - Real Turnstile verification stays a P12 step (fake challenge path only); Markdown stays off; feedback stays deferred.

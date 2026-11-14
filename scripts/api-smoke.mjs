@@ -70,6 +70,9 @@ function localStack() {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 60_000,
+      // `npx` on Windows is a .cmd shim that cannot be executed without a
+      // shell (ENOENT). Same command everywhere else.
+      shell: process.platform === 'win32',
     });
   } catch {
     fatal('the local Supabase stack is not running (npm run db:start)');

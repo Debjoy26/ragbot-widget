@@ -32,6 +32,9 @@ export function getLocalStack(): LocalStack {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 60_000,
+      // `npx` on Windows is a .cmd shim that cannot be executed without a
+      // shell (ENOENT). Same command everywhere else.
+      shell: process.platform === 'win32',
     });
   } catch {
     throw new Error('local Supabase stack is not running (start it with: npm run db:start)');
@@ -85,6 +88,9 @@ export function getLocalPrivilegedKey(): string {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 60_000,
+      // `npx` on Windows is a .cmd shim that cannot be executed without a
+      // shell (ENOENT). Same command everywhere else.
+      shell: process.platform === 'win32',
     });
   } catch {
     throw new Error('local Supabase stack is not running (start it with: npm run db:start)');

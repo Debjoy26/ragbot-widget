@@ -66,3 +66,20 @@
   `prettier --check` green on touched files.
 - Not run here: full suite on the pinned Linux toolchain, `make db-*`,
   E2E/browser for these paths (service-level, covered by unit tests).
+
+## Linux gate run (2026-11-13, `node:24.22.2-bookworm-slim` container)
+
+- Static gates, all exit 0: `npm run build`, `npm run lint`, `npm run format:check`, `npm run typecheck`.
+  - `format:check` initially failed on 173 files — root cause: the working tree was checked out CRLF (pre-`.gitattributes` checkout) while blobs are LF. Fix verified: committed `.gitattributes` (`* text=auto eol=lf`) + `prettier --write` normalized the tree; `git add -A` proved zero content diff vs HEAD (blobs were always LF + prettier-clean). Lesson: any fresh checkout is now green by construction.
+- Unit (`npm test`, container): 3274 passed / 45 failed / 3319 total, 7 files. Every failure is a wall-clock/timeout test, in modules this debug cycle did not touch (delink `BOUND_MS`, chunking `LIMIT_MS`, PDF child-process 5 s timeouts, esbuild browser-bundle timeout). Same files pass on the Windows host and in isolation. Cause: resource contention in the Docker Desktop VM. No assertion failure indicates a code regression; no test was weakened. The 4 new P7-D tests pass here.
+- Static review (this cycle): runs guards, no-switch-after-first-token gate (`released: out.deltas > 0`), citations allowlist against evidence keys — sound, covered by suites. No new P7 findings beyond D1/D2/D3.
+- **DB stack: UNBLOCKED then run.** The daemon recovered (`docker info` 29.9.3) with ~7.8 GB host-free. `supabase start` initially failed on corrupted images (`libselinux.so.1: file too short` — the earlier disk-full event); re-pulled the two affected images and the stack came up. `analytics` was disabled via a TEMPORARY `supabase/config.toml` edit (log UI only, irrelevant to every gate; to be reverted before any commit).
+- `make db-local` (`db reset`, 001–015 + seed): exit 0. **`supabase test db`: 26 files, 3348 passed.** **`db lint --local`: no schema errors.** **`scripts/race-db.sh` (in-container, needs a local docker socket): 51 orderings, 0 problems, 0 warnings.** `test-make-guards.sh`: 111 passed / 5 failed on host (all 5 need the `make` binary — absent on Windows); **116 / 116 in-container.** **`db advisors`: no issues found.**
+- Integration (`npm run test:integration`, host): 22 passed / 13 failed / 359 skipped, 767 total. Itemized, all environmental — no code regression indicated:
+  - `getLocalStack` hook timeouts, `spawnSync docker ENAMETOOLONG`, EPERM pool kills: I/O-starved box + Windows process quirks.
+  - Worker SIGTERM graceful-shutdown assertions: Windows has no POSIX graceful SIGTERM — unwinnable here by OS design.
+  - PDF suites collapse to `INDEXING_FAILED` (expected `OCR_REQUIRED`/`FILE_UNSUPPORTED`): the extract child dies on Windows (`EXIT_9`, pre-existing), every attempt hits `ExtractSpawnError` → retries exhaust → generic failure code.
+  - `api-smoke.mjs`: 33 passed, 2 failed — both are the SIGTERM drain/exit checks (same Windows cause).
+  - `worker-dist-check.mjs`: blocked on host Node 23 (`ERR_UNKNOWN_FILE_EXTENSION` for a `.ts` fixture; needs Node ≥ 24 type-stripping).
+- Two Windows-only harness fixes were required to get this far (same bug class, test seam only, no product change, uncommitted): `tests/integration/helpers/local-stack.ts` and `scripts/api-smoke.mjs` now pass `shell: process.platform === 'win32'` to `execFileSync('npx', …)` — bare `npx` is a `.cmd` shim that cannot spawn without a shell (ENOENT).
+- **Still owner-blocked regardless:** P7 evaluation-set baseline (real provider calls + paid-tier Gemini billing confirmation); full green integration on a healthy Linux runner.
