@@ -47,6 +47,7 @@ import {
   type ChatRequest,
   type ContactBlock,
   type CreateEntryRequest,
+  type CreateEntryResponse,
   type CreateSessionRequest,
   type CreateSessionResponse,
   type ConversationHistoryRequest,
@@ -620,6 +621,10 @@ export const createEntryRequestSchema = z.strictObject({
   consent: z.literal(true),
 });
 
+export const createEntryResponseSchema = z.strictObject({
+  entry_id: z.uuid(),
+});
+
 export type EntryPayloadSchema = z.ZodObject<z.ZodRawShape>;
 
 export type EntryValidationResult =
@@ -631,21 +636,44 @@ export type EntryValidationResult =
       readonly fields: readonly string[];
     };
 
+/**
+ * B-10: publishable metadata for one approved form. The admin panel reads it
+ * through `contracts:sync` (code, not the database): field labels for display
+ * and the names of fields holding personal data (W-13 minimisation).
+ */
+export interface EntrySchemaMeta {
+  /** Human-readable field labels, keyed by field name. */
+  readonly labels?: Readonly<Record<string, string>>;
+  /** Field names holding personal data. */
+  readonly piiFields?: readonly string[];
+}
+
+export interface EntrySchemaDescription {
+  readonly schema_key: string;
+  readonly fields: readonly string[];
+  readonly labels: Readonly<Record<string, string>>;
+  readonly piiFields: readonly string[];
+}
+
 export interface EntrySchemaRegistry {
-  /** Registers a form schema; it is forced strict so unknown fields are rejected. Throws on a bad or duplicate key. */
-  register(schemaKey: string, schema: EntryPayloadSchema): void;
+  /** Register a form schema; it is forced strict so unknown fields are rejected. Throws on a bad or duplicate key. */
+  register(schemaKey: string, schema: EntryPayloadSchema, meta?: EntrySchemaMeta): void;
   has(schemaKey: string): boolean;
   keys(): readonly string[];
   validate(schemaKey: string, payload: unknown): EntryValidationResult;
+  /** B-10: metadata for every registered form (labels + PII fields, no values). */
+  describe(): readonly EntrySchemaDescription[];
 }
 
 export function createEntrySchemaRegistry(): EntrySchemaRegistry {
   const schemas = new Map<string, z.ZodObject<z.ZodRawShape>>();
+  const metas = new Map<string, EntrySchemaMeta>();
   return {
-    register(schemaKey, schema) {
+    register(schemaKey, schema, meta) {
       if (!SCHEMA_KEY_PATTERN.test(schemaKey)) throw new Error('invalid schema_key');
       if (schemas.has(schemaKey)) throw new Error('schema_key already registered');
       schemas.set(schemaKey, z.strictObject(schema.shape));
+      if (meta !== undefined) metas.set(schemaKey, meta);
     },
     has: (schemaKey) => schemas.has(schemaKey),
     keys: () => [...schemas.keys()],
@@ -659,6 +687,17 @@ export function createEntrySchemaRegistry(): EntrySchemaRegistry {
         reason: 'invalid_payload',
         fields: result.error.issues.map((i) => i.path.join('.')),
       };
+    },
+    describe() {
+      return [...schemas.entries()].map(([schema_key, schema]) => {
+        const meta = metas.get(schema_key);
+        return {
+          schema_key,
+          fields: Object.keys(schema.shape),
+          labels: meta?.labels ?? {},
+          piiFields: meta?.piiFields ?? [],
+        };
+      });
     },
   };
 }
@@ -882,6 +921,7 @@ export type SchemaConformance = [
   AssertAssignable<z.output<typeof createSessionResponseSchema>, CreateSessionResponse>,
   AssertAssignable<z.output<typeof botSettingsPatchSchema>, BotSettingsPatch>,
   AssertAssignable<z.output<typeof createEntryRequestSchema>, CreateEntryRequest>,
+  AssertAssignable<z.output<typeof createEntryResponseSchema>, CreateEntryResponse>,
   AssertAssignable<z.output<typeof conversationHistoryRequestSchema>, ConversationHistoryRequest>,
   AssertAssignable<z.output<typeof conversationHistoryResponseSchema>, ConversationHistoryResponse>,
   AssertAssignable<z.output<typeof idempotentReplayResponseSchema>, IdempotentReplayResponse>,

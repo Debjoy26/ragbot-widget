@@ -189,7 +189,7 @@ select throws_ok($q$select public.record_request_usage('b0000001-0000-4000-8000-
 select throws_ok($q$select public.get_conversation_history('b0000001-0000-4000-8000-000000000260', 'a0000001-0000-4000-8000-000000000260', 'c0000005-0000-4000-8000-000000000260', null, 100)$q$, '42501', null, 'authenticated: get_conversation_history -> permission denied');
 reset role;
 -- ===== schema_version =====
-select is(public.schema_version(), 15, 'schema_version: 14');
+select is(public.schema_version(), 16, 'schema_version: 16');
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the history');
 select ok(has_function_privilege('authenticated', 'public.schema_version()', 'EXECUTE') and not has_function_privilege('anon', 'public.schema_version()', 'EXECUTE'), 'schema_version: the grants of 010 are kept (authenticated yes, anon no)');
 -- ===== message_sources: page_number and section =====

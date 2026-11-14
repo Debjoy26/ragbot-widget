@@ -177,4 +177,23 @@ describe('data-entry schema registry', () => {
       false,
     );
   });
+
+  it('publishes field labels and PII fields per schema key (B-10), with no values', () => {
+    const registry = createEntrySchemaRegistry();
+    expect(registry.describe()).toEqual([]);
+    registry.register('callback_request', z.object({ name: z.string(), phone: z.string() }), {
+      labels: { name: 'Full name', phone: 'Phone number' },
+      piiFields: ['name', 'phone'],
+    });
+    registry.register('newsletter_opt_in', z.object({ email: z.string() }));
+    expect(registry.describe()).toEqual([
+      {
+        schema_key: 'callback_request',
+        fields: ['name', 'phone'],
+        labels: { name: 'Full name', phone: 'Phone number' },
+        piiFields: ['name', 'phone'],
+      },
+      { schema_key: 'newsletter_opt_in', fields: ['email'], labels: {}, piiFields: [] },
+    ]);
+  });
 });

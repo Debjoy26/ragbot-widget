@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
+import { entrySchemaRegistry } from '@ragbot/shared';
 import { buildAiProviders } from './lib/ai.js';
 import { loadConfig, type AppConfig } from './lib/config.js';
 import { createDb, type Db } from './lib/supabase.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerConversationRoutes } from './routes/conversations.js';
+import { registerEntriesRoutes } from './routes/entries.js';
 import { buildServer } from './server.js';
 import { createVisitorAuth, type VisitorAuth } from './services/auth.js';
 import {
@@ -129,5 +131,8 @@ export function createApp(
     conversations,
     pageSize: config.historyPageSize,
   });
+  // Entries (P9-T1). The shared registry is empty until client forms are
+  // explicitly registered: unknown schema_keys are refused (fail closed).
+  registerEntriesRoutes(app, { auth, db, registry: entrySchemaRegistry });
   return { app, config, db, auth, limits, runs, turnstile };
 }
