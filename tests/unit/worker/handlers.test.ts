@@ -1,9 +1,10 @@
 import { VECTOR_DIMENSIONS, type EmbeddingConfig, type EmbeddingProvider } from '@ragbot/shared';
+import type { ChatProvider, ProviderConfig } from '@ragbot/shared';
 import { describe, expect, it } from 'vitest';
 import { buildHandlers } from '../../../worker/src/handlers.ts';
 import type { WorkerConfig } from '../../../worker/src/lib/config.ts';
 
-// P6-INDEX: the handler registry. Labelled fakes only; nothing here calls a provider.
+// P6-INDEX + P9-T2: the handler registry. Labelled fakes only; nothing here calls a provider.
 
 function embeddingConfig(over: Partial<EmbeddingConfig> = {}): EmbeddingConfig {
   return {
@@ -17,8 +18,18 @@ function embeddingConfig(over: Partial<EmbeddingConfig> = {}): EmbeddingConfig {
   };
 }
 
+function analysisConfig(): ProviderConfig {
+  return {
+    role: 'analysis',
+    provider: 'openai_compatible',
+    model: 'fake-analysis-model',
+    apiKey: `fake-key-${Math.random().toString(16).slice(2)}`,
+    baseUrl: 'http://127.0.0.1:9',
+  };
+}
+
 function config(embedding: EmbeddingConfig): WorkerConfig {
-  return { ai: { embedding } } as unknown as WorkerConfig;
+  return { ai: { embedding, analysis: analysisConfig() } } as unknown as WorkerConfig;
 }
 
 const fakeProvider: EmbeddingProvider = {
@@ -28,17 +39,37 @@ const fakeProvider: EmbeddingProvider = {
   embed: () => Promise.reject(new Error('the fake provider must not be called here')),
 };
 
+const fakeChat: ChatProvider = {
+  provider: 'openai_compatible',
+  model: 'fake-analysis-model',
+  stream: () => {
+    throw new Error('the fake provider must not be called here');
+  },
+};
+
 describe('buildHandlers', () => {
-  it('registers exactly index_document and cleanup', () => {
-    const handlers = buildHandlers(config(embeddingConfig()), { embeddings: fakeProvider });
-    expect(Object.keys(handlers).sort()).toEqual(['cleanup', 'index_document']);
+  it('registers exactly index_document, analyze_conversation and cleanup', () => {
+    const handlers = buildHandlers(config(embeddingConfig()), {
+      embeddings: fakeProvider,
+      analysis: fakeChat,
+    });
+    expect(Object.keys(handlers).sort()).toEqual([
+      'analyze_conversation',
+      'cleanup',
+      'index_document',
+    ]);
     expect(handlers.index_document).toBeTypeOf('function');
+    expect(handlers.analyze_conversation).toBeTypeOf('function');
     expect(handlers.cleanup).toBeTypeOf('function');
   });
 
-  it('builds the adapter from the worker AI config when none is injected', () => {
+  it('builds the adapters from the worker AI config when none is injected', () => {
     const handlers = buildHandlers(config(embeddingConfig()));
-    expect(Object.keys(handlers).sort()).toEqual(['cleanup', 'index_document']);
+    expect(Object.keys(handlers).sort()).toEqual([
+      'analyze_conversation',
+      'cleanup',
+      'index_document',
+    ]);
   });
 
   it.each(['gemini', 'openai'] as const)('builds a %s adapter from config', (provider) => {
@@ -56,9 +87,12 @@ describe('buildHandlers', () => {
     expect(() => buildHandlers(config(embeddingConfig({ dimensions: 768 })))).toThrow();
   });
 
-  it('does not require an adapter config when a provider is injected', () => {
+  it('does not require an adapter config when providers are injected', () => {
     expect(() =>
-      buildHandlers({ ai: undefined } as unknown as WorkerConfig, { embeddings: fakeProvider }),
+      buildHandlers({ ai: undefined } as unknown as WorkerConfig, {
+        embeddings: fakeProvider,
+        analysis: fakeChat,
+      }),
     ).not.toThrow();
   });
 });

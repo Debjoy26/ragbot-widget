@@ -107,6 +107,7 @@ import { queryEmbeddingHash } from './retrieval-cache.js';
 import type { EmbeddedQuery, RetrievedChunk, Retrieval } from './retrieval.js';
 import type { Limits } from './limits.js';
 import type { Runs } from './runs.js';
+import type { AnalysisQueue } from './analysis-queue.js';
 
 /** If the first line of the reply has not ended after this many characters it is not a header. */
 export const HEADER_MAX_CHARS = 200;
@@ -160,6 +161,12 @@ export interface ChatDeps {
   readonly moderationModelKey: string;
   /** Service-role DB for the answer-cache cited-docs recheck (rule 5). P7-D1. */
   readonly db: Pick<Db, 'rpc'>;
+  /**
+   * Enqueues background analysis after a persisted turn (P9-T2, W-10). Called in a
+   * try/catch that only warns: analysis must never fail or delay a visitor turn.
+   * Absent in tests that do not exercise it.
+   */
+  readonly queueAnalysis?: Pick<AnalysisQueue, 'enqueue'>;
   /**
    * Chat model identity for answer-cache keys, e.g.
    * `gemini/gemini-2.5-flash-lite` (plus `|fallback...` when configured).
@@ -1275,6 +1282,16 @@ export function createChatService(deps: ChatDeps): ChatService {
       }
     } catch {
       log.error({ ...logBase, code: 'finish_run_failed' }, 'run state not stored');
+    }
+
+    // Analysis is background metadata (UI_SCHEMA: never on the answer path). Enqueue only
+    // for a persisted turn, and never let it fail the request: a rejection only warns.
+    if (persisted && deps.queueAnalysis !== undefined) {
+      try {
+        await deps.queueAnalysis.enqueue(turn.botId, turn.conversationId);
+      } catch {
+        log.warn({ ...logBase, code: 'analysis_enqueue_failed' }, 'analysis not enqueued');
+      }
     }
 
     clearInterval(heartbeat);

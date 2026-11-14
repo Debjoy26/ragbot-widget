@@ -39,7 +39,7 @@ SECURITY INVOKER; `schema_version` 16. Census updates: 220/250/260 `15→16`.
 - `race-db`: refused by script guard (npipe, by design) — 016 adds a plain
   SELECT+INSERT RPC with no new lock ordering
 - `test:integration`: hung with no output in 10 min (documented Windows
-  child-process signal issue) — env-blocked here
+  child-process issue) — env-blocked here
 - `secret-scan`: red only on the owner-kept demo key
   (`widget/public/index.html:14`, kept per owner 2026-11-14) — not T1
 
@@ -48,3 +48,54 @@ SECURITY INVOKER; `schema_version` 16. Census updates: 220/250/260 `15→16`.
 - B-10 shape (`labels` + `piiFields`) is new shared surface; admin panel
   confirms via `contracts:sync` (`status.md §3a bm`).
 - No integration coverage for entries on a real DB yet (env-blocked here).
+
+## P9-T2 — background conversation analysis (W-10)
+
+Pipeline: after a persisted chat turn, the API enqueues one
+`analyze_conversation` job via `queue_analysis_job` (debounced by dedupe key:
+a new message pushes `available_at` back; an in-flight run is joined). The
+worker handler reads bounded context (`get_analysis_context`: last 20
+non-system messages + bot identity), calls the analysis model under an
+index-budget reservation, and writes the result (`save_conversation_analysis`)
+or a failed row (`fail_conversation_analysis`) — never on the answer path.
+
+- Worker `jobs/analyze-conversation.ts` (new): payload validation, RB037/empty
+  fast paths, reserve-before-call, transient → throw (retry with estimate
+  settled), billing/auth/unusable-output/cap → failed row + return, lease loss
+  → stop quietly. Logs ids/counts/codes only. Prompt version
+  `rag-analysis-v1`, 20-message/500-char bounds, strict JSON schema.
+- `handlers.ts`: `analyze_conversation` registered; analysis provider built
+  from `config.ai.analysis` (injectable fake in tests).
+- Worker config: `ANALYSIS_PRICE_{INPUT,OUTPUT}_PER_MILLION_TOKENS` (required,
+  fail closed) + `.env.example` + README; fixtures updated.
+- API: `services/analysis-queue.ts` (debounce 300 s, RB037 resolves quietly);
+  `chat.ts` optional `queueAnalysis` called after `finishRun` iff persisted, in
+  a warn-only try/catch; `app.ts` wires it to the RPC.
+- Migration `017_p9_analysis.sql`: `queue_analysis_job` (uuid; 22023/RB037;
+  G-3 partial-index arbiter + pushback, join-in-flight), `get_analysis_context`
+  (jsonb, 20 messages, no system rows), `save/fail_conversation_analysis`
+  (enum/version checked, upsert), all service-role only with `search_path=''`
+  + `lock_timeout`; `schema_version` 17. Census: 220/250/260 `16→17`.
+
+### Gates (this box, Node 26.13.1, local stack at 017)
+
+- `typecheck`, `lint`, `build`, `format:check` exit 0
+- Unit: handler 10/10, handlers/config/runtime, `analysis-queue` 3/3,
+  `chat-analysis-queue` 4/4 (158/158 across the 6 T2 files)
+- Full `npm test`: 3259/3353; 94 failures all in known flake families
+  (linear-time perf, timing-sensitive chat/worker, PDF child); every T2-touched
+  file and the T1 entries suite pass in isolation (100/100 incl. chat-route,
+  handoff, history-d2)
+- pgTAP: 28 files, 3394 passed, incl. new `231_p9_analysis` (27 tests)
+- `db lint` clean; local advisors no issues
+- `race-db`, `test:integration`: env-blocked as in T1 (npipe guard; Windows
+  child-process hang); 017 adds no new lock ordering (plain SELECTs + one
+  guarded INSERT)
+- `secret-scan`: red only on the owner-kept demo key — not T2
+
+### Open for T2 review
+
+- Fixed analysis attempt budget of 5 and 300 s debounce live in SQL; no
+  `client_settings` analysis policy exists yet (follow-up: add attempts +
+  debounce to settings with fail-closed reads).
+- No integration coverage for analysis on a real DB yet (env-blocked here).

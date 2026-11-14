@@ -144,6 +144,11 @@ export interface Options {
    * never reach the answer-cache check.
    */
   activeChunkIds?: readonly string[];
+  /** P9-T2: analysis enqueue hook (default: absent, the service no-ops). */
+  queueAnalysis?: Pick<
+    import('../../../api/src/services/analysis-queue.ts').AnalysisQueue,
+    'enqueue'
+  >;
 }
 
 export function setup(options: Options = {}) {
@@ -293,6 +298,8 @@ export function setup(options: Options = {}) {
     }),
     moderationMode: 'llm_classifier',
     embedding,
+    // P9-T2: absent by default, so existing tests never enqueue.
+    ...(options.queueAnalysis === undefined ? {} : { queueAnalysis: options.queueAnalysis }),
     // Retries of the input stage do not wait in unit tests.
     sleep: options.sleep ?? (async () => undefined),
   });

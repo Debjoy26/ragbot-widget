@@ -15,6 +15,7 @@ import {
   createRetrievalL2,
 } from './services/cache-l2.js';
 import { createAnswerCache } from './services/answer-cache.js';
+import { createAnalysisQueue } from './services/analysis-queue.js';
 import { createChatService } from './services/chat.js';
 import { createConfigCache } from './services/config-cache.js';
 import { createConversations, type ChatContext } from './services/conversations.js';
@@ -96,6 +97,7 @@ export function createApp(
     runs,
     db,
     chatModelKey,
+    queueAnalysis: createAnalysisQueue({ db }),
     configCache,
     embeddingCache,
     moderationCache,

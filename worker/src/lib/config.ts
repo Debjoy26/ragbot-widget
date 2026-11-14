@@ -65,6 +65,9 @@ export interface WorkerConfig {
   readonly embeddingBatchSize: number;
   /** US dollars per million input tokens, for budget estimates. */
   readonly embeddingPricePerMillionTokens: number;
+  /** US dollars per million tokens for the analysis model (P9-T2), for budget estimates. */
+  readonly analysisPriceInputPerMillionTokens: number;
+  readonly analysisPriceOutputPerMillionTokens: number;
   readonly ai: WorkerAiConfig;
 }
 
@@ -174,6 +177,8 @@ const envSchema = z.object({
   // write_document_chunks accepts at most 200 chunks per call.
   EMBEDDING_BATCH_SIZE: integer(1, MAX_WRITE_BATCH),
   EMBEDDING_PRICE_PER_MILLION_TOKENS: decimal(10_000),
+  ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS: decimal(100_000),
+  ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS: decimal(100_000),
 });
 
 function deepFreeze<T>(value: T): T {
@@ -313,6 +318,8 @@ export function loadWorkerConfig(env: Env): WorkerConfig {
     },
     embeddingBatchSize: v.EMBEDDING_BATCH_SIZE,
     embeddingPricePerMillionTokens: v.EMBEDDING_PRICE_PER_MILLION_TOKENS,
+    analysisPriceInputPerMillionTokens: v.ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS,
+    analysisPriceOutputPerMillionTokens: v.ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS,
   };
   const hidden: Record<string, unknown> = {
     supabaseSecretKey: v.SUPABASE_SECRET_KEY,

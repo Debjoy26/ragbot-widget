@@ -115,6 +115,8 @@ function config(overrides: Record<string, string> = {}): WorkerConfig {
     EXTRACT_CHILD_MEMORY_MB: '64',
     EMBEDDING_BATCH_SIZE: '8',
     EMBEDDING_PRICE_PER_MILLION_TOKENS: '0.1',
+    ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS: '0.1',
+    ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS: '0.4',
     GEMINI_API_KEY: FAKE_AI_KEY,
     EMBEDDING_PROVIDER: 'gemini',
     EMBEDDING_MODEL: 'gemini-embedding-001',
