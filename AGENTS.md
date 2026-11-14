@@ -7,7 +7,7 @@
 
 Embeddable, client-branded RAG chatbot (one `<script>` tag). Monorepo `shared` / `api` / `worker` / `widget` + Supabase Postgres+pgvector. This repo owns the **shared backend** (API on Render, worker on Render, Supabase schema) used by both the widget and the separate `ragbot_adminpanel` repo (ADR 0017). No Supabase Edge Functions (`ARCHITECTURE.md §2`).
 
-- **Node:** `24.22.2` pinned in `.nvmrc:1` and `package.json:7` — run `nvm use`.
+- **Node:** `26.13.1` pinned in `.nvmrc:1` and `package.json:7` (ADR 0018, revises ADR 0001) — run `nvm use`.
 - **Package manager:** `npm` workspaces, committed `package-lock.json`. No `latest`.
 - **Current state:** P0–P6 on `main` and pushed; P7 retrieval & chat on `main` @ `41997a9` (migration 013 on hosted dev project) not yet phase-accepted. See `status.md:1` and `handover.md:2` for live tracker.
 

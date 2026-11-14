@@ -48,3 +48,24 @@ jobs:
       - name: Stop local Supabase stack
         if: always()
         run: npx supabase stop --no-backup
+
+  # Windows is dev-convenience only: static gates + the unit suites that are
+  # green on Windows (api 1494, widget 45). Full DB/race/integration/smoke
+  # gates stay on ubuntu-24.04 above (production is Linux; race-db needs a
+  # unix docker socket, make guards need make). Not a gate on its own.
+  check-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npx vitest run --project unit tests/unit/api tests/unit/widget tests/unit/scaffold.test.ts
+      - run: npm run build -w widget
+      - run: node scripts/worker-dist-check.mjs
