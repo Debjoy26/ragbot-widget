@@ -99,3 +99,48 @@ or a failed row (`fail_conversation_analysis`) — never on the answer path.
   `client_settings` analysis policy exists yet (follow-up: add attempts +
   debounce to settings with fail-closed reads).
 - No integration coverage for analysis on a real DB yet (env-blocked here).
+
+## P9-T3 — retention audit (no migration, no app/worker change)
+
+Finding: the retention machinery is complete from P5/P6/P7.5 (13 maintenance
+tasks in `worker/src/maintenance.ts` run in dependency order; expiry purges in
+005/011/012/014-015; per-purge pgTAP in 110/190/200/240/250). Only the
+`cleanup` job's `conversation`/`expired` scopes are stubs — and deliberately
+so: nothing enqueues them (only `mark_document_deleted` → document scope
+exists), expiry runs on the maintenance schedule instead. The skip-with-log
+stays as forward-compat for foreign rows; narrowing the contract would churn
+`shared/` + admin `contracts:sync` for no behavioral gain. Verdict: keep,
+documented here.
+
+T3 pins the two unpinned paths (both held — audit, not fixes):
+
+- `110_retention` 45→49: purge-path cascade for `message_sources` and
+  `conversation_analysis` (admin-delete path was pinned in 220; the retention
+  purge was not). Old conversation's sources/analysis gone, recent kept.
+- `150_knowledge_gaps_pairing` 19→20: Scenario H proves pairing rule 1
+  (`reply_to` outranks `request_id`); admin/analyst sets + totals updated.
+  With 150 green, `knowledge_gaps` returns real grouped data once messages
+  exist (chat persists `handoff_reason` via `finish_chat_turn`, pinned by
+  chat unit tests).
+
+### Gates (this box, Node 26.13.1, local stack at 017)
+
+- `typecheck`, `lint`, `build`, `format:check` exit 0 (no TS changes in T3)
+- Unit: unchanged tree — T2 gates carry over (T2 files 158/158; full-suite
+  flakes documented under T1/T2)
+- pgTAP: full suite green incl. 110 (49) and 150 (20)
+- `db lint` clean; local advisors no issues
+- `race-db`, `test:integration`: env-blocked as in T1/T2 (npipe guard;
+  Windows child-process hang)
+- `secret-scan`: red only on the owner-kept demo key — not T3
+
+P9 is code-complete on `phase/p9` (T1+T2 committed, T3 pins committed next):
+entries route + RPC (016), background analysis + enqueue (017), retention
+audit pins (no migration). No hosted writes; 014–017 still local-only.
+
+### Open for P9 review
+
+- Fixed analysis budget (5) + debounce (300 s) in SQL (T2 follow-up).
+- B-10 shape pending admin-panel confirmation (`contracts:sync`, §3a bm).
+- 014–017 hosted apply + advisors (owner decision).
+- Full-suite + E2E rerun on a healthy Linux runner before any gate.

@@ -1,6 +1,6 @@
 -- Retention helpers (ADR 0006): fail closed on missing config; purge by configured age; expiry helpers.
 begin;
-select plan(45);
+select plan(49);
 
 -- The seed bot already has full retention config; give the fixture bot its own.
 insert into public.bot_profiles (id, slug, identity_prompt, allowed_languages, embedding_model, embedding_dimensions) values
@@ -18,6 +18,17 @@ insert into public.conversations (id, bot_id, visitor_session_id, created_at, la
 insert into public.messages (conversation_id, role, content) values
   ('c1000000-0000-4000-8000-0000000000aa', 'user', 'old question'),
   ('c2000000-0000-4000-8000-0000000000ab', 'user', 'recent question');
+-- P9-T3: pin the purge-path cascade for sources and analysis (the admin-delete path is
+-- pinned in 220; nothing pinned the retention purge until now).
+insert into public.messages (id, conversation_id, role, content) values
+  ('e1000000-0000-4000-8000-0000000000aa', 'c1000000-0000-4000-8000-0000000000aa', 'assistant', 'old answer'),
+  ('e2000000-0000-4000-8000-0000000000ab', 'c2000000-0000-4000-8000-0000000000ab', 'assistant', 'recent answer');
+insert into public.message_sources (message_id, source_label) values
+  ('e1000000-0000-4000-8000-0000000000aa', 'old source'),
+  ('e2000000-0000-4000-8000-0000000000ab', 'recent source');
+insert into public.conversation_analysis (conversation_id, summary, sentiment, intent, status) values
+  ('c1000000-0000-4000-8000-0000000000aa', 'old summary', 'neutral', 'old intent', 'complete'),
+  ('c2000000-0000-4000-8000-0000000000ab', 'recent summary', 'positive', 'recent intent', 'complete');
 insert into public.data_entries (id, bot_id, conversation_id, schema_key, payload) values
   ('de000000-0000-4000-8000-0000000000aa', 'b1000000-0000-4000-8000-0000000000aa', 'c1000000-0000-4000-8000-0000000000aa', 'k', '{}');
 -- ADR 0016: entries with no conversation age out after conversation_days (created_at clock).
@@ -84,6 +95,10 @@ select is((select count(*)::int from public.conversations where id = 'c1000000-0
 select is((select count(*)::int from public.conversations where id = 'c2000000-0000-4000-8000-0000000000ab'), 1, 'retention: recent conversation kept');
 select is((select count(*)::int from public.messages where content = 'old question'), 0, 'retention: messages cascade with the conversation');
 select is((select count(*)::int from public.messages where content = 'recent question'), 1, 'retention: recent messages kept');
+select is((select count(*)::int from public.message_sources where source_label = 'old source'), 0, 'retention (P9-T3): sources cascade with the purged conversation');
+select is((select count(*)::int from public.message_sources where source_label = 'recent source'), 1, 'retention (P9-T3): recent sources kept');
+select is((select count(*)::int from public.conversation_analysis where conversation_id = 'c1000000-0000-4000-8000-0000000000aa'), 0, 'retention (P9-T3): analysis cascades with the purged conversation');
+select is((select count(*)::int from public.conversation_analysis where conversation_id = 'c2000000-0000-4000-8000-0000000000ab'), 1, 'retention (P9-T3): recent analysis kept');
 select is((select count(*)::int from public.data_entries where id = 'de000000-0000-4000-8000-0000000000aa'), 0, 'retention (M3, ADR 0016): data_entries are deleted with their conversation (cascade)');
 select is((select count(*)::int from public.data_entries where id in ('de000000-0000-4000-8000-0000000000ab', 'de000000-0000-4000-8000-0000000000ac', 'de000000-0000-4000-8000-0000000000ad')), 3, 'retention (M3): conversation purge leaves unrelated entries alone');
 select is(public.purge_expired_data_entries(100), 1, 'retention (M3): exactly the conversation-less entry older than 90 days is purged');

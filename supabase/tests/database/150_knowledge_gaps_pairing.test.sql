@@ -2,7 +2,7 @@
 -- message ordered by created_at desc, id desc), counts assistant answers only, truncates the question to
 -- 500 chars and hides moderation ('blocked') hits from analysts. Question text here is synthetic.
 begin;
-select plan(19);
+select plan(20);
 
 insert into auth.users (id, aud, role, email) values
   ('a1000000-0000-4000-8000-0000000000e1', 'authenticated', 'authenticated', 'kg-analyst@example.test'),
@@ -23,12 +23,14 @@ insert into public.conversations (id, bot_id, visitor_session_id) values
   ('c4000000-0000-4000-8000-0000000000e4', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9'),
   ('c5000000-0000-4000-8000-0000000000e5', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9'),
   ('c6000000-0000-4000-8000-0000000000e6', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9'),
-  ('c7000000-0000-4000-8000-0000000000e7', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9');
+  ('c7000000-0000-4000-8000-0000000000e7', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9'),
+  ('c9000000-0000-4000-8000-0000000000e9', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9');
 insert into public.request_runs (id, bot_id, visitor_session_id, idempotency_key, request_hash) values
   ('91000000-0000-4000-8000-0000000000e1', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e1', repeat('a', 64)),
   ('92000000-0000-4000-8000-0000000000e2', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e2', repeat('a', 64)),
   ('93000000-0000-4000-8000-0000000000e3', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e3', repeat('a', 64)),
-  ('94000000-0000-4000-8000-0000000000e4', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e4', repeat('a', 64));
+  ('94000000-0000-4000-8000-0000000000e4', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e4', repeat('a', 64)),
+  ('95000000-0000-4000-8000-0000000000e5', 'b1000000-0000-4000-8000-0000000000e1', 'a1000000-0000-4000-8000-0000000000e9', '00000000-0000-4000-8000-0000000000e5', repeat('a', 64));
 
 -- Scenario A (conv 1): two overlapping requests; the answer to request 1 arrives AFTER question 2.
 --   latest-prior pairing would wrongly pair A1 with Q-two; request_id pairing pairs it with Q-one.
@@ -68,14 +70,23 @@ insert into public.messages (id, conversation_id, request_id, role, content, han
   ('d7000000-0000-4000-8000-0000000000f3', 'c7000000-0000-4000-8000-0000000000e7', '94000000-0000-4000-8000-0000000000e4', 'assistant', 'idk', 'no_knowledge', now() - interval '50 minutes'),
   ('d7000000-0000-4000-8000-0000000000f4', 'c6000000-0000-4000-8000-0000000000e6', '94000000-0000-4000-8000-0000000000e4', 'user', 'Q-g-elsewhere', null, now() - interval '55 minutes');
 
+-- Scenario H (conv 8, P9-T3): reply_to outranks request_id. The answer carries the same
+-- request_id as Q-reply-other but an explicit reply_to to Q-reply-target: rule 1 wins.
+insert into public.messages (id, conversation_id, request_id, reply_to_message_id, role, content, handoff_reason, created_at) values
+  ('d9000000-0000-4000-8000-000000000091', 'c9000000-0000-4000-8000-0000000000e9', null, null, 'user', 'Q-reply-target', null, now() - interval '40 minutes'),
+  ('d9000000-0000-4000-8000-000000000092', 'c9000000-0000-4000-8000-0000000000e9', '95000000-0000-4000-8000-0000000000e5', null, 'user', 'Q-reply-other', null, now() - interval '40 minutes' + interval '1 second'),
+  ('d9000000-0000-4000-8000-000000000093', 'c9000000-0000-4000-8000-0000000000e9', '95000000-0000-4000-8000-0000000000e5', 'd9000000-0000-4000-8000-000000000091', 'assistant', 'idk', 'no_knowledge', now() - interval '40 minutes' + interval '2 seconds');
+
 set local role authenticated;
 
 -- ---- admin sees everything that is a genuine gap ----
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000e2","aal":"aal2","role":"authenticated"}', true);
 select set_eq(
   $q$select handoff_reason, question, occurrences from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason <> 'unavailable'$q$,
-  $q$values ('no_knowledge'::text, 'Q-one'::text, 1::bigint), ('out_of_scope', 'Q-two', 1), ('human_requested', 'Q-tie-high-id', 1), ('blocked', 'Q-blocked', 1)$q$,
-  'M4 admin: request_id pairing, id tie-break, assistant-only, blocked visible; unpaired rows (F, G) absent');
+  $q$values ('no_knowledge'::text, 'Q-one'::text, 1::bigint), ('no_knowledge', 'Q-reply-target', 1), ('out_of_scope', 'Q-two', 1), ('human_requested', 'Q-tie-high-id', 1), ('blocked', 'Q-blocked', 1)$q$,
+  'M4 admin: request_id pairing, reply_to pairing, id tie-break, assistant-only, blocked visible; unpaired rows (F, G) absent');
+select is((select question from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason = 'no_knowledge' and question = 'Q-reply-other'), null,
+  'M4: reply_to outranks request_id (Q-reply-other shares the answer request_id but is not paired)');
 select is((select question from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason = 'no_knowledge' and question = 'Q-two'), null,
   'M4: an overlapping answer is NOT paired with the latest earlier question (Q-two) when request_id says Q-one');
 select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where question = 'Q-tie-low-id'), 0,
@@ -86,8 +97,8 @@ select is((select count(*)::int from public.knowledge_gaps((now() at time zone '
   'M4: assistant with a request_id never falls back to a guessed question, nor pairs across conversations');
 select is((select length(question) from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason = 'unavailable'), 500,
   'M4: a 600-char question is truncated to 500 characters');
-select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50)), 5,
-  'M4 admin: exactly five gaps overall');
+select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50)), 6,
+  'M4 admin: exactly six gaps overall');
 
 -- ---- owner sees blocked too ----
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000e3","aal":"aal2","role":"authenticated"}', true);
@@ -96,13 +107,13 @@ select is((select count(*)::int from public.knowledge_gaps((now() at time zone '
 
 -- ---- analyst: same minus blocked ----
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-0000000000e1","aal":"aal2","role":"authenticated"}', true);
-select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50)), 4,
-  'M4 analyst: four gaps (blocked excluded)');
+select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50)), 5,
+  'M4 analyst: five gaps (blocked excluded)');
 select is((select count(*)::int from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason = 'blocked' or question = 'Q-blocked'), 0,
   'M4 analyst: moderation-blocked questions are hidden');
 select set_eq(
   $q$select handoff_reason, question, occurrences from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason <> 'unavailable'$q$,
-  $q$values ('no_knowledge'::text, 'Q-one'::text, 1::bigint), ('out_of_scope', 'Q-two', 1), ('human_requested', 'Q-tie-high-id', 1)$q$,
+  $q$values ('no_knowledge'::text, 'Q-one'::text, 1::bigint), ('no_knowledge', 'Q-reply-target', 1), ('out_of_scope', 'Q-two', 1), ('human_requested', 'Q-tie-high-id', 1)$q$,
   'M4 analyst: the other pairings are identical to the admin view');
 select is((select length(question) from public.knowledge_gaps((now() at time zone 'UTC')::date - 2, (now() at time zone 'UTC')::date + 1, 50) where handoff_reason = 'unavailable'), 500,
   'M4 analyst: question truncation applies too');
