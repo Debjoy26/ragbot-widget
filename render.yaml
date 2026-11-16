@@ -1,0 +1,199 @@
+# Blueprint for one client's Render services (P10). One shared codebase, deployed
+# separately per client: 1 API web service + 1 background worker (ARCHITECTURE.md).
+# VALUES LIVE IN RENDER ENV, NEVER HERE: every key below is `sync: false`, so
+# `render.yaml` carries names only. Provision secrets per client in the dashboard.
+# Keys mirror api/.env.example and worker/.env.example (required, no defaults).
+
+services:
+  - type: web
+    name: ragbot-api
+    runtime: node
+    plan: standard
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -w api
+    healthCheckPath: /health/ready
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: VISITOR_TOKEN_SECRET
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
+      - key: RATE_LIMIT_KEY_SECRET
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PORT
+        sync: false
+      - key: LOG_LEVEL
+        sync: false
+      - key: TRUSTED_PROXY_HOPS
+        sync: false
+      - key: BODY_LIMIT_BYTES
+        sync: false
+      - key: REQUEST_TIMEOUT_MS
+        sync: false
+      - key: CONNECTION_TIMEOUT_MS
+        sync: false
+      - key: READY_TIMEOUT_MS
+        sync: false
+      - key: DB_TIMEOUT_MS
+        sync: false
+      - key: VISITOR_TOKEN_TTL_SECONDS
+        sync: false
+      - key: SESSION_PREFLIGHT_PER_IP_LIMIT
+        sync: false
+      - key: SESSION_PREFLIGHT_WINDOW_SECONDS
+        sync: false
+      - key: TURNSTILE_TIMEOUT_MS
+        sync: false
+      - key: CHAT_DEADLINE_MS
+        sync: false
+      - key: PROVIDER_MAX_ATTEMPTS
+        sync: false
+      - key: RETRIEVAL_TOP_K
+        sync: false
+      - key: RETRIEVAL_MIN_SIMILARITY
+        sync: false
+      - key: CHAT_CONTEXT_MAX_TOKENS
+        sync: false
+      - key: CHAT_HISTORY_MAX_MESSAGES
+        sync: false
+      - key: CHAT_MAX_OUTPUT_TOKENS
+        sync: false
+      - key: CHAT_MAX_OUTPUT_CHARS
+        sync: false
+      - key: CHAT_PRICE_INPUT_PER_MILLION
+        sync: false
+      - key: CHAT_PRICE_OUTPUT_PER_MILLION
+        sync: false
+      - key: CHAT_FALLBACK_PRICE_INPUT_PER_MILLION
+        sync: false
+      - key: CHAT_FALLBACK_PRICE_OUTPUT_PER_MILLION
+        sync: false
+      - key: MODERATION_PRICE_INPUT_PER_MILLION
+        sync: false
+      - key: MODERATION_PRICE_OUTPUT_PER_MILLION
+        sync: false
+      - key: EMBEDDING_PRICE_PER_MILLION_TOKENS
+        sync: false
+      - key: CHAT_RESERVATION_TTL_SECONDS
+        sync: false
+      - key: CHAT_PROVIDER_ATTEMPTS
+        sync: false
+      - key: HISTORY_PAGE_SIZE
+        sync: false
+      - key: HISTORY_RATE_PER_SESSION_LIMIT
+        sync: false
+      - key: HISTORY_RATE_WINDOW_SECONDS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CHAT_PRIMARY_PROVIDER
+        sync: false
+      - key: CHAT_PRIMARY_MODEL
+        sync: false
+      - key: CHAT_FALLBACK_PROVIDER
+        sync: false
+      - key: CHAT_FALLBACK_MODEL
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        sync: false
+      - key: EMBEDDING_MODEL
+        sync: false
+      - key: EMBEDDING_DIMENSIONS
+        sync: false
+      - key: MODERATION_PROVIDER
+        sync: false
+      - key: MODERATION_MODEL
+        sync: false
+      - key: MODERATION_MODE
+        sync: false
+
+  - type: worker
+    name: ragbot-worker
+    runtime: node
+    plan: standard
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start -w worker
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: LOG_LEVEL
+        sync: false
+      - key: DB_TIMEOUT_MS
+        sync: false
+      - key: STORAGE_TIMEOUT_MS
+        sync: false
+      - key: WORKER_CONCURRENCY
+        sync: false
+      - key: JOB_LEASE_SECONDS
+        sync: false
+      - key: JOB_HEARTBEAT_INTERVAL_SECONDS
+        sync: false
+      - key: JOB_POLL_INTERVAL_MS
+        sync: false
+      - key: JOB_BACKOFF_BASE_SECONDS
+        sync: false
+      - key: JOB_BACKOFF_MAX_SECONDS
+        sync: false
+      - key: SHUTDOWN_GRACE_MS
+        sync: false
+      - key: MAINTENANCE_INTERVAL_SECONDS
+        sync: false
+      - key: RETENTION_BATCH_SIZE
+        sync: false
+      - key: PURGE_BATCH_SIZE
+        sync: false
+      - key: CHAT_DEADLINE_MS
+        sync: false
+      - key: STUCK_RUN_THRESHOLD_SECONDS
+        sync: false
+      - key: VISITOR_SESSION_GRACE_SECONDS
+        sync: false
+      - key: TERMINAL_JOB_RETENTION_DAYS
+        sync: false
+      - key: ABANDONED_UPLOAD_HOURS
+        sync: false
+      - key: WORKER_MAX_DOWNLOAD_BYTES
+        sync: false
+      - key: MAX_CHUNKS_PER_VERSION
+        sync: false
+      - key: EXTRACT_MAX_CHARS
+        sync: false
+      - key: EXTRACT_TIMEOUT_MS
+        sync: false
+      - key: EXTRACT_CHILD_MEMORY_MB
+        sync: false
+      - key: EMBEDDING_BATCH_SIZE
+        sync: false
+      - key: EMBEDDING_PRICE_PER_MILLION_TOKENS
+        sync: false
+      - key: ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS
+        sync: false
+      - key: ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        sync: false
+      - key: EMBEDDING_MODEL
+        sync: false
+      - key: EMBEDDING_DIMENSIONS
+        sync: false
+      - key: ANALYSIS_PROVIDER
+        sync: false
+      - key: ANALYSIS_MODEL
+        sync: false

@@ -1,0 +1,9 @@
+{
+  "$comment": "Per-client deployment descriptor (P10). PUBLIC IDS ONLY: bot slug, URLs, origins, widget version. Secrets live in Render env, never here. Placeholders use <angle brackets> so the secret scanner ignores this file. Copy to clients/<client>/deployment.json (gitignored) and fill in.",
+  "botSlug": "<bot-slug>",
+  "apiUrl": "https://<api-host>",
+  "supabaseUrl": "https://<project-ref>.supabase.co",
+  "adminUrl": "https://<admin-host>",
+  "widgetVersion": "v1.0.0",
+  "allowedOrigins": ["https://<client-website>"]
+}
