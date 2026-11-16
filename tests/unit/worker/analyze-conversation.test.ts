@@ -183,6 +183,22 @@ describe('analyze_conversation handler', () => {
     expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(0);
   });
 
+  it('returns quietly when the conversation vanishes before save (RB037 on save)', async () => {
+    const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
+      save_conversation_analysis: () => {
+        throw new DbError('http', 404, 'RB037');
+      },
+    });
+    await run(rig);
+    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(1);
+    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(0);
+    // The spend is real (provider was called), so usage stays and the
+    // reservation settles instead of retrying a deleted conversation.
+    expect(calledWith(rig, 'record_usage_event')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'release_index_budget')).toHaveLength(0);
+  });
+
   it('returns quietly when there is nothing to analyze', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
       get_analysis_context: () => contextRpc([]),

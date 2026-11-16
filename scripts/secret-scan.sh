@@ -128,17 +128,34 @@ if [ "${1:-}" = "--self-test" ]; then
   : >"$REPO/allowed.txt"
 
   # Fail closed: a hit line whose location cannot be parsed counts as a hit, even if it looks harmless.
-  printf '%s\n' "API_TOK""EN=<placeholder>" >"$REPO/:odd.env"
-  git -C "$REPO" add -A
-  scan
-  if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "^unparsed-line  named-secret" \
-    && ! printf '%s' "$OUT" | grep -qF "placeholder"; then
-    ok "unparseable hit line counts as a hit, content not printed"
+  # The classic probe is a file named ":odd.env", but Windows filesystems refuse a leading colon,
+  # so no file can produce that shape there (git never emits the line and the probe fails empty).
+  # On Windows feed the same shape through the real named_filter instead: the assertion is
+  # identical (exactly one "unparsed" verdict, value never echoed), and so is the property.
+  if case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) true ;; *) false ;; esac; then
+    # Windows filesystems refuse a leading colon, so no file here can produce
+    # an unparseable git-grep line. Feed the same shape through the real
+    # named_filter instead (extracted from this file at run time, not
+    # duplicated): identical assertion, identical fail-closed property.
+    OUT="$(eval "$(sed -n '/^named_filter()/,/^}/p' "$SELF")"; printf ':odd.env:1:API_TOK''EN=<placeholder>\n' | named_filter)"
+    if [ "$OUT" = "unparsed" ]; then
+      ok "unparseable hit line counts as a hit, content not printed"
+    else
+      bad "unparseable hit line: expected a lone unparsed verdict (got '$OUT')"
+    fi
   else
-    bad "unparseable hit line: expected exit 1 with unparsed-line (got $RC)"
+    printf '%s\n' "API_TOK""EN=<placeholder>" >"$REPO/:odd.env"
+    git -C "$REPO" add -A
+    scan
+    if [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -q "^unparsed-line  named-secret" \
+      && ! printf '%s' "$OUT" | grep -qF "placeholder"; then
+      ok "unparseable hit line counts as a hit, content not printed"
+    else
+      bad "unparseable hit line: expected exit 1 with unparsed-line (got $RC)"
+    fi
+    git -C "$REPO" rm -q -f --cached -- './:odd.env'
+    printf '' >"$REPO/:odd.env"
   fi
-  git -C "$REPO" rm -q -f --cached -- './:odd.env'
-  printf '' >"$REPO/:odd.env"
 
   # Same generic rule must also catch a real-looking value inside an .env.example.
   printf '%s\n' "GEMINI_API""_KEY=${FAKE_BODY}" >"$REPO/api/.env.example"

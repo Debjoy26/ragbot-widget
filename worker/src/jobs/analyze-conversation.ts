@@ -250,6 +250,9 @@ export function createAnalyzeConversationHandler(deps: AnalyzeConversationDeps):
       if (err instanceof LeaseLostError || signal.aborted) return;
       if (err instanceof RetryJobError) throw err;
       if (err instanceof ProviderError && isRetryableErrorKind(err.kind)) {
+        // The estimate is recorded even though the attempt will be retried:
+        // fail-closed over-count, bounded by one estimate per attempt. The
+        // next attempt reserves anew; never skip recording real spend.
         await recordSpend(estimateTokens(prompt), 0, Date.now() - started);
         await settleOrRelease();
         throw err;
@@ -281,16 +284,29 @@ export function createAnalyzeConversationHandler(deps: AnalyzeConversationDeps):
       return;
     }
     await recordSpend(inputTokens, outputTokens, latencyMs);
-    await ctx.db.rpc<unknown>(
-      'save_conversation_analysis',
-      {
-        p_conversation_id: conversationId,
-        p_summary: parsed.summary,
-        p_sentiment: parsed.sentiment,
-        p_intent: parsed.intent,
-      },
-      signal,
-    );
+    try {
+      await ctx.db.rpc<unknown>(
+        'save_conversation_analysis',
+        {
+          p_conversation_id: conversationId,
+          p_summary: parsed.summary,
+          p_sentiment: parsed.sentiment,
+          p_intent: parsed.intent,
+        },
+        signal,
+      );
+    } catch (err) {
+      // Deleted between the context read and the save: nothing to attach the
+      // analysis to. The spend is real, so usage stays and the reservation
+      // settles; retrying would only dead-letter. Same quiet return as the
+      // context-read RB037 above.
+      if (err instanceof DbError && err.sqlstate === 'RB037') {
+        await settleOrRelease();
+        log.info('analysis_conversation_gone');
+        return;
+      }
+      throw err;
+    }
     await settleOrRelease();
     log.info('analysis_saved', {
       input_tokens: inputTokens,
