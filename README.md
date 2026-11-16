@@ -155,16 +155,18 @@ To recreate a local database instead, run `make db-start`, then `make db-local`.
 **Publishable key:** copy it from the client's Supabase project into the widget `<script>` tag on the client's website (`data-supabase-publishable-key`, see `UI_SCHEMA.md`). It is public and is not stored in this repository. Never put the secret key there.
 
 ## Deployment order per client
-1. Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).
+1. Validate `clients/<client>/deployment.json` with `node scripts/deploy-client.mjs --file <path>` (public IDs only; the shipped `deployment.example.json` shows the shape). Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).
 2. Provision the first admin and active membership with `make first-admin`, after turning public signup off; configure Auth site/redirect URLs for the admin domain and enable TOTP, because every private read and admin action needs `aal2` (ADR 0015).
 3. Test grants/RLS as anon, nonmember, analyst, admin, and privileged backend.
-4. Deploy Render API and worker from the repository root using their workspace build/start commands. Provision secrets separately for each client and configure the queue and retention settings.
+4. Deploy Render API and worker from `render.yaml` (services build from the same commit; every variable is `sync: false` — provision secrets per client in the Render dashboard, never in this repo). Measure `TRUSTED_PROXY_HOPS` on the real route first (`docs/runbooks/proxy-hops.md`).
 5. Set API health path `/health/ready`; configure CORS for actual website origins. Verify visitor sessions.
 6. Deploy the widget Vercel project with repository root as project root and a workspace-specific build; publish only `widget/dist`.
 7. Publish immutable `/v1.0.0/widget.js` output with JS content type and immutable caching. Keep demonstration assets separate from sensitive source/configuration.
 8. Deploy companion admin panel; configure public Supabase variables and DNS/HTTPS.
-9. Upload and index approved knowledge; run evaluation and end-to-end tests; validate primary and fallback providers.
-10. Deliver embed and dashboard login, record schema/API/widget versions, and enable alerts.
+9. Upload and index approved knowledge; run `node scripts/smoke-test.mjs --live` (paid-tier key, owner approval), evaluation and end-to-end tests; validate primary and fallback providers.
+10. Deliver embed and dashboard login, record schema/API/widget versions, and enable alerts (`docs/runbooks/metrics.md`).
+
+Runbooks for operations live in `docs/runbooks/`: provider outage, key rotation, rollback, restore rehearsal, incident response, metrics/alerts, proxy-hop measurement.
 
 ## Production baseline
 Paid Render API and background worker, explicit provider caps, durable jobs, backups with tested restores, and agreed privacy/retention settings. Free hosting is a demo option, not a production availability strategy. One database per client still requires admin authorization and visitor isolation inside that client.

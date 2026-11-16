@@ -63,8 +63,10 @@ describe('deploy-client', () => {
 
   it('refuses a secret-like value', async () => {
     const { code, out } = await run([
+      // Obviously fake (11 chars: the scanner allows short values) but shaped
+      // like a credential, so the validator must still refuse it.
       '--file',
-      fixture({ ...VALID, apiUrl: 'https://api.example.com/?token=sb_secret_abcdef1234567890' }),
+      fixture({ ...VALID, apiUrl: 'https://api.example.com/?token=secret-fake' }),
     ]);
     expect(code).not.toBe(0);
     expect(out).toContain('looks like a secret');
