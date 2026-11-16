@@ -332,8 +332,12 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Backup/restore rehearsed incl. Storage | ⬜ | — |
 | Security test matrix executed | ⬜ | — |
 
-## 7. Next actions
-1. P7 evaluation-set baseline with real calls + paid-tier Gemini billing (§3a n, bt) — **deferred to P11 per owner 2026-11-14**. P7 gates on fake-provider tests only.
+## 7. Next actions (owner to-do, 2026-11-16)
+1. Merge `fix/d1` → `main` + push (awaiting explicit approval).
+2. Decide, no code yet: 018 analysis-policy migration vs fixed SQL, C8 warmer wire-vs-defer, D1 moderation-L2 accept-vs-migrate.
+3. Accept or send back P7/P7.5/P8/P9/P10 at gate (packets in `docs/evidence/`).
+4. Paid-tier Gemini billing + second provider key (blocks P11 eval, `--live` smoke, any client data); revoke the CLI access token when done with hosted work.
+5. `--live` smoke + proxy-hops measurement on a real Render deploy (procedures ready).
 2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
 3. Admin panel runs `contracts:sync` (§3a bm).
 4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
