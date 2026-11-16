@@ -385,6 +385,10 @@ async function main() {
       check('POST /v1/chat answers 200 SSE', chat.status === 200, `status ${chat.status}`);
       const events = parseSSEEvents(bytes);
       console.log(`info SSE events: ${events.map((e) => e.event).join(',') || '(none)'}`);
+      if (process.argv.includes('--show-events')) {
+        for (const e of events)
+          console.log(`info event ${e.event}: ${scrub(e.data).slice(0, 500)}`);
+      }
       const problems = checkLiveContract(events, secretValues);
       check('chat known-answer contract holds', problems.length === 0, problems.join('; '));
     } else {
