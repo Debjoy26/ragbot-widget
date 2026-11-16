@@ -16,7 +16,9 @@ const EXAMPLE = fileURLToPath(
 function run(args: string[]): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     execFile(process.execPath, [SCRIPT, ...args], (error, stdout, stderr) => {
-      resolve({ code: error?.code ?? 0, out: `${stdout}${stderr}` });
+      // execFile reports string codes for signals; only a numeric exit counts.
+      const code = typeof error?.code === 'number' ? error.code : error === null ? 0 : 1;
+      resolve({ code, out: `${stdout}${stderr}` });
     });
   });
 }
