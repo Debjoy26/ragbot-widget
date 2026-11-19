@@ -248,6 +248,31 @@ describe('runtime: claiming', () => {
     expect(ran).toEqual([good['id']]);
     await rt.shutdown();
   });
+
+  it('propagates warm_generation to the warm handler and rejects warm rows without it', async () => {
+    const seen: (number | undefined)[] = [];
+    const good = row({ type: 'warm_answer_cache', warm_generation: 4 });
+    const h = harness({
+      config: { concurrency: 5 },
+      queue: [
+        row({ type: 'warm_answer_cache' }),
+        row({ type: 'warm_answer_cache', warm_generation: 0 }),
+        row({ type: 'warm_answer_cache', warm_generation: 1.5 }),
+        row({ type: 'warm_answer_cache', warm_generation: '4' }),
+        good,
+      ],
+    });
+    const rt = h.start({
+      warm_answer_cache: (job) => {
+        seen.push(job.warmGeneration);
+        return Promise.resolve();
+      },
+    });
+    await tick(0);
+    expect(seen).toEqual([4]);
+    expect(h.lines.some((l) => l.includes('claim_row_invalid'))).toBe(true);
+    await rt.shutdown();
+  });
 });
 
 describe('runtime: concurrency', () => {
@@ -370,7 +395,7 @@ describe('runtime: outcomes', () => {
 
   it('handles an unknown job type safely: no handler call, long retry, nothing lost', async () => {
     const handler = vi.fn(() => Promise.resolve());
-    const h = harness({ queue: [row({ type: 'warm_answer_cache' })] });
+    const h = harness({ queue: [row({ type: 'warm_answer_cache', warm_generation: 1 })] });
     const rt = h.start({ index_document: handler as unknown as JobHandler });
     await tick(0);
     expect(handler).not.toHaveBeenCalled();

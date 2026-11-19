@@ -1,5 +1,7 @@
 # Database Schema — ragbot_widget
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 
 ## Shared ownership
 This is one schema in the client-specific Supabase project, not a database per frontend. `ragbot_widget/supabase/migrations` is the authoritative migration history. The admin repository consumes this contract and must not maintain competing migrations.
@@ -31,7 +33,7 @@ This is one schema in the client-specific Supabase project, not a database per f
 | request_runs | id, bot_id, visitor_session_id, idempotency_key, request_hash, state, reserved_tokens, started_at, finished_at | Unique scoped idempotency key; payload mismatch is rejected. |
 | usage_events | id, bot_id, request_id, job_id, provider, model, operation, input_tokens, output_tokens, estimated_cost, latency_ms, created_at | Include failed/fallback attempts and indexing; estimates reconciled with provider usage. |
 | rate_limit_buckets | key_hash, window_start, window_seconds, request_count, expires_at | Composite uniqueness; atomic increments. No plain IP storage by default. |
-| budget_reservations | id, bot_id, request_id, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. `job_id` marks a job-based reservation for ingestion; both kinds count toward the same daily cap. Only one `reserved` row may exist per job, and a retry takes a new reservation. |
+| budget_reservations | id, bot_id, request_id, job_id, analysis_generation, warm_generation, question_hash, amount, state, expires_at, created_at | Reserve before work, reconcile after; conservative estimates plus provider-side caps. `job_id` marks a job-based reservation for ingestion; `warm_generation` + `question_hash` bind one warm invocation. Both kinds and warm rows count toward the same daily cap. One `reserved` row may exist per job (non-warm) or per (job, generation, question) (warm); a retry takes a new reservation. |
 | audit_logs | id, actor_user_id, action, resource_type, resource_id, request_id, safe_metadata, created_at | Written by the backend and through `admin_audit`; no raw secrets or full document payloads. |
 | client_settings | bot_id, allowed_origins, rate_policy, budget_policy, retention_policy, upload_policy, handoff_policy, cache_policy, feature_flags, updated_at | Internal settings; only explicitly whitelisted fields editable by admin. `handoff_policy`: enabled triggers and repeated-miss threshold (default 2). `cache_policy`: answer-cache opt-in (default off), TTLs, kill switch. Planned in P3.5: attempt limits for `index_document` and `cleanup`, read by the admin RPCs; a missing value fails closed. |
 | query_embedding_cache | key_hash, embedding_model, embedding, created_at, last_hit_at, expires_at | Key is a hash of model, dimensions and normalised query. Raw query text is not stored. |
@@ -39,6 +41,162 @@ This is one schema in the client-specific Supabase project, not a database per f
 | answer_cache | id, bot_id, cache_key_hash, language, answer_text, source_refs, handoff_reason, corpus_version, settings_version, prompt_template_version, chat_model, hit_count, created_at, last_hit_at, expires_at | Opt-in per client. First-turn, completed, moderated answers only. Contact details are never cached. Cited versions are re-checked as active on read. No session or visitor identifiers. |
 
 ## Database operations
+
+### Analysis budget repair (P9-D3, migration 018)
+
+Migration 018 is a local development change until explicitly applied to a client.
+Analysis uses `jobs.analysis_generation`, incremented on each claim independently
+of refundable retry attempts. `claim_jobs` returns this field with the job row.
+Reservations store `analysis_generation`; usage rows link to their original
+`budget_reservation_id` and are idempotent per invocation. Unknown orphan spend
+retains its estimate; delayed usage can raise an already recovered amount.
+
+The service-only APIs are `get_analysis_job_context`, `reserve_analysis_budget`,
+`settle_analysis_budget`, `save_analysis_job_result`, and `fail_analysis_job`.
+Each checks the running job's worker, generation, live lease and conversation
+ownership through `analysis_job_fence`. Reservations serialize on the same
+client-settings row and daily cap used by chat and ingestion. A completed or
+already-accounted generation cannot reserve another provider invocation.
+`record_analysis_usage` intentionally permits late spend recording after lease
+loss, but requires the original job/generation/reservation association and cannot
+write results. `settle_orphaned_analysis_reservations` runs before retention and
+job purges; the indexing sweep explicitly excludes analysis reservations.
+No browser role gains access to these columns or APIs.
+
+### Analysis scheduling repair (P9-D4, migration 019)
+
+Local-only pending explicit hosted approval. Jobs track requested, claimed and
+context-snapshot revisions plus the snapshot generation. Enqueue atomically
+advances the requested revision even while analysis is running. Context reads
+capture the covered revision under the job lock. Completing/dead-lettering an
+older snapshot requeues the same live job if newer work exists, retaining the
+debounce deadline and monotonic claim generation. Deleted conversations do not
+produce successors. Reservation/usage ownership remains generation-specific;
+successor work cannot erase a prior attempt's unknown-spend floor.
+
+Admin-authored privacy/contact URLs use migration010's existing ASCII hostname
+grammar, five-digit port bound0–65535 and2048 UTF-16 units throughout shared and
+widget boundaries. This is syntax validation, not DNS/IDNA resolution. Nullable
+public fields become absent widget fields via the canonical shared schema.
+
+### Cache warming queue (migration 020, applied locally only)
+
+Queueing is opt-in through operator-managed `client_settings.cache_policy`.
+When `warm_enabled` is true for an enabled bot, `warm_max_attempts` must be an
+explicit JSON integer from 1 through 10; there is no retry default. The value
+is supplied to the required `jobs.max_attempts` column. Missing, null, string,
+fractional or out-of-range values fail with `22023` and leave the originating
+version update unchanged. Disabled bots, warming-off and global kill-switch
+paths do not queue work or require that retry limit.
+
+The queue observes final corpus/settings versions after all `BEFORE` changes,
+including tone, identity, scope, language and enable updates. Unchanged versions
+do not enqueue work. Migration 020 is applied to the LOCAL stack only; hosted
+remains last recorded at 017. Queue/fence checks passed in T03b; T03c-2 adds69
+local pgTAP assertions for role permissions and actual claim/reclaim/refund
+generations. Browser roles cannot execute warming functions. Service EXECUTE
+on trigger helpers follows platform defaults; direct calls are rejected because
+they return trigger. Claims advance generation independently of refunded attempts.
+Full replay/pgTAP remain T03c-3. Standalone advisors/public lint pass; the original
+advisor timeout remains an unproven reliability issue tracked forT16.
+Usage ledger, settlement, fenced publication and the worker handler stay T08+;
+a queue implementation alone does not complete C8.
+
+### Warm reservation (T07, migration 021, applied locally only)
+
+One reservation per (job, generation, question): `budget_reservations` gains
+`warm_generation` and a 64-hex `question_hash`, with a partial unique key on all
+three. The allowance is immutable; settle writes actuals to usage in T09, never
+mutates the reservation. `reserve_warm_budget` serializes on the bot's
+client-settings row, then the bot row, then the job row, and rechecks the live
+snapshot: disabled bots, a switched-off policy or superseded versions return
+null (no spend), like `queue_warm_job`. Failures are precise: unknown or
+wrong-type job (RB004), malformed payload (22023), unheld lease (RB013),
+missing policy (RB002), accounted invocation (RB003), daily cap (RB001).
+Duplicates return the stored identity and cannot spend twice. Warm rows count
+toward the same daily cap as chat/index/analysis; the 009 one-active-per-job
+index now excludes warm rows. Service role only. Migration 021 is applied to
+the LOCAL stack only; hosted remains last recorded at 017.
+
+### Warm usage ledger (T08, migration 022, applied locally only)
+
+Each warm provider invocation is ledgered per (reservation, invocation):
+`usage_events` gains `warm_reservation_id`, `warm_invocation_id` and a
+pending/final `state` (existing rows are final), with a partial unique key on
+(reservation, invocation); one ledger row never mixes analysis and warm
+reservations. `record_warm_usage` registers the pending charge before the call
+and upserts the final cost on the same row with greatest() merges, so retries
+cannot double-count, a late report cannot shrink finalized spend, and a
+zero-cost call is still recorded. Binding is by job, generation and question
+only — no lease check, so money spent before a takeover still lands on its
+original reservation; a foreign binding is rejected (RB003), a missing policy
+fails closed (RB002). Settlement lives in T09.
+
+### Warm settlement and recovery (T09, migration 023, applied locally only)
+
+`settle_warm_budget` reconciles one invocation under the live-claim fence:
+unknown or wrong-type job (RB004), malformed request (22023), unheld lease
+(RB013), missing policy (RB002), inactive reservation (RB003). Zero actual with
+no recorded usage releases the hold; otherwise the row settles at the greater
+of actual and recorded usage, so finalized spend never disappears.
+`settle_orphaned_warm_reservations` settles reserved/expired rows whose claim
+can no longer settle them, keeping the reservation estimate when nothing was
+recorded. The indexing orphan sweep now excludes warm holds. The worker
+maintenance schedule runs the warm sweep alongside the index and analysis
+sweeps.
+
+### Warm fenced publication (T10, migration 024, applied locally only)
+
+A warm claim may persist shared L2 records only while its lease is live, its
+versions are current, and the bot, the C8 policy and the layer (c4/c5/c6 plus
+aliases) are enabled; anything else returns false instead of writing, like
+queue_warm_job. `publish_warm_embedding` additionally requires the bot's
+current embedding model and dimensions; `publish_warm_retrieval` requires the
+calling bot, the current corpus version, a live unexpired C4 record for the
+bot's current model and dimensions (model-liveness, not per-vector binding:
+C4 keys hash model|dims|question while C5 embedding hashes hash the vector, so
+key equality could never hold — T14), and chunk refs that each resolve to an
+active same-bot chunk (T15 tenant binding). Cross-bot or model-without-cache
+writes are refused.
+Moderation has no per-bot model in the database, so its identity rests on the
+T06-validated worker configuration deployed equal to the API's. Malformed
+calls fail loudly (22023). Upserts delegate to the existing cache_set_* RPCs.
+Service role only. Migration 024 is applied to the LOCAL stack only; hosted
+remains last recorded at 017.
+
+### Warm fenced C7 publication (T11, migration 025, applied locally only)
+
+`publish_warm_answer` persists the shared `answer_cache` L2 record under the
+same lease/version/policy fence, plus explicit C7 opt-in (`c7` layer: `c7`,
+`answer_cache`, `answer` or `enabled` true; default off) and answer
+eligibility: status `complete`, moderated, not truncated, current `rag-v2`
+prompt template, no PII or contact details in question or answer, citations
+only from still-active same-bot chunks (ready version, non-deleted,
+`public_answer`, exact cited version, `d.bot_id` bound — T15 tenant binding)
+or a deliberate non-`blocked` handoff. Stale, disabled, unopted, ineligible,
+uncited or cross-bot writes return false instead of writing;
+cross-bot or foreign-lease writes are refused (RB004/RB013); malformed calls
+fail loudly (22023). The upsert delegates to `cache_set_answer`. Chat-model
+identity rests on the T06-validated worker configuration, like C6. Service
+role only. Migration 025 is applied to the LOCAL stack only; hosted remains
+last recorded at 017.
+
+### Warm tenant binding (T15, migration 027, applied locally only)
+
+Security review found shared-L2 rows were writable with cross-bot citations
+enforceable only by worker correctness. `publish_warm_answer` and
+`publish_warm_retrieval` now require every cited chunk to belong to the calling
+bot (ready version, non-deleted, `public_answer`, exact cited version,
+`d.bot_id` bound); C5 additionally rejects malformed chunk refs loudly (22023).
+`get_chunks_by_ids` takes an optional `p_bot_id` filter that both live read
+paths pass (single-argument calls keep working through the default). The C5
+model-liveness anchor from T14 is kept as stated above. Note: `p_chat_model`
+is capped at 128 chars while a worst-case fallback-inclusive key could be
+longer — such a publish fails closed per-variant (charge kept, other layers
+still publish); realistic model names fit.
+
+### Existing operations
+
 - `match_document_chunks`: bounded similarity query; filters by bot, active document version, deleted state, and disclosure policy. Execute by the backend role only, not `anon`.
 - `claim_jobs`: atomically claim due work using transaction/row locks and a lease. Expired leases become recoverable.
 - `activate_document_version`: atomically switch the active pointer and increment `corpus_version` after all expected chunks exist and validation succeeds. It refuses a version older than the active one (RB011).

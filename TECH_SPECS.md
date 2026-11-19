@@ -1,5 +1,7 @@
 # Technical Specifications — ragbot_widget
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 ## 1. Stack
 - Widget: TypeScript compiled/bundled to a self-contained JavaScript entry; CSS inside encapsulated UI.
 - API: Node.js LTS, TypeScript, Fastify; SSE-formatted streamed response to browser `fetch`.
@@ -20,6 +22,8 @@
 | GET /v1/conversations/:id | Visitor bearer token | Bounded history, same-session only; the query excludes `role = system` rows (enforced server-side, not just filtered in UI). Enabled in MVP (ADR 0009) |
 
 Session creation is not proof of human identity. Rate limits/bot challenges and spending controls remain mandatory. Optional history may be disabled entirely in the MVP.
+
+For challenge-enabled bots, the embed's public `data-turnstile-site-key` supplies the per-client Turnstile configuration (ADR 0010). The widget acquires a fresh token with shared `TURNSTILE_SESSION_ACTION` before a new session POST, never for live session reuse. Callback failure/expiry, load errors, timeout and cancellation do not send a tokenless fallback. A refused session remains a generic verification/access refusal, without distinguishing disabled/missing bots from rejected challenges. Server Siteverify and per-client policy remain authoritative. UI_SCHEMA §2 defines lifecycle, retry and deployment requirements.
 
 ## 3. Administrative operations
 The admin panel never calls the Render API (ADR 0017). It reads under RLS and writes through database functions and Storage policies, listed in `DATABASE_SCHEMA.md` "Admin RPCs". Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules.
@@ -77,7 +81,7 @@ Stable codes include `INVALID_REQUEST`, `SESSION_EXPIRED`, `UNAUTHORIZED`, `FORB
 - `messages.handoff_reason` is persisted; admins read aggregated gaps via the `knowledge_gaps` RPC.
 
 ## 6.2 Caching (latency)
-All caches are version-keyed, backend-only, and can be disabled by a kill switch in `client_settings.cache_policy`. Answer and retrieval caches are bot-scoped. Query embedding and moderation caches are keyed by content hash, have no `bot_id`, and hold no raw text or visitor data, so a verdict or embedding can be reused for identical input.
+All caches are version-keyed, backend-only, and can be disabled by a kill switch in `client_settings.cache_policy`. For backend layers C2 and C4–C7, `kill_switch: true` overrides enable flags; `enabled: false` also bypasses these layers, and individual `c2`/`c4`/`c5`/`c6`/`c7` false flags disable their respective layers. Chat uses the current server-loaded policy on both cache reads and writes. Answer and retrieval caches are bot-scoped. Query embedding and moderation caches are keyed by content hash, have no `bot_id`, and hold no raw text or visitor data, so a verdict or embedding can be reused for identical input.
 | Layer | Key | Storage | Invalidation |
 |---|---|---|---|
 | Provider prompt caching | Byte-identical prefix per bot, settings version and prompt template | Provider | Prefix changes on version change |

@@ -1,5 +1,7 @@
 # Implementation Plan — ragbot_widget
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 > Source of truth: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`.
 > This plan turns that planning baseline (v1.0) into an ordered, testable build. Requirement IDs (W-01…W-16) refer to `PRD.md §5`.
 > Created: 2026-11-03. Updated 2026-11-06 with the admin panel's backend requests (§1a) and ADR 0017. Progress is tracked in `status.md`; context for whoever picks this up is in `handover.md`.
@@ -239,6 +241,10 @@ Pipeline per ARCHITECTURE §3:
 **Tests:** each `handoff_reason` trigger fires correctly and carries config contact details; unanswerable eval set always yields `handoff` and never an invented answer or invented phone/email; prompt assembly, citation mapping, fallback eligibility matrix, abort handling, browser-supplied context rejected, prompt-injection docs don't change behaviour, cross-session history denied.
 
 ### P7.5 — Caching & latency
+Remaining pre-P11 repairs are split into bounded tasks in
+`docs/reports/PRE-P11-TASKS.md`. Save continuity at every task end and obey the
+owner's5%-remaining usage stop; this task breakdown does not change phase gates.
+
 Goal: cut time-to-first-token and total response time without weakening any invariant in `handover.md §4`. Every cache is **bot-scoped, version-keyed, backend-only, and bypassable** by a kill switch in `client_settings.cache_policy`.
 
 **Where the time goes on a cache miss (expected order of cost):** chat-provider generation ≫ input/output moderation ≈ query embedding > vector search > config/profile reads > session/limit checks. Caches below target each step, biggest win first.
@@ -315,6 +321,9 @@ The answer cache is the largest speed-up and the riskiest, so it is **off by def
 **Tests:** contact card for each handoff reason, `tel:`/`mailto:` links correct, malicious config values (`javascript:` URL, HTML in message) rejected, card shown when API unreachable; Playwright E2E on representative host pages (aggressive global CSS, CSP-strict page, SPA), mobile viewport, keyboard-only, axe a11y scan, XSS payloads in answers/config/sources, streaming cancel, partial response display.
 
 ### P9 — Analysis, entries, retention
+Local repairs018/019 add generation-bound spend accounting and revision-based
+successor scheduling; both remain local until explicit hosted approval. See
+`DATABASE_SCHEMA.md` and P9-D3/P9-D4 evidence. Final integrated acceptance is open.
 - `jobs/analyze-conversation.ts`: debounced by dedupe key per conversation; summary, sentiment, intent → `conversation_analysis` with `analysis_version`; never on the answer path (W-10).
 - `POST /v1/entries`: only approved `schema_key`s; schema validation; consent timestamp required; minimal personal data (W-13).
 - Knowledge-gaps RPC for admins: already in migration 003. Check it returns real data here, once messages exist: aggregated unanswered questions by `handoff_reason` and frequency, so clients can add missing documents.

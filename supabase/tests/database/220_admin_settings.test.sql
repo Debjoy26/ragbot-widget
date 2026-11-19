@@ -71,7 +71,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB033', null, 'nonmember: delete_conversation -> not a member');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB033', null, 'nonmember: list_members -> not a member');
 select throws_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'RB033', null, 'nonmember: document_status -> not a member');
-select is(public.schema_version(), 17, 'nonmember: schema_version works (no membership needed)');
+select is(public.schema_version(), 27, 'nonmember: schema_version works (no membership needed)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a5000000-0000-4000-8000-000000000220","aal":"aal2","role":"authenticated"}', true);
@@ -82,7 +82,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB033', null, 'revoked: delete_conversation -> not a member');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB033', null, 'revoked: list_members -> not a member');
 select throws_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'RB033', null, 'revoked: document_status -> not a member');
-select is(public.schema_version(), 17, 'revoked: schema_version works (no membership needed)');
+select is(public.schema_version(), 27, 'revoked: schema_version works (no membership needed)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a3000000-0000-4000-8000-000000000220","aal":"aal2","role":"authenticated"}', true);
@@ -93,7 +93,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB033', null, 'analyst: delete_conversation -> role not allowed');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB033', null, 'analyst: list_members -> role not allowed');
 select lives_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'analyst: document_status allowed');
-select is(public.schema_version(), 17, 'analyst: schema_version works');
+select is(public.schema_version(), 27, 'analyst: schema_version works');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000220","aal":"aal1","role":"authenticated"}', true);
@@ -104,7 +104,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB032', null, 'owner at aal1: delete_conversation -> MFA required');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB032', null, 'owner at aal1: list_members -> MFA required');
 select throws_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'RB032', null, 'owner at aal1: document_status -> MFA required');
-select is(public.schema_version(), 17, 'owner at aal1: schema_version works (no MFA needed)');
+select is(public.schema_version(), 27, 'owner at aal1: schema_version works (no MFA needed)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a2000000-0000-4000-8000-000000000220","aal":"aal1","role":"authenticated"}', true);
@@ -115,7 +115,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB032', null, 'admin at aal1: delete_conversation -> MFA required');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB032', null, 'admin at aal1: list_members -> MFA required');
 select throws_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'RB032', null, 'admin at aal1: document_status -> MFA required');
-select is(public.schema_version(), 17, 'admin at aal1: schema_version works (no MFA needed)');
+select is(public.schema_version(), 27, 'admin at aal1: schema_version works (no MFA needed)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a3000000-0000-4000-8000-000000000220","aal":"aal1","role":"authenticated"}', true);
@@ -126,7 +126,7 @@ select throws_ok($q$select public.admin_set_bot_enabled('b1000000-0000-4000-8000
 select throws_ok($q$select public.admin_delete_conversation(gen_random_uuid())$q$, 'RB033', null, 'analyst at aal1: delete_conversation -> role not allowed (checked before MFA)');
 select throws_ok($q$select * from public.admin_list_members()$q$, 'RB033', null, 'analyst at aal1: list_members -> role not allowed (checked before MFA)');
 select throws_ok($q$select * from public.admin_document_status('b1000000-0000-4000-8000-000000000220', 10, 0)$q$, 'RB032', null, 'analyst at aal1: document_status -> MFA required');
-select is(public.schema_version(), 17, 'analyst at aal1: schema_version works (no MFA needed)');
+select is(public.schema_version(), 27, 'analyst at aal1: schema_version works (no MFA needed)');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a1000000-0000-4000-8000-000000000220","aal":"aal2","role":"authenticated"}', true);
@@ -179,7 +179,7 @@ select is((select count(*)::int from public.audit_logs) - current_setting('t.aud
 
 -- schema_version equals the number of applied migrations
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the migration history');
-select is(public.schema_version(), 17, 'schema_version: this database is at 17');
+select is(public.schema_version(), 27, 'schema_version: this database is at 27');
 
 -- ===========================================================================
 -- 3. Update settings: refusals change nothing

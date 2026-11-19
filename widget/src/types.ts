@@ -9,6 +9,7 @@ export interface EmbedOptions {
   readonly apiUrl: string;
   readonly supabaseUrl: string;
   readonly supabasePublishableKey: string;
+  readonly turnstileSiteKey?: string | undefined;
 }
 
 export type WidgetState =

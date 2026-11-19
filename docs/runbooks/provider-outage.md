@@ -1,5 +1,7 @@
 # Runbook: provider outage (P10)
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](../reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 Scope: chat, embedding or moderation provider returns auth/billing errors or
 sustained transient failures. Visitor impact first, diagnosis second.
 

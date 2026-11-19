@@ -119,8 +119,14 @@ export function extractCachePolicy(config: unknown): unknown {
     if ('cache_policy' in inner) return inner['cache_policy'];
     if ('cachePolicy' in inner) return inner['cachePolicy'];
   }
-  // Also support ChatContext-like where policy is carried separately — caller
-  // can pass policyGetter to load(); this helper is the default.
+  // Production get_chat_context nests the policy under settings. Preserve
+  // the legacy top-level/client_settings precedence before this fallback.
+  const settings = c['settings'];
+  if (settings !== null && typeof settings === 'object') {
+    const inner = settings as Record<string, unknown>;
+    if ('cache_policy' in inner) return inner['cache_policy'];
+    if ('cachePolicy' in inner) return inner['cachePolicy'];
+  }
   return undefined;
 }
 
@@ -130,6 +136,7 @@ export function isC2Enabled(cachePolicy: unknown): boolean {
   if (cachePolicy === null || cachePolicy === undefined) return true;
   if (typeof cachePolicy !== 'object') return true;
   const p = cachePolicy as Record<string, unknown>;
+  if (p['kill_switch'] === true) return false;
   if (p['enabled'] === false) return false;
   if (p['c2'] === false) return false;
   return true;

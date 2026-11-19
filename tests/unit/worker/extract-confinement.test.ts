@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildPdf } from './fixtures/pdf.ts';
@@ -43,8 +44,19 @@ const { confinementArgs, ExtractError, ExtractSpawnError, extractText } =
   await import('../../../worker/src/lib/extract.ts');
 
 const LIMITS = { timeoutMs: 30_000, maxMemoryMb: 512, maxPages: 10, maxChars: 1_000_000 };
-const CHILD = new URL('../../../worker/src/lib/extract-child.ts', import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: on Windows a pathname keeps a leading slash
+// (`/D:/...`) that Node's fs cannot open (ENOENT) while the allow-list matches
+// the string, hiding the confinement under test. Production uses fileURLToPath.
+const CHILD = fileURLToPath(new URL('../../../worker/src/lib/extract-child.ts', import.meta.url));
 const PDFJS_DIR = dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json'));
+
+// /proc does not exist on Windows, so the parent-environ probe targets the
+// node binary itself there instead: it exists on every dev box and is never in
+// the allow-list, so the unconfined/confined expectations hold on both
+// platforms without weakening either side.
+const ENVIRON =
+  process.platform === 'win32' ? process.execPath : `/proc/${String(process.pid)}/environ`;
+const SELF_ENVIRON = process.platform === 'win32' ? process.execPath : '/proc/self/environ';
 
 const dir = mkdtempSync(join(tmpdir(), 'ragbot-confine-'));
 const OUTSIDE = join(dir, 'outside.txt');
@@ -57,12 +69,12 @@ afterAll(() => {
 
 const PROBE = `
 const fs = require('node:fs');
-const [outside, environ, allowedScript, allowedPkg] = process.argv.slice(1);
+const [outside, environ, selfEnviron, allowedScript, allowedPkg] = process.argv.slice(1);
 const attempt = (fn) => { try { fn(); return 'READ'; } catch (e) { return e.code ?? e.name ?? 'ERR'; } };
 const result = {
   outside: attempt(() => fs.readFileSync(outside)),
   environ: attempt(() => fs.readFileSync(environ)),
-  selfEnviron: attempt(() => fs.readFileSync('/proc/self/environ')),
+  selfEnviron: attempt(() => fs.readFileSync(selfEnviron)),
   script: attempt(() => fs.readFileSync(allowedScript)),
   pkg: attempt(() => fs.readFileSync(allowedPkg)),
   write: attempt(() => fs.writeFileSync(outside, 'x')),
@@ -76,15 +88,7 @@ function probe(confined: boolean): Record<string, string> {
   const flags = confined ? confinementArgs(256, CHILD) : [];
   const run = spawnSync(
     process.execPath,
-    [
-      ...flags,
-      '-e',
-      PROBE,
-      OUTSIDE,
-      `/proc/${String(process.pid)}/environ`,
-      CHILD,
-      join(PDFJS_DIR, 'package.json'),
-    ],
+    [...flags, '-e', PROBE, OUTSIDE, ENVIRON, SELF_ENVIRON, CHILD, join(PDFJS_DIR, 'package.json')],
     { env: {}, encoding: 'utf8' },
   );
   expect(run.status).toBe(0);

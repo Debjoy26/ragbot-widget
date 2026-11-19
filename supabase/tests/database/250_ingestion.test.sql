@@ -1039,7 +1039,7 @@ select is(
       and not has_function_privilege('anon', p.oid, 'EXECUTE') and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
       and not exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a where a.grantee = 0)),
   19, 'grants: the nineteen new functions are executable by service_role only (not anon, authenticated or PUBLIC)');
-select is(public.schema_version(), 17, 'schema_version: 17');
+select is(public.schema_version(), 27, 'schema_version: 27');
 select is(public.schema_version(), (select count(*)::int from supabase_migrations.schema_migrations), 'schema_version: equals the number of migrations in the history');
 select ok(has_function_privilege('authenticated', 'public.schema_version()', 'EXECUTE') and not has_function_privilege('anon', 'public.schema_version()', 'EXECUTE'), 'schema_version: the grants of 010 are kept (authenticated yes, anon no)');
 select is((select count(*)::int from pg_indexes where schemaname = 'public' and indexname = 'document_versions_pending_upload_idx'), 1, 'index: the pending-upload age index exists');

@@ -1,5 +1,7 @@
 # UI Schema — ragbot_widget
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 ## 1. Boundary
 The widget is browser-delivered JavaScript, not a trusted execution environment. It uses an encapsulated custom element/Shadow DOM. Shadow DOM isolates styles, not secrets or malicious host scripts. A compromised host page can observe visitor activity.
 
@@ -11,6 +13,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
   data-api-url="https://client-a-api.example.com"
   data-supabase-url="https://PROJECT_REF.supabase.co"
   data-supabase-publishable-key="sb_publishable_REPLACE_ME"
+  data-turnstile-site-key="REPLACE_WITH_PUBLIC_SITE_KEY"
   defer
 ></script>
 ```
@@ -20,6 +23,10 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
 - Fixed branding may also be bundled for first paint; server safety settings always take precedence.
 - `data-bot-slug` carries the bot slug (sent as `bot_slug` to the API); the server returns the UUID `bot_id` in public config.
 - Duplicate initialisation must reuse an existing instance rather than attach multiple launchers.
+- Classic-script embed attributes are captured when the bundle executes, before any delayed DOM-ready initialization. Ordinary, deferred, async and dynamically inserted classic scripts use that captured configuration; an author-placed widget host is reused.
+- `data-turnstile-site-key` is the public per-client Cloudflare site key, required for a challenge-enabled bot. Provision invisible mode per ADR 0010 and allow the host's domains in Turnstile. Omit this attribute for challenge-disabled development bots; omission does not bypass the API's required-challenge policy. Never embed the Turnstile secret key.
+- For a new visitor session, the widget lazily loads Cloudflare's official explicit-rendering script, renders the shared `session_create` action and immediately submits the returned token once. A live stored session skips verification. Challenge errors, expiry, unsupported browsers, script failures and a two-minute watchdog fail closed with a user retry; each retry renders a new challenge. Stop/close cancels pending verification and session creation. Tokens are not cached, persisted separately or logged.
+- Vendor content lives in a light-DOM container projected into the panel's verification slot; this also keeps a managed challenge visible if the operator supplies an interactive site key. Site-key mode is configured in Cloudflare, not by the widget's compact size. Host CSP must permit Turnstile's script/frame resources; see [Cloudflare CSP guidance](https://developers.cloudflare.com/turnstile/reference/content-security-policy/). Live keys, hostname/action verification and production CSP remain P12 checks.
 
 ## 3. Component hierarchy
 ```text
@@ -41,6 +48,7 @@ The widget is browser-delivered JavaScript, not a trusted execution environment.
         ContactCard [escalation message, email/phone/WhatsApp/contact-page links, business hours, open-now hint]
         StatusNotice
       OptionalApprovedForm
+      SessionVerification [light-DOM vendor content projected through a slot]
       Composer [textarea, send/stop]
       Footer [AI disclosure, escalation link]
 ```
@@ -109,5 +117,17 @@ Contact fields: email format, E.164 phone, `https:` URLs only, plain-text messag
 ## 7. Visitor session policy
 Keep the short-lived session token (~30 min, bound to bot/session/expiry) in tab-scoped `sessionStorage` so the conversation survives page navigation on multi-page host sites (ADR 0009). Restore the transcript through `GET /v1/conversations/:id` (same session only; `system` messages never returned). Never use `localStorage` for the token. Never store provider credentials or admin tokens in widget state. Session reset should clear locally held context and start a new authorised conversation.
 
+When a session expires, is revoked or changes identity, clear its conversation
+binding in memory and sessionStorage. A new token starts with no conversation
+ID. Existing displayed messages remain labelled local history and are never
+sent as browser-provided context. A delayed history response must still match
+the current live session and must not overwrite a conversation started meanwhile.
+
 ## 8. Failure behaviour
 No raw stack traces or provider errors. Show stable user messages and an opaque request ID. Do not automatically resend after partial output. A retry after connection loss reconciles the idempotency key with server state before generating again.
+
+A successful HTTP response that ends without a valid terminal SSE done/error
+is interrupted, including empty and metadata-only responses. Preserve received
+text, mark the answer partial and restore the composer with a stable notice.
+Intentional Stop retains its cancellation behavior. A new explicit send is
+a separate turn; no automatic replay or reconciliation is implied by EOF recovery.

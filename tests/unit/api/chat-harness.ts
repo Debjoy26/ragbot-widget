@@ -136,6 +136,7 @@ export interface Options {
   chatModelKey?: string;
   /** P7-D3: wire a real ModerationCache (default: none) + model key. */
   moderationCache?: import('../../../api/src/services/moderation-cache.ts').ModerationCache;
+  embeddingCache?: import('../../../api/src/services/embedding-cache.ts').EmbeddingCache;
   moderationModelKey?: string;
   /**
    * P7-D1: chunk ids that `get_chunks_by_ids` reports as active (ready, not
@@ -276,6 +277,7 @@ export function setup(options: Options = {}) {
     moderationModelKey: options.moderationModelKey ?? 'test/moderation-model',
     ...(options.answerCache === undefined ? {} : { answerCache: options.answerCache }),
     ...(options.moderationCache === undefined ? {} : { moderationCache: options.moderationCache }),
+    ...(options.embeddingCache === undefined ? {} : { embeddingCache: options.embeddingCache }),
     retrieval: createRetrieval({
       db,
       embedding,

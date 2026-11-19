@@ -4,6 +4,10 @@ import { defineConfig } from 'vitest/config';
 // Array form, longest prefix first: '@ragbot/shared/ai' must not be caught by '@ragbot/shared'.
 const alias = [
   {
+    find: /^@ragbot\/shared\/server\/(.+)$/,
+    replacement: fileURLToPath(new URL('./shared/src/server/$1.ts', import.meta.url)),
+  },
+  {
     find: /^@ragbot\/shared\/ai$/,
     replacement: fileURLToPath(new URL('./shared/src/ai/index.ts', import.meta.url)),
   },

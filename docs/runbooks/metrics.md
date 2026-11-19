@@ -1,8 +1,11 @@
 # Metrics and alerts (P10)
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](../reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 Query source: the per-client Postgres (service role or dashboard SQL), plus
 Render logs. All cost/usage rows already exist in `usage_events`; queue state
-in `jobs`; reservations in `request_runs`. No new tables.
+in `jobs`; monetary reservations in `budget_reservations` and request state
+in `request_runs`. No new tables.
 
 ## Latency (PRD §8: p95 first event ≤ 5 s, ordinary answer ≤ 20 s)
 
@@ -24,20 +27,23 @@ Alert: p95 `chat` latency > 20 s for 10 minutes → page. Sustained rise with
 flat provider status → check `retrieval_cache`/`answer_cache` hit rates below
 and queue age.
 
-## Cache hit rates (P7.5 layers C4–C7)
+## Answer-cache hits and cache inventory (P7.5)
+
+Run the canonical [cache-hit query](../../scripts/sql/cache-hit-metrics.sql)
+using `psql -f scripts/sql/cache-hit-metrics.sql`, or paste its SELECT into
+the dashboard SQL editor. It groups by bot and hour. Current deployed hits
+use operation `chat`, provider `cache`, model `answer_cache`; the query also
+supports the `answer_cache_hit` operation defined by the shared ledger
+contract. Those cache identities count as hits, never provider generations.
+NULL provider/model values still count as provider calls rather than disappearing.
+
+These are usage-event counts, not unique visitor requests: provider retries
+and fallback can produce multiple generation calls per request. Table sizes
+below are occupancy/expiry diagnostics, not C4–C6 hit ratios. Per-layer hit/miss
+counters must exist before reporting those ratios.
 
 ```sql
--- Answer-cache hits are usage rows with operation 'answer_cache_hit'.
-select date_trunc('hour', created_at) as hour,
-       count(*) filter (where operation = 'answer_cache_hit') as answer_hits,
-       count(*) filter (where operation = 'chat') as generations
-  from public.usage_events
- where created_at > now() - interval '1 day'
- group by 1 order by 1;
-```
-
-```sql
--- L2 cache table sizes and expiry pressure (hits are L1; L2 rows prove sharing).
+-- L2 table occupancy and expiry pressure; neither measures a hit ratio.
 select 'answer_cache' as tbl, count(*), count(*) filter (where expires_at < now() + interval '1 hour') as expiring_soon from public.answer_cache
 union all
 select 'retrieval_cache', count(*), count(*) filter (where expires_at < now() + interval '1 hour') from public.retrieval_cache
@@ -69,17 +75,18 @@ Alert: `failed` rows (dead letters after `max_attempts`) → ticket; inspect
 ```sql
 -- Spend and denials per bot per day (reservations are per UTC day).
 select bot_id, date_trunc('day', created_at) as day,
-       sum(estimated_cost) filter (where operation <> 'answer_cache_hit') as spend_usd,
+       sum(estimated_cost) as spend_usd,
        count(*) filter (where operation = 'analysis') as analyses
   from public.usage_events
  group by 1, 2 order by 1, 2;
 ```
 
 ```sql
--- Open budget reservations per bot (stuck ones are reaped to `expired`).
-select bot_id, state, count(*)
-  from public.request_runs
- where started_at > now() - interval '1 day'
+-- Reservation amounts show conservative exposure, separate from recorded usage.
+-- Expired background holds can continue counting until reconciliation.
+select bot_id, state, count(*), sum(amount) as reservation_usd
+  from public.budget_reservations
+ where created_at > now() - interval '1 day'
  group by 1, 2 order by 1, 2;
 ```
 

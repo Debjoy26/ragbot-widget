@@ -8,34 +8,14 @@
 //    again here; a malformed row is an internal fault, never evidence.
 //  * Chunk text is untrusted data and is never logged by this module.
 
-import { z } from 'zod';
-import { CHUNK_ID_PATTERN, type EmbeddingProvider } from '@ragbot/shared';
+import type { EmbeddingProvider } from '@ragbot/shared';
+import {
+  retrievedChunkSchema as rowSchema,
+  type RetrievedChunk,
+} from '@ragbot/shared/server/retrieval-types';
+export type { RetrievedChunk } from '@ragbot/shared/server/retrieval-types';
 import { AppError } from '../lib/errors.js';
 import type { Db } from '../lib/supabase.js';
-
-export interface RetrievedChunk {
-  readonly chunk_id: string;
-  readonly document_id: string;
-  readonly document_version_id: string;
-  readonly document_title: string;
-  readonly chunk_index: number;
-  readonly content: string;
-  readonly page_number: number | null;
-  readonly section: string | null;
-  readonly similarity: number;
-}
-
-const rowSchema = z.looseObject({
-  chunk_id: z.string().regex(CHUNK_ID_PATTERN),
-  document_id: z.uuid(),
-  document_version_id: z.uuid(),
-  document_title: z.string(),
-  chunk_index: z.int().min(0),
-  content: z.string(),
-  page_number: z.int().min(1).nullable(),
-  section: z.string().nullable(),
-  similarity: z.number().min(-1).max(1),
-});
 
 export interface EmbeddedQuery {
   readonly vector: readonly number[];
@@ -47,10 +27,11 @@ export interface Retrieval {
   embedQuery(text: string, signal: AbortSignal): Promise<EmbeddedQuery>;
   /** At most `topK` chunks with similarity >= the minimum, best first. */
   match(botId: string, vector: readonly number[], signal: AbortSignal): Promise<RetrievedChunk[]>;
-  /** Rehydrate cached chunk refs by ID (C5). Returns full chunks in cached order; missing => []. */
+  /** Rehydrate cached chunk refs by ID (C5). Bot-scoped: missing/foreign => []. */
   hydrate(
     refs: readonly { readonly chunk_id: string; readonly similarity: number }[],
     signal: AbortSignal,
+    botId: string,
   ): Promise<RetrievedChunk[]>;
 }
 
@@ -121,11 +102,11 @@ export function createRetrieval(options: CreateRetrievalOptions): Retrieval {
       return chunks.sort((a, b) => b.similarity - a.similarity);
     },
 
-    async hydrate(refs, signal) {
+    async hydrate(refs, signal, botId: string) {
       if (refs.length === 0) return [];
       const raw = await db.rpc<unknown>(
         'get_chunks_by_ids',
-        { p_chunk_ids: refs.map((r) => r.chunk_id) },
+        { p_chunk_ids: refs.map((r) => r.chunk_id), p_bot_id: botId },
         signal,
       );
       if (!Array.isArray(raw)) {

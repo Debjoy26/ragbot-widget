@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   anonHeaders,
+  EXPECTED_SCHEMA_VERSION,
   getLocalPrivilegedKey,
   getLocalStack,
   keyHeaders,
@@ -267,6 +268,6 @@ describe('create-first-admin against the local stack', () => {
       body: '{}',
     });
     expect(ver.status).toBe(200);
-    expect(await ver.json()).toBe(15);
+    expect(await ver.json()).toBe(EXPECTED_SCHEMA_VERSION);
   });
 });

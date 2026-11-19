@@ -34,6 +34,22 @@ const CONFIG: WidgetPublicConfig = {
 };
 
 describe('buildContactLinks', () => {
+  it('preserves SQL URL forms for configured contact links', () => {
+    const value = 'https://xn--a';
+    const links = buildContactLinks(
+      { pageUrl: value },
+      { email: 'E', phone: 'P', whatsapp: 'W', page: 'C' },
+    );
+    expect(links.map((link) => link.href)).toEqual([value]);
+  });
+  it('rejects forms the SQL URL policy refuses', () => {
+    expect(() =>
+      buildContactLinks(
+        { pageUrl: 'https://127.0.0.1' },
+        { email: 'E', phone: 'P', whatsapp: 'W', page: 'C' },
+      ),
+    ).toThrow();
+  });
   it('builds mailto/tel/https links from validated contact', () => {
     const links = buildContactLinks(
       {

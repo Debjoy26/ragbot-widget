@@ -30,6 +30,16 @@ const TEST_TIMEOUT = 150_000;
 const t = (name: string, fn: () => Promise<void>, timeout = TEST_TIMEOUT): void => {
   it(name, fn, timeout);
 };
+// Signal delivery is POSIX-only: on Windows child.kill('SIGTERM'/'SIGKILL')
+// ends the process via TerminateProcess, which no handler can catch, so the
+// worker can never drain or exit 0 there (observed exit
+// {"code":null,"signal":"SIGTERM"} with the handler code intact). The signal
+// tests keep full strength where signals are real and skip on Windows with
+// the reason reported; the skip is a platform limitation, not a weakened
+// assertion. See T20.
+const tSignal = (name: string, fn: () => Promise<void>, timeout = TEST_TIMEOUT): void => {
+  it.skipIf(process.platform === 'win32')(name, fn, timeout);
+};
 
 interface Exit {
   code: number | null;
@@ -253,7 +263,7 @@ describe('worker process against the local stack', () => {
     expect(server.authFailures()).toBe(0);
   }
 
-  t(
+  tSignal(
     'A3 kill -9 mid-job, then restart: the job is retried, the version ends ready, no duplicate or missing chunks',
     async () => {
       await fixture();
@@ -296,7 +306,7 @@ describe('worker process against the local stack', () => {
     },
   );
 
-  t(
+  tSignal(
     'C2 SIGTERM during a job: the worker stops claiming, lets the job finish inside the grace period and exits 0',
     async () => {
       await fixture();
@@ -340,7 +350,7 @@ describe('worker process against the local stack', () => {
     },
   );
 
-  t(
+  tSignal(
     'D6 SIGTERM during a job (the only attempt): the job goes back to queued with its attempt restored, the next worker finishes it, the version is never failed',
     async () => {
       await fixture();
@@ -390,7 +400,7 @@ describe('worker process against the local stack', () => {
     },
   );
 
-  t(
+  tSignal(
     'C2 SIGTERM during a job that outlasts the grace period: the worker aborts it, hands the job back queued and exits 0 within the bound',
     async () => {
       await fixture();

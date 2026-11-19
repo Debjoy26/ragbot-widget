@@ -93,6 +93,18 @@ export const MAINTENANCE_TASKS: readonly Task[] = [
     })),
   },
   {
+    name: 'settle_orphaned_analysis_reservations',
+    run: call('settle_orphaned_analysis_reservations', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
+    })),
+  },
+  {
+    name: 'settle_orphaned_warm_reservations',
+    run: call('settle_orphaned_warm_reservations', (c) => ({
+      p_batch: Math.min(c.retentionBatchSize, INDEX_MAINTENANCE_MAX_BATCH),
+    })),
+  },
+  {
     name: 'purge_expired_conversations',
     run: call('purge_expired_conversations', (c) => ({ p_batch: c.retentionBatchSize })),
   },

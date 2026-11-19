@@ -186,7 +186,9 @@ export function createWidgetUi(
   else if (config.contactEmail !== undefined) escalationLink.href = `mailto:${config.contactEmail}`;
   footer.append(disclosure, escalationLink);
 
-  panel.append(header, notice, transcript, liveRegion, composer, footer);
+  const verification = document.createElement('slot');
+  verification.name = 'verification';
+  panel.append(header, notice, transcript, liveRegion, verification, composer, footer);
   root.append(launcher, panel);
 
   const ui: WidgetUi = {

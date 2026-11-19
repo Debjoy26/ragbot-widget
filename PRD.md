@@ -1,5 +1,7 @@
 # Product Requirements Document — ragbot_widget
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 ## 1. Status and purpose
 - Version: 1.0 planning baseline.
 - This document specifies intended behaviour; it is not evidence of an implemented system.

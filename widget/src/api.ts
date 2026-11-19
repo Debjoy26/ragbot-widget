@@ -9,6 +9,7 @@
 
 import type { SseParsedEvent, WidgetHandoff, WidgetSourceRef } from './types.js';
 import { SSE_EVENT_NAMES } from './types.js';
+import { MESSAGE_STATUSES } from '../../shared/src/contracts.js';
 
 export interface ChatEvents {
   readonly onEvent: (event: SseParsedEvent) => void;
@@ -84,7 +85,11 @@ function coerceEvent(name: string, data: unknown): SseParsedEvent | null {
     }
     case 'done': {
       const d = data as Readonly<Record<string, unknown>>;
-      if (typeof d['status'] !== 'string') return null;
+      if (
+        typeof d['status'] !== 'string' ||
+        !MESSAGE_STATUSES.some((status) => status === d['status'])
+      )
+        return null;
       return { event: 'done', data: { status: d['status'] } };
     }
     case 'error': {
@@ -253,7 +258,11 @@ export async function streamChat(args: {
   }
   if (response.body === null) throw new Error('CHAT_FAILED');
   const reader = response.body.getReader();
-  const parser = createSseParser(onEvent);
+  let terminal = false;
+  const parser = createSseParser((event) => {
+    if (event.event === 'done' || event.event === 'error') terminal = true;
+    onEvent(event);
+  });
   const decoder = new TextDecoder();
   try {
     for (;;) {
@@ -264,6 +273,7 @@ export async function streamChat(args: {
     }
     parser.push(decoder.decode());
     parser.flush();
+    if (!terminal && signal?.aborted !== true) throw new Error('STREAM_INTERRUPTED');
   } finally {
     reader.releaseLock();
   }

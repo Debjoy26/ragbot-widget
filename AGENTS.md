@@ -1,5 +1,20 @@
 # AGENTS.md — ragbot_widget
 
+
+## Current owner instructions and handoff
+
+Work is STOPPED for documentation handoff after completedT03c-3a; latest owner
+usage report10% remaining of the five-hour allowance. NextT03c-3b full local
+pgTAP NOT STARTED. Read docs/reports/OPENCODE-HANDOFF.md and LATEST-CHECKPOINT.md
+before resuming. This applies to OpenCode, Codex and other agents equally.
+
+Resume local tasks only when the owner says continue. After continuation, the
+owner monitors usage; do not repeatedly block solely because tools lack a meter.
+Stop immediately on owner signal or an authoritative reading<=5% remaining;
+save continuity only. Never substitute context/elapsed time or invent a reset.
+Checkpoint EVERY task including failure/interruption. STOP BEFORE P11. Main
+runs verification; no CI as evidence. No new release/hosted/provider permission.
+
 > Operational guide for any AI/human agent working in this repo.
 > Derived from `CLAUDE.md` v0.1 + `rules.md` (2026-11-08). Where they conflict on CI, testing, or starting debug cycles, `rules.md` wins. Phase IDs are `plan.md` P0–P12; invariants are `handover.md §4`.
 
@@ -9,7 +24,7 @@ Embeddable, client-branded RAG chatbot (one `<script>` tag). Monorepo `shared` /
 
 - **Node:** `26.13.1` pinned in `.nvmrc:1` and `package.json:7` (ADR 0018, revises ADR 0001) — run `nvm use`.
 - **Package manager:** `npm` workspaces, committed `package-lock.json`. No `latest`.
-- **Current state:** P0–P6 on `main` and pushed; P7 retrieval & chat on `main` @ `41997a9` (migration 013 on hosted dev project) not yet phase-accepted. See `status.md:1` and `handover.md:2` for live tracker.
+- **Current state:** P0–P6 accepted; P7–P10 implementations are on `main`, phase acceptance remains open. The active pre-P11 repair overlay is uncommitted from `aa6425a`; local schema020, hosted last recorded017. Stop before P11. Use `status.md:1`, `handover.md:2` and `docs/reports/SESSION-CHECKPOINT-2026-11-17.md` for exact live state; do not infer acceptance from earlier implementation history.
 
 ## 2. Start / resume every session
 
@@ -19,11 +34,24 @@ Embeddable, client-branded RAG chatbot (one `<script>` tag). Monorepo `shared` /
 4. Preserve existing work. Never invent commits, test results, decisions, or approvals.
 5. Open P0 decisions (`status.md §3`) are never guessed — stop and ask if a task depends on one.
 
+### Small tasks, checkpoints and quota stop (owner instruction, 2026-11-18)
+
+Follow `docs/reports/PRE-P11-TASKS.md` for the ordered remaining local tasks.
+At the end of every task, including failure/interruption, save a task checkpoint
+and update `status.md`, `handover.md`, the repair tracker and exact session
+checkpoint; update affected specs/runbooks without rewriting historical evidence.
+At an authoritative reading of **5% remaining or less** of the five-hour account
+allowance, stop implementation/workers/checks and save continuity only. The
+current tools do not expose that usage reading: never substitute elapsed time,
+context tokens or a goal budget, and never claim automatic monitoring exists.
+The owner monitors usage after continuation; lack of agent telemetry alone
+does not block authorized work. Stop on owner signal/known5% threshold. No automatic P11 progression, commit, push or hosted write.
+
 ## 3. Repository layout
 
 ```
 shared/src/{contracts,schemas,errors,providers,prompts}.ts  # frozen contracts (P2)
-supabase/migrations/ 001..013  + supabase/seed.sql            # single migration history
+supabase/migrations/ 001..020  + supabase/seed.sql            # single migration history
 database/             # symlinks into supabase/ + FDE runbook
 api/src/{server,routes/*,services/*,lib/*}
 worker/src/{worker,jobs/*,lib/*}

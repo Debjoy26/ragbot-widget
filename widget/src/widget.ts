@@ -4,6 +4,7 @@
 
 import { fetchHistory, newIdempotencyKey, streamChat } from './api.js';
 import { buildContactCard } from './contact-card.js';
+import { requestChallenge } from './challenge.js';
 import { loadPublicConfig, parseEmbedOptions } from './public-config.js';
 import { sanitizeSources } from './render.js';
 import { clearSession, createSession, readSession } from './session.js';
@@ -99,6 +100,7 @@ function fallbackConfig(botSlug: string): WidgetPublicConfig {
 
 async function boot(host: HTMLElement, attrs: Record<string, string | undefined>): Promise<void> {
   const options = parseEmbedOptions(attrs);
+  const turnstileSiteKey = options.turnstileSiteKey;
   const localStore = safeWindowStorage('localStorage');
   const sessionStore = safeWindowStorage('sessionStorage') ?? createMemoryStore();
   let config: WidgetPublicConfig;
@@ -116,7 +118,23 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
   }
 
   let conversationId: string | null = null;
+  const initialSession = readSession(sessionStore, options.botSlug, Date.now());
+  let boundSessionToken: string | null = initialSession?.token ?? null;
+  const clearConversationBinding = (): void => {
+    conversationId = null;
+    try {
+      sessionStore.removeItem(`ragbot.conversation.${options.botSlug}`);
+    } catch {
+      // The in-memory binding is cleared even if storage is unavailable.
+    }
+  };
+  const clearSessionContext = (): void => {
+    clearSession(sessionStore, options.botSlug);
+    clearConversationBinding();
+    boundSessionToken = null;
+  };
   let stopController: AbortController | null = null;
+  let creatingSession = false;
   let ui: ReturnType<typeof createWidgetUi> | null = null;
 
   const sendMessage = async (message: string): Promise<void> => {
@@ -128,13 +146,35 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
     const stop = new AbortController();
     stopController = stop;
     try {
+      creatingSession = true;
       const session = await createSession({
         apiUrl: options.apiUrl,
         botSlug: options.botSlug,
         fetchFn: domFetch,
         storage: sessionStore,
         nowMs: Date.now(),
+        signal: stop.signal,
+        getChallengeToken:
+          turnstileSiteKey === undefined
+            ? undefined
+            : () =>
+                requestChallenge({
+                  host,
+                  siteKey: turnstileSiteKey,
+                  signal: stop.signal,
+                }),
       });
+      if (stop.signal.aborted || stopController !== stop) throw new Error('SESSION_CANCELLED');
+      if (boundSessionToken !== session.token) {
+        const hadSessionContext = boundSessionToken !== null || conversationId !== null;
+        clearConversationBinding();
+        boundSessionToken = session.token;
+        if (hadSessionContext)
+          ui.appendStatusNotice(
+            'A new session has started. Earlier messages are local history and are not sent as context.',
+          );
+      }
+      creatingSession = false;
       let streamError: string | null = null;
       let sources: {
         readonly title: string;
@@ -199,7 +239,16 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
               // screen readers get the terminal announcement.
               assistant.finish('failed');
               streamError = event.data.code;
-              if (event.data.code === 'RATE_LIMITED' || event.data.code === 'BUDGET_EXCEEDED') {
+              if (event.data.code === 'SESSION_EXPIRED' || event.data.code === 'FORBIDDEN') {
+                clearSessionContext();
+                if (ui.getState() !== 'ready' && ui.getState() !== 'closed') ui.setState('ready');
+                ui.appendStatusNotice(
+                  'Session expired. Earlier messages are local history. Your next message starts a new session.',
+                );
+              } else if (
+                event.data.code === 'RATE_LIMITED' ||
+                event.data.code === 'BUDGET_EXCEEDED'
+              ) {
                 ui.setState('limited');
                 ui.appendStatusNotice('Too many requests. Please try again later.');
               } else {
@@ -233,6 +282,10 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
         ui.setState('ready');
       }
     } catch (error) {
+      if (stopController !== stop && stop.signal.aborted) {
+        assistant.finish('partial');
+        return;
+      }
       // P8-D2 (review R2): a user abort rejects the fetch. It is not an
       // outage — report the partial answer, never "service unavailable".
       // (The post-stream `aborted` check below only covers races where the
@@ -240,16 +293,35 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
       if (stop.signal.aborted) {
         assistant.finish('partial');
         ui.appendStatusNotice('Stopped. The partial answer above is all that arrived.');
-        if (ui.getState() !== 'ready') ui.setState('ready');
+        if (ui.getState() !== 'ready' && ui.getState() !== 'closed') ui.setState('ready');
         return;
       }
       const code = error instanceof Error ? error.message : 'CHAT_FAILED';
-      if (code === 'IDEMPOTENT_IN_PROGRESS') {
+      if (code === 'STREAM_INTERRUPTED') {
+        assistant.finish('partial');
+        ui.appendStatusNotice(
+          'The connection ended before the answer finished. The text above is partial. You can send a new message.',
+        );
+        if (ui.getState() !== 'ready' && ui.getState() !== 'closed') ui.setState('ready');
+        return;
+      } else if (code === 'CHALLENGE_FAILED' || (creatingSession && code === 'FORBIDDEN')) {
+        assistant.finish('failed');
+        ui.setState('ready');
+        ui.appendStatusNotice(
+          code === 'CHALLENGE_FAILED'
+            ? 'Verification could not finish. Please send your message again to retry.'
+            : 'Verification or session access was refused. Please retry or contact support.',
+        );
+        return;
+      } else if (code === 'IDEMPOTENT_IN_PROGRESS') {
         ui.appendStatusNotice('Your previous message is still being answered.');
       } else if (code === 'SESSION_EXPIRED' || code === 'FORBIDDEN') {
-        clearSession(sessionStore, options.botSlug);
-        ui.setState('ready');
-        ui.appendStatusNotice('Session expired. Your next message starts a new session.');
+        clearSessionContext();
+        assistant.finish('failed');
+        if (ui.getState() !== 'ready' && ui.getState() !== 'closed') ui.setState('ready');
+        ui.appendStatusNotice(
+          'Session expired. Earlier messages are local history. Your next message starts a new session.',
+        );
         return;
       } else {
         ui.setState('unavailable');
@@ -261,29 +333,29 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
       // network failures. Only `connecting` still needs an explicit recovery.
       if (ui.getState() === 'connecting') ui.setState('ready');
     } finally {
-      stopController = null;
+      if (stopController === stop) {
+        creatingSession = false;
+        stopController = null;
+      }
     }
   };
 
   ui = createWidgetUi(host, config, {
     onOpen: () => ui?.setState('ready'),
-    onClose: () => ui?.setState('closed'),
+    onClose: () => {
+      if (creatingSession) stopController?.abort();
+      ui?.setState('closed');
+    },
     onSend: (message) => void sendMessage(message),
     onStop: () => stopController?.abort(),
     onReset: () => {
-      clearSession(sessionStore, options.botSlug);
-      try {
-        sessionStore.removeItem(`ragbot.conversation.${options.botSlug}`);
-      } catch {
-        // Best-effort; a stale key only causes a best-effort restore attempt.
-      }
-      conversationId = null;
+      clearSessionContext();
     },
     onSuggestedQuestion: (question) => void sendMessage(question),
   });
   ui.setState('closed');
 
-  const session = readSession(sessionStore, options.botSlug, Date.now());
+  const session = initialSession;
   if (session !== null && conversationId === null) {
     try {
       const stored = sessionStore.getItem(`ragbot.conversation.${options.botSlug}`);
@@ -294,6 +366,15 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
           conversationId: stored,
           fetchFn: domFetch,
         });
+        // A restore started at boot must not rebind a refreshed/reset session,
+        // overwrite a conversation started meanwhile, or append stale history.
+        if (
+          boundSessionToken !== session.token ||
+          conversationId !== null ||
+          stopController !== null ||
+          readSession(sessionStore, options.botSlug, Date.now())?.token !== session.token
+        )
+          return;
         conversationId = page.conversationId;
         // P8-D2 (review R4): UI_SCHEMA §7 restores the transcript, not just
         // the questions. Assistant turns render as plain text; their sources
@@ -314,7 +395,7 @@ async function boot(host: HTMLElement, attrs: Record<string, string | undefined>
   }
 }
 
-function initFromScript(): void {
+function initFromScript(attrs: Record<string, string | undefined>): void {
   const { w } = globals();
   if (w[WIDGET_GLOBAL] !== undefined) return;
   if (typeof customElements !== 'undefined' && customElements.get(ELEMENT_NAME) !== undefined)
@@ -327,14 +408,14 @@ function initFromScript(): void {
   const authorHost = document.querySelector(ELEMENT_NAME);
   if (authorHost instanceof HTMLElement) {
     w[WIDGET_GLOBAL] = { host: authorHost, ready: Promise.resolve(null) };
-    defineWidgetElement();
+    defineWidgetElement(attrs);
     return;
   }
   const host = document.createElement(ELEMENT_NAME);
   if (!markBooting(host)) return;
   const bootPromise = (async (): Promise<WidgetInstance | null> => {
     try {
-      await boot(host, currentScriptAttrs());
+      await boot(host, attrs);
       return null;
     } catch {
       // Let a later (e.g. dynamically injected) tag retry; concurrent tags
@@ -345,7 +426,7 @@ function initFromScript(): void {
   })();
   w[WIDGET_GLOBAL] = { host, ready: bootPromise };
   document.documentElement.appendChild(host);
-  defineWidgetElement();
+  defineWidgetElement(attrs);
 }
 
 const BOOT_MARK = '__ragbotBooting';
@@ -358,7 +439,7 @@ function markBooting(host: HTMLElement): boolean {
   return true;
 }
 
-function defineWidgetElement(): void {
+function defineWidgetElement(attrs: Record<string, string | undefined>): void {
   if (typeof customElements === 'undefined' || customElements.get(ELEMENT_NAME) !== undefined) {
     return;
   }
@@ -367,16 +448,19 @@ function defineWidgetElement(): void {
     class extends HTMLElement {
       connectedCallback(): void {
         if (this.shadowRoot || !markBooting(this)) return;
-        boot(this, currentScriptAttrs()).catch(() => undefined);
+        boot(this, attrs).catch(() => undefined);
       }
     },
   );
 }
 
 if (typeof document !== 'undefined') {
+  // currentScript is only available while this bundle executes. Snapshot its
+  // attributes before DOMContentLoaded or a later custom-element upgrade.
+  const attrs = currentScriptAttrs();
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initFromScript, { once: true });
+    document.addEventListener('DOMContentLoaded', () => initFromScript(attrs), { once: true });
   } else {
-    initFromScript();
+    initFromScript(attrs);
   }
 }

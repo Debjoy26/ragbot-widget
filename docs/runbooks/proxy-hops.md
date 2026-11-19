@@ -1,5 +1,7 @@
 # Procedure: measuring TRUSTED_PROXY_HOPS (P10)
 
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](../reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
 From P4/P5: a wrong value puts every visitor in one rate-limit bucket (shared
 NAT) or splits one visitor across many. It must be measured on a real Render
 deploy, not guessed — and never on the local stack (direct loopback has no

@@ -20,6 +20,7 @@ export interface SessionFetch {
       readonly method: string;
       readonly headers: Readonly<Record<string, string>>;
       readonly body: string;
+      readonly signal?: AbortSignal | undefined;
     },
   ): Promise<{
     readonly ok: boolean;
@@ -106,8 +107,13 @@ export async function createSession(args: {
   readonly storage: SessionStorage;
   readonly nowMs: number;
   readonly getChallengeToken?: (() => Promise<string | null>) | undefined;
+  readonly signal?: AbortSignal | undefined;
 }): Promise<SessionRecord> {
-  const { apiUrl, botSlug, fetchFn, storage, nowMs, getChallengeToken } = args;
+  const { apiUrl, botSlug, fetchFn, storage, nowMs, getChallengeToken, signal } = args;
+  const checkCancelled = (): void => {
+    if (signal?.aborted) throw new Error('SESSION_CANCELLED');
+  };
+  checkCancelled();
   const existing = readSession(storage, botSlug, nowMs);
   if (existing !== null) return existing;
 
@@ -115,6 +121,7 @@ export async function createSession(args: {
   if (getChallengeToken !== undefined) {
     challengeToken = await getChallengeToken();
   }
+  checkCancelled();
   const body: Record<string, string> = { bot_slug: botSlug };
   if (challengeToken !== null && challengeToken.length > 0) {
     body['challenge_token'] = challengeToken;
@@ -123,13 +130,16 @@ export async function createSession(args: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
+  checkCancelled();
   if (!response.ok) {
     if (response.status === 429) throw new Error('RATE_LIMITED');
     if (response.status === 403) throw new Error('FORBIDDEN');
     throw new Error('SESSION_FAILED');
   }
   const parsed = (await response.json()) as unknown;
+  checkCancelled();
   if (!isRecord(parsed)) throw new Error('SESSION_FAILED');
   const { token, expires_at: expiresAt } = parsed as {
     readonly token?: unknown;

@@ -1,10 +1,34 @@
 # ragbot_widget — development contract v0.1
 
+
+## Current owner instructions and handoff
+
+Work is STOPPED for documentation handoff after completedT03c-3a; latest owner
+usage report10% remaining of the five-hour allowance. NextT03c-3b full local
+pgTAP NOT STARTED. Read docs/reports/OPENCODE-HANDOFF.md and LATEST-CHECKPOINT.md
+before resuming. This applies to OpenCode, Codex and other agents equally.
+
+Resume local tasks only when the owner says continue. After continuation, the
+owner monitors usage; do not repeatedly block solely because tools lack a meter.
+Stop immediately on owner signal or an authoritative reading<=5% remaining;
+save continuity only. Never substitute context/elapsed time or invent a reset.
+Checkpoint EVERY task including failure/interruption. STOP BEFORE P11. Main
+runs verification; no CI as evidence. No new release/hosted/provider permission.
+
 > Adapted from the PWT Workbench contract v0.3 for this repo (Node/TypeScript monorepo + Supabase). Phase IDs are `plan.md` P0–P12; invariants are `handover.md §4`.
 
 **Working rules:** read and follow `rules.md` (owner, 2026-11-08). It replaces CI with testing on this system, adds post-push verification, and makes the main session responsible for debug cycles. Where it differs from this file on CI, testing or starting debug cycles, `rules.md` wins: the main session starts and runs a debug cycle without waiting for approval, while merges, pushes and hosted changes still need the owner.
 
 ## Start/resume
+
+Owner instruction (2026-11-18): execute small tasks from
+`docs/reports/PRE-P11-TASKS.md`, save a checkpoint after every task, and stop
+implementation at an authoritative reading of5% remaining or less of the
+five-hour account usage allowance. Current tool quota visibility is unavailable;
+do not invent a reading or infer a reset. After owner continuation, follow
+the owner-monitored policy above without repeatedly requiring a meter reading. This applies to any agent,
+including OpenCode; see AGENTS.md for the repository-wide protocol.
+
 Read `status.md`, `handover.md` and the active `plan.md` phase section; inspect actual Git/dirty-worktree state (`git status`, `git log -5`). Load only the spec sections the active phase needs (`PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`), not every doc each session. Preserve existing work. Never invent commits, test results, decisions or approvals. Open P0 decisions (`status.md §3`) are never guessed — a task that depends on one stops and asks.
 
 ## Roles

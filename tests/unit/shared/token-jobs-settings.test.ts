@@ -54,11 +54,31 @@ describe('job payloads', () => {
     { type: 'analyze_conversation', payload: { bot_id: BOT_ID, conversation_id: CONVERSATION_ID } },
     { type: 'cleanup', payload: { bot_id: BOT_ID, scope: 'document', resource_id: DOC_ID } },
     { type: 'cleanup', payload: { bot_id: BOT_ID, scope: 'expired' } },
-    { type: 'warm_answer_cache', payload: { bot_id: BOT_ID, corpus_version: 3 } },
+    {
+      type: 'warm_answer_cache',
+      payload: { bot_id: BOT_ID, corpus_version: 3, settings_version: 1 },
+    },
   ];
 
   it.each(valid)('accepts a valid $type payload', (job) => {
     expect(jobSchema.safeParse(job).success).toBe(true);
+  });
+
+  it('rejects warm payloads with missing or invalid settings_version', () => {
+    const base = { bot_id: BOT_ID, corpus_version: 3, settings_version: 1 };
+    expect(jobSchema.safeParse({ type: 'warm_answer_cache', payload: { ...base } }).success).toBe(
+      true,
+    );
+    const { settings_version: _dropped, ...missing } = base;
+    expect(jobSchema.safeParse({ type: 'warm_answer_cache', payload: missing }).success).toBe(
+      false,
+    );
+    for (const settings_version of [0, -1, 1.5, '1', null]) {
+      expect(
+        jobSchema.safeParse({ type: 'warm_answer_cache', payload: { ...base, settings_version } })
+          .success,
+      ).toBe(false);
+    }
   });
 
   it('rejects a type/payload mismatch for every pair', () => {

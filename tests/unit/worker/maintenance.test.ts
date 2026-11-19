@@ -37,6 +37,8 @@ const EXPECTED = [
   'purge_expired_caches',
   'expire_stale_budget_reservations',
   'settle_orphaned_index_reservations',
+  'settle_orphaned_analysis_reservations',
+  'settle_orphaned_warm_reservations',
   'purge_expired_conversations',
   'purge_expired_data_entries',
   'purge_expired_usage_records',
@@ -122,6 +124,8 @@ describe('maintenance tasks', () => {
     expect(by['fail_orphaned_index_versions']).toEqual({ p_batch: 10 });
     expect(by['prune_superseded_chunks']).toEqual({ p_batch: 10 });
     expect(by['settle_orphaned_index_reservations']).toEqual({ p_batch: 10 });
+    expect(by['settle_orphaned_analysis_reservations']).toEqual({ p_batch: 10 });
+    expect(by['settle_orphaned_warm_reservations']).toEqual({ p_batch: 10 });
     expect(
       s.calls.every((c) => (c.options as { retryOnContention?: boolean }).retryOnContention),
     ).toBe(true);

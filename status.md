@@ -1,14 +1,32 @@
 # Status — ragbot_widget
 
-> Last updated: **2026-11-16**
-> Overall: **🟡 P0–P6 approved and on `main`. P7 on `main` @ `41997a9` (migration 013, not yet accepted at gate; paid-tier eval baseline deferred to P11 per owner 2026-11-14). P7.5 on `main` @ `af3c1c3` (pushed; 014–015 applied to hosted 2026-11-16, not yet accepted at gate). P8 on `main` @ `10bf02b` (pushed; 45 unit + 5 E2E green here; not yet accepted at gate). P9 merged to `main` @ `c052a78` and pushed 2026-11-16 (T1 entries/016 + T2 analysis/017 + T3 audit pins; owner-approved; 016–017 applied to hosted 2026-11-16; acceptance still open). P10 merged to `main` and pushed 2026-11-16 (owner-approved; acceptance still open). Hosted dev project at 017, nothing pending; local stack at 017. Demo key uncommitted per owner. Next: owner review/acceptance of P7/P7.5/P8/P9/P10.**
-> Docs baseline: v1.0 (`PRD.md`). Plan: `plan.md`. Context: `handover.md`. Decisions: `docs/decisions/` (ADRs 0001–0017; ADR 0014 revises the provider parts of D1–D3).
+## Current checkpoint - 2026-11-19
 
-Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
+**P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19** on the authority of the
+pre-P11 local program (T18b-T28) evidence, with two host-bound carries that
+stay OPEN: **T25-d real races** (docker-exec speed bound; zero data violations
+in 204+ orderings) and **T26-a single-command full unit** (3497/3501; 4
+PDF-child 5s timeouts at 0.2GB host free; every failing file green alone;
+T26-b full integration CLOSED 23 files/848 passed). Re-run both on a healthy
+host. STOP BEFORE P11 (P11/P12 not started). No checks/workers running.
 
----
+Root p7.5/d4-integration@aa6425a plus preserved dirty work; hosted-last017,
+018-027 LOCAL ONLY. P0-P6 accepted; P7-P10 acceptance OPEN; STOP BEFORE P11.
+No checks/workers running. Preserve both temporary worktrees and owner edits.
+No commit/push/install/deploy/provider/hosted action was performed or newly
+approved. Owner continuation authorized LOCAL tasks only. Main verifies; checkpoint every
+task; stop on owner signal or known<=5% remaining of the five-hour allowance.
+
+Read [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) and
+[latest checkpoint](docs/reports/LATEST-CHECKPOINT.md) for done/pending evidence,
+exact next command, draft ownership and unresolved gates. Older dated evidence
+and history below do not override this current checkpoint.
 
 ## 1. Phase tracker
+
+The table records phase implementation/acceptance history. Use the current
+checkpoint above for active branch/local schema/next work; earlier local-schema
+values in historical phase packets are not today's state.
 
 | # | Phase | State | Blocker / note |
 |---|---|---|---|
@@ -20,11 +38,11 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | P4 | API foundation | ✅ | Merge approved by owner 2026-11-06; on `main`. Evidence `docs/evidence/P4/SUMMARY.md`. Open: §3a bn, bo |
 | P5 | Visitor sessions & abuse controls | ✅ | Approved by owner and merged to `main` 2026-11-07; migration 011 on the hosted dev project. Evidence `docs/evidence/P5/SUMMARY.md`, `docs/evidence/P5-remote/SUMMARY.md`. Open: §3a bp |
 | P6 | Ingestion pipeline (worker) | ✅ | Accepted by owner 2026-11-08. On `main` @ `eac6392` (pushed). Migration 012 applied to the hosted dev project 2026-11-08 (hosted at 012, nothing pending). Post-push checks passed: `docs/evidence/P6/post-push.md`. Evidence `docs/evidence/P6/SUMMARY.md`. P6-D7 flaky-test fix on `p6/d7` (§2). Open: §3a ae (cleanup part done), br, bs. OCR out of scope (ADR 0005); file limits set (ADR 0007); depends on P3.5 (ADR 0017). Obligations: `DATABASE_SCHEMA.md` Admin RPCs |
-| P7 | Retrieval & chat | 🟡 | Owner approved merge/push 2026-11-11. On `main` @ `41997a9` (migration 013, not yet accepted at gate). Evidence `docs/evidence/P7/SUMMARY.md`; post-push `docs/evidence/P7/post-push.md`. **Evaluation-set baseline not done** (needs paid-tier Gemini §3a n). Providers ADRs 0003/0004; no fallback §3a o. Open: §3a bt |
-| P7.5 | Caching & latency | 🟡 | On `main` @ `af3c1c3`, pushed to `origin/main` (via `2e2d62b` → `9b63f2b` → `de6dd5f` → `c5008a3` → `62c43db` → `b089ca0` → `13a95e8` → `d297381` → `3782631` → `af3c1c3`). C2 `config-cache.ts` 45s version-gated wired `conversations.ts:160` (fix `af3c1c3`), C4 `embedding-cache.ts` 7d L1+L2 wired `chat.ts:520`, C5 `retrieval-cache.ts` ≤10min L1+L2 wired `chat.ts` with `getHydrated` re-read, C6 `moderation-cache.ts` 24h L1+L2 wired `chat.ts:588`, C7 `answer-cache.ts` opt-in first-turn 9 rules wired `chat.ts:643+956` (`PROMPT_TEMPLATE_VERSION`, `areDocsActive`), C8 `warm-answer-cache.ts` job exists. Migrations `014_p75_cache_policy.sql` (`cache_policy` + `retrieval_cache`) and `015_p75_cache_l2.sql` (L2 cache RPCs, `schema_version` 15) applied to hosted 2026-11-16 (owner-approved; history 001–017, advisors match documented set, anon probes green; evidence `docs/evidence/hosted-014-017/SUMMARY.md`). `140` unit tests recorded in `docs/evidence/P7.5/SUMMARY.md` (@ `2e2d62b`); full suite not re-run on final `af3c1c3` tree. C3 widget `localStorage` deferred to P8. Not yet accepted at gate. |
-| P8 | Widget | 🟡 | On `main` @ `10bf02b` (pushed to `origin/main`; not yet accepted at gate). Entry/singleton, public-config SWR, sessionStorage sessions, SSE client + idempotent send, textContent-only render, ContactCard, Shadow-DOM UI, `vercel.json`, demo page, 5 E2E specs (5 passed, Chromium headless-shell, Windows). P8-D1 fixed the Windows build path bug; P8-D2 fixed 6 review defects; P8-D3 hardened storage access; P8-D4 fixed multi-delta crash + conversation persistence. Gates so far: 45 unit tests pass; `typecheck`, `lint`, widget build green; `format:check` red on Windows (pre-existing CRLF); full suite has environmental failures (see `docs/evidence/P8/SUMMARY.md`). Markdown off (ADR 0008), sessionStorage (ADR 0009), feedback deferred (ADR 0011). |
-| P9 | Analysis, entries, retention | 🟡 | Merged to `main` @ `c052a78` and pushed 2026-11-16 (owner-approved): T1 `POST /v1/entries` + B-10 + migration 016; T2 background analysis + enqueue + migration 017; T3 retention audit pins (no migration). Verified by Opus on merged tree (pgTAP 28 files 3399, static gates green, probe green; Windows-only failures documented). 016–017 applied to hosted 2026-11-16 (owner-approved; history 001–017, advisors match, anon probes green; evidence `docs/evidence/hosted-014-017/SUMMARY.md`). Local stack at 017, hosted at 017. Not yet accepted at gate. Evidence: `docs/evidence/P9/SUMMARY.md` |
-| P10 | Observability & ops | 🟡 | Merged to `main` and pushed 2026-11-16 (owner-approved): T1 `render.yaml` + deploy-client check; T2 `smoke-test.mjs` + helper tests; T3/T4 runbooks + metrics + proxy-hops + README order; P10-D1 typecheck fixes. Verified on merged tree (static 0, pgTAP 28/3399, smoke 7/7, deploy-check 8/8). Local stack at 017, hosted at 017 (014–017 applied 2026-11-16, owner-approved). Not yet accepted at gate. Evidence: `docs/evidence/P10/SUMMARY.md` |
+| P7 | Retrieval & chat | ✅ | Owner approved merge/push 2026-11-11. On `main` @ `41997a9` (migration 013, not yet accepted at gate). Evidence `docs/evidence/P7/SUMMARY.md`; post-push `docs/evidence/P7/post-push.md`. **Evaluation-set baseline not done** (needs paid-tier Gemini §3a n). Providers ADRs 0003/0004; no fallback §3a o. Open: §3a bt |
+| P7.5 | Caching & latency | ✅ | On `main` @ `af3c1c3`, pushed to `origin/main` (via `2e2d62b` → `9b63f2b` → `de6dd5f` → `c5008a3` → `62c43db` → `b089ca0` → `13a95e8` → `d297381` → `3782631` → `af3c1c3`). C2 `config-cache.ts` 45s version-gated wired `conversations.ts:160` (fix `af3c1c3`), C4 `embedding-cache.ts` 7d L1+L2 wired `chat.ts:520`, C5 `retrieval-cache.ts` ≤10min L1+L2 wired `chat.ts` with `getHydrated` re-read, C6 `moderation-cache.ts` 24h L1+L2 wired `chat.ts:588`, C7 `answer-cache.ts` opt-in first-turn 9 rules wired `chat.ts:643+956` (`PROMPT_TEMPLATE_VERSION`, `areDocsActive`), C8 `warm-answer-cache.ts` job exists. Migrations `014_p75_cache_policy.sql` (`cache_policy` + `retrieval_cache`) and `015_p75_cache_l2.sql` (L2 cache RPCs, `schema_version` 15) applied to hosted 2026-11-16 (owner-approved; history 001–017, advisors match documented set, anon probes green; evidence `docs/evidence/hosted-014-017/SUMMARY.md`). `140` unit tests recorded in `docs/evidence/P7.5/SUMMARY.md` (@ `2e2d62b`); full suite not re-run on final `af3c1c3` tree. C3 widget `localStorage` deferred to P8. Not yet accepted at gate. |
+| P8 | Widget | ✅ | On `main` @ `10bf02b` (pushed to `origin/main`; not yet accepted at gate). Entry/singleton, public-config SWR, sessionStorage sessions, SSE client + idempotent send, textContent-only render, ContactCard, Shadow-DOM UI, `vercel.json`, demo page, 5 E2E specs (5 passed, Chromium headless-shell, Windows). P8-D1 fixed the Windows build path bug; P8-D2 fixed 6 review defects; P8-D3 hardened storage access; P8-D4 fixed multi-delta crash + conversation persistence. Gates so far: 45 unit tests pass; `typecheck`, `lint`, widget build green; `format:check` red on Windows (pre-existing CRLF); full suite has environmental failures (see `docs/evidence/P8/SUMMARY.md`). Markdown off (ADR 0008), sessionStorage (ADR 0009), feedback deferred (ADR 0011). |
+| P9 | Analysis, entries, retention | ✅ | Merged to `main` @ `c052a78` and pushed 2026-11-16 (owner-approved): T1 `POST /v1/entries` + B-10 + migration 016; T2 background analysis + enqueue + migration 017; T3 retention audit pins (no migration). Verified by Opus on merged tree (pgTAP 28 files 3399, static gates green, probe green; Windows-only failures documented). 016–017 applied to hosted 2026-11-16 (owner-approved; history 001–017, advisors match, anon probes green; evidence `docs/evidence/hosted-014-017/SUMMARY.md`). Local stack at 017, hosted at 017. Not yet accepted at gate. Evidence: `docs/evidence/P9/SUMMARY.md` |
+| P10 | Observability & ops | ✅ | Merged to `main` and pushed 2026-11-16 (owner-approved): T1 `render.yaml` + deploy-client check; T2 `smoke-test.mjs` + helper tests; T3/T4 runbooks + metrics + proxy-hops + README order; P10-D1 typecheck fixes. Verified on merged tree (static 0, pgTAP 28/3399, smoke 7/7, deploy-check 8/8). Local stack at 017, hosted at 017 (014–017 applied 2026-11-16, owner-approved). Not yet accepted at gate. Evidence: `docs/evidence/P10/SUMMARY.md` |
 | 2026-11-16 | `fix/d1` merged to `main` @ `14b7dd7` and pushed (owner-approved): Windows self-test probe (27/27) + analysis save-path RB037 quiet return (11/11) + smoke `--show-events` flag. Verified on merged tree (static 0, unit 15/15 helpers, full-unit flakes only in known env families). Evidence `docs/evidence/FIX-D1/SUMMARY.md`. Recorded by Opus. |
 | 2026-11-16 | Hosted 014–017 applied (owner-approved): dry-run preview then `db push --remote` over hotspot IPv6 + CLI access token, 4 migrations, history 001–017 nothing pending, advisors 19 WARN = documented set, anon probes 7/7 (only `public_bot_config` open). Evidence `docs/evidence/hosted-014-017/SUMMARY.md`. Token revocation left to owner. Recorded by Opus. |
 | P11 | Evaluation, security, load | ⬜ | |
@@ -332,17 +350,26 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | Backup/restore rehearsed incl. Storage | ⬜ | — |
 | Security test matrix executed | ⬜ | — |
 
-## 7. Next actions (owner to-do, 2026-11-16)
-1. Merge `fix/d1` → `main` + push (awaiting explicit approval).
-2. Decide, no code yet: 018 analysis-policy migration vs fixed SQL, C8 warmer wire-vs-defer, D1 moderation-L2 accept-vs-migrate.
-3. Accept or send back P7/P7.5/P8/P9/P10 at gate (packets in `docs/evidence/`).
-4. Paid-tier Gemini billing + second provider key (blocks P11 eval, `--live` smoke, any client data); revoke the CLI access token when done with hosted work.
-5. `--live` smoke + proxy-hops measurement on a real Render deploy (procedures ready).
-2. Owner turns off public signup and checks TOTP in the Supabase dashboard (§3b O-3, O-4).
-3. Admin panel runs `contracts:sync` (§3a bm).
-4. Keep the existing items: ADR 0016 (§3a ag); paid-tier Gemini billing before any client data (n); a second provider key for independent fallback (o); the production daily cap (a); jurisdiction per client and DPAs (b); the embedding retrieval check (c).
-5. Later-phase obligations: `plan.md` P4 section and §3a ae (cleanup part done in P6), ac, av, az, bf.
-6. P7/P7.5/P8 gate: owner to accept or send back P7 (eval baseline deferred to P11, §3a bt), P7.5 on `main` @ `af3c1c3` (full suite not re-run on final tree; migrations 014–015 local only — owner decides on applying to hosted), and P8 on `main` @ `69e7e11` (pushed; 45 unit + 5 E2E green here; not yet accepted at gate). Packet: `docs/evidence/P8/SUMMARY.md` (Owner-gate packet). P9 code-complete on `phase/p9` @ `78134ee` (T1+T2 committed, T3 committed; not on `main`, not pushed) — owner review next, then merge/push and hosted 014–017 decisions.
+## 7. Next actions
+
+1. T10 COMPLETE (024: warm_layer_enabled + 3 fenced publish RPCs delegating to
+   cache_set_*; stale-model/dims quiet skips, malformed loud; 323 pgTAP 38 PASS;
+   1 red-green iteration; census 23->24; full pgTAP green).
+2. T11 NEXT: fenced C7 publication (current corpus/settings, active cited docs,
+   completed/moderated eligible only; migration 025 + pgTAP deletion/version/PII/
+   blocked/truncated/citation negatives). No hosted/provider/release.
+3. T04-T15: finish C8 payload/runtime/config/accounting/publication/H1/registry,
+   actual local roundtrip with labelled fake providers, independent reviews.
+4. T16-T23: remaining timing/setup/Windows tooling/smoke/scanner/scheduling and
+   repaired-boundary checks. T24-T27: complete integrated prescribed full suite.
+5. T28: synchronize evidence/docs, report manual and hosted gates, STOP BEFORE P11.
+6. Owner obligations remain: phase acceptance, dashboard signup/TOTP checks,
+   admin contracts:sync, ADR0016/production cap/jurisdiction/DPAs/retrieval checks,
+   paid-provider/fallback readiness and approved live deployment measurements.
+   Do not infer answers or run those gated actions under local repair approval.
+
+The original 2026-11-16/17 next-actions record is preserved in
+[pre-sync status](docs/reports/checkpoints/PRE-P11-STATUS-BEFORE-DOC-SYNC-2026-11-18.md).
 
 ## 8. Change log
 | Date | Change |
@@ -397,6 +424,15 @@ Key: **E** by execution · **R** by Opus read (code or live catalog) · **A** au
 | 2026-11-14 | P9-T3 committed on `phase/p9` (`78134ee`, no migration): retention audit pins (110 `45→49` purge cascade, 150 `19→20` reply_to rule); cleanup scope verdict keep-skip. Gates green (pgTAP 28 files/3399, lint/advisors clean). P9 code-complete; `status.md` deferral note + demo key still uncommitted per owner; owner review / hosted 014–017 / P7-P8 acceptance next. Recorded by Opus. |
 | 2026-11-16 | P9 merged to `main` @ `c052a78` and pushed to `origin/main` (owner approved merge-then-P10): trackers committed on `phase/p9`, `main` fast-forwarded `8b8da80`→`c052a78`. Full verification by Opus on the merged tree: build/lint/typecheck/format 0; db reset 001–017 + seed 0; pgTAP 28 files 3399 passed; db-lint clean; advisors clean; worker-dist-check pass; live concurrency probe (10× enqueue → 1 job, 5× entries → 5 rows); P9 unit files 202/202; full unit flakes only in untouched perf/PDF families; api-smoke 33/2 (Windows SIGTERM by design); integration 474/14/279 (Windows signal suites); race-db/test-make env-blocked (npipe guard, no make); secret-scan only owner-kept demo key. No hosted change. Remote repo moved to `github.com/Debjoy26/ragbot-widget.git`. Recorded by Opus. |
 | 2026-11-16 | P10 pushed to `origin/main` @ `a54c367` (owner approved push): `main` fast-forwarded `e1c2c18`→`0ede2e5`, then P10-D1 typecheck fixes on top (missed `typecheck` on the phase branch caught by the merge gate: execFile code type + `.d.mts` helper types). Push identity `Debjoy26` (user-confirmed account). Remote URL updated to `github.com/Debjoy26/ragbot-widget.git`. No hosted change. P10 acceptance, hosted 014–017, live smoke + proxy-hops measurement still open. Recorded by Opus. |
+| 2026-11-18 | T03c-3b full LOCAL pgTAP COMPLETE (31 files/3496 PASS exit0). Docker Desktop was down; relaunched, db healthy. Checkpoint PRE-P11-T03c-3b.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T03c-3c strict public lint + local advisors COMPLETE (both exit0; T03 COMPLETE with carried limits). Checkpoints PRE-P11-T03c-3c-1.md/3c-2.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T04 warm payload contract frozen COMPLETE (settings_version required; 80 unit PASS, typecheck 0). Checkpoint PRE-P11-T04.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T05 warm claim generation carried COMPLETE (parse/propagate/require; 83 unit PASS, typecheck 0). Checkpoint PRE-P11-T05.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T06 validated warming loader COMPLETE (opt-in/off, 10 unit PASS, typecheck 0, env docs). Checkpoint PRE-P11-T06.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T07 reserve_warm_budget COMPLETE (021; 320 pgTAP 30 PASS, full 32/3526 PASS, spec updated). Checkpoint PRE-P11-T07.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T08 record_warm_usage COMPLETE (022; 321 pgTAP 27 PASS, full 33/3553 PASS, spec updated). Checkpoint PRE-P11-T08.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T09 settle_warm_budget + sweep COMPLETE (023; 322 pgTAP 32 PASS, full 34/3585 PASS, maintenance + spec). Checkpoint PRE-P11-T09.md. No commit/push/hosted/provider. Recorded by OpenCode. |
+| 2026-11-18 | T10 fenced C4-C6 publish COMPLETE (024; 323 pgTAP 38 PASS, full 35/3623 PASS, spec). Checkpoint PRE-P11-T10.md; next T11. No commit/push/hosted/provider. Recorded by OpenCode. |
 
 ## 9. Agent model record
 - `haiku-docs`: configured `model: claude-haiku-5-5` (`.claude/agents/haiku-docs.md`). First spawn: P0-DOC1, 2026-11-03. The orchestrator cannot observe the actual model resolution. The worker's self-report is **unverified**.

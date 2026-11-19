@@ -31,6 +31,10 @@ export interface ClaimedJob {
   /** Already includes this attempt (claim_jobs increments it). */
   readonly attempts: number;
   readonly maxAttempts: number;
+  /** Monotonic analysis claim identity, independent of refundable retry attempts. */
+  readonly analysisGeneration?: number;
+  /** Monotonic warm claim identity, independent of refundable retry attempts. */
+  readonly warmGeneration?: number;
 }
 
 export interface JobContext {
@@ -129,6 +133,18 @@ function parseClaimedJob(row: unknown): ClaimedJob | null {
   const { id, type, payload, attempts, max_attempts: maxAttempts } = r;
   if (typeof id !== 'string' || id.length === 0 || typeof type !== 'string') return null;
   if (!Number.isInteger(attempts) || !Number.isInteger(maxAttempts)) return null;
+  const analysisGeneration = r['analysis_generation'];
+  if (
+    type === 'analyze_conversation' &&
+    (!Number.isInteger(analysisGeneration) || Number(analysisGeneration) < 1)
+  )
+    return null;
+  const warmGeneration = r['warm_generation'];
+  if (
+    type === 'warm_answer_cache' &&
+    (!Number.isInteger(warmGeneration) || Number(warmGeneration) < 1)
+  )
+    return null;
   const body =
     typeof payload === 'object' && payload !== null && !Array.isArray(payload)
       ? (payload as Record<string, unknown>)
@@ -139,6 +155,8 @@ function parseClaimedJob(row: unknown): ClaimedJob | null {
     payload: Object.freeze(body),
     attempts: attempts as number,
     maxAttempts: maxAttempts as number,
+    ...(typeof analysisGeneration === 'number' ? { analysisGeneration } : {}),
+    ...(typeof warmGeneration === 'number' ? { warmGeneration } : {}),
   };
 }
 

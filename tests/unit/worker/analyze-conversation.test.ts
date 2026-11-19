@@ -5,7 +5,7 @@ import { createAnalyzeConversationHandler } from '../../../worker/src/jobs/analy
 import type { WorkerConfig } from '../../../worker/src/lib/config.ts';
 import { DbError, type Db } from '../../../worker/src/lib/db.ts';
 import { createLogger } from '../../../worker/src/lib/logger.ts';
-import type { JobContext } from '../../../worker/src/runtime.ts';
+import { LeaseLostError, type JobContext } from '../../../worker/src/runtime.ts';
 import { FakeChatProvider, type FakeChatScript } from '../../helpers/fake-ai.ts';
 
 // P9-T2: the analyze_conversation handler against a labelled FAKE database and
@@ -46,14 +46,14 @@ function makeRig(scripts: readonly FakeChatScript[], responders: Rig['responders
   const logs: string[] = [];
   const counts: Record<string, number> = {};
   const defaults: Rig['responders'] = {
-    get_analysis_context: () =>
+    get_analysis_job_context: () =>
       contextRpc([message('user', 'How much?'), message('assistant', 'Ten dollars.')]),
-    reserve_index_budget: () => 'reservation-1',
-    record_usage_event: () => null,
-    settle_index_budget: () => null,
+    reserve_analysis_budget: () => 'reservation-1',
+    record_analysis_usage: () => null,
+    settle_analysis_budget: () => null,
     release_index_budget: () => null,
-    save_conversation_analysis: () => null,
-    fail_conversation_analysis: () => null,
+    save_analysis_job_result: () => null,
+    fail_analysis_job: () => null,
   };
   const all = { ...defaults, ...responders };
   const provider = new FakeChatProvider(scripts, {
@@ -103,6 +103,7 @@ const jobFor = (payload: Record<string, unknown>) => ({
   payload,
   attempts: 1,
   maxAttempts: 5,
+  analysisGeneration: 1,
 });
 
 const run = (
@@ -114,36 +115,114 @@ const calledWith = (rig: Rig, name: string) =>
   rig.calls.filter((c) => c.name === name).map((c) => c.args);
 
 describe('analyze_conversation handler', () => {
+  it('accounts known truncated usage and fails permanently without saving', async () => {
+    const rig = makeRig([
+      { chunks: [ANALYSIS_JSON], usage: { inputTokens: 9876, outputTokens: 500, truncated: true } },
+    ]);
+    await run(rig);
+    expect(calledWith(rig, 'record_analysis_usage')[0]).toMatchObject({
+      p_input_tokens: 9876,
+      p_output_tokens: 500,
+    });
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
+  });
+
+  it('closes the provider iterator when output exceeds the local cap', async () => {
+    const rig = makeRig([{ chunks: [] }]);
+    let closed = false;
+    const provider = {
+      provider: rig.provider.provider,
+      model: rig.provider.model,
+      async *stream() {
+        try {
+          yield { text: 'x'.repeat(16001) };
+        } finally {
+          closed = true;
+        }
+        return { inputTokens: 1, outputTokens: 1 };
+      },
+    };
+    await expect(
+      createAnalyzeConversationHandler({ chat: provider })(
+        jobFor({ bot_id: BOT_ID, conversation_id: CONVERSATION_ID }),
+        rig.ctx,
+      ),
+    ).rejects.toThrow('analysis_output_limit');
+    expect(closed).toBe(true);
+  });
+
+  it('passes explicit job, worker and attempt fences before any provider call', async () => {
+    const rig = makeRig([{ chunks: [ANALYSIS_JSON] }]);
+    await run(rig);
+    const fence = { p_job_id: JOB_ID, p_worker: 'w-test', p_generation: 1 };
+    expect(calledWith(rig, 'get_analysis_job_context')).toEqual([fence]);
+    expect(calledWith(rig, 'reserve_analysis_budget')[0]).toMatchObject(fence);
+    expect(calledWith(rig, 'save_analysis_job_result')[0]).toMatchObject(fence);
+    expect(calledWith(rig, 'settle_analysis_budget')[0]).toMatchObject(fence);
+  });
+
+  it('records conservative partial-stream spend after lease loss without saving or settling', async () => {
+    const rig = makeRig([
+      { chunks: ['FAKE partial'], failAfter: { chunks: 1, error: new LeaseLostError() } },
+    ]);
+    await run(rig);
+    expect(calledWith(rig, 'record_analysis_usage')[0]).toMatchObject({ p_output_tokens: 500 });
+    expect(Number(calledWith(rig, 'record_analysis_usage')[0]?.['p_input_tokens'])).toBeGreaterThan(
+      20,
+    );
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(0);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(0);
+  });
+
+  it('settles real spend even if the usage write fails', async () => {
+    const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
+      record_analysis_usage: () => {
+        throw new DbError('network');
+      },
+    });
+    await run(rig);
+    expect(Number(calledWith(rig, 'settle_analysis_budget')[0]?.['p_actual'])).toBeGreaterThan(0);
+  });
+
   it('analyzes bounded recent messages and saves the result with usage settled', async () => {
     const rig = makeRig([
       { chunks: [ANALYSIS_JSON], usage: { inputTokens: 400, outputTokens: 40 } },
     ]);
     await run(rig);
     expect(rig.provider.calls).toBe(1);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(1);
-    expect(calledWith(rig, 'save_conversation_analysis')[0]).toMatchObject({
-      p_conversation_id: CONVERSATION_ID,
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(1);
+    expect(calledWith(rig, 'save_analysis_job_result')[0]).toMatchObject({
+      p_job_id: JOB_ID,
+      p_worker: 'w-test',
+      p_generation: 1,
       p_summary: 'Visitor asked about pricing and was answered.',
       p_sentiment: 'neutral',
       p_intent: 'pricing question',
+      p_analysis_version: 'rag-analysis-v1',
     });
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(0);
-    const usage = calledWith(rig, 'record_usage_event');
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(0);
+    const usage = calledWith(rig, 'record_analysis_usage');
     expect(usage).toHaveLength(1);
     expect(usage[0]).toMatchObject({
-      p_bot_id: BOT_ID,
       p_job_id: JOB_ID,
-      p_operation: 'analysis',
+      p_generation: 1,
+      p_reservation_id: 'reservation-1',
       p_input_tokens: 400,
+      p_output_tokens: 40,
     });
     expect(Number(usage[0]?.['p_estimated_cost'])).toBeGreaterThan(0);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')[0]?.['p_reservation_id']).toBe('reservation-1');
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')[0]?.['p_reservation_id']).toBe(
+      'reservation-1',
+    );
     expect(calledWith(rig, 'release_index_budget')).toHaveLength(0);
     // Reservation happens before any provider call.
     const order = rig.calls.map((c) => c.name);
-    expect(order.indexOf('reserve_index_budget')).toBeLessThan(
-      order.indexOf('save_conversation_analysis'),
+    expect(order.indexOf('reserve_analysis_budget')).toBeLessThan(
+      order.indexOf('save_analysis_job_result'),
     );
   });
 
@@ -152,7 +231,7 @@ describe('analyze_conversation handler', () => {
       message(i % 2 === 0 ? 'user' : 'assistant', `message ${i} ` + 'x'.repeat(2000)),
     );
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      get_analysis_context: () => contextRpc(many),
+      get_analysis_job_context: () => contextRpc(many),
     });
     await run(rig);
     const request = rig.provider.requests[0];
@@ -174,38 +253,38 @@ describe('analyze_conversation handler', () => {
 
   it('returns quietly when the conversation is gone (RB037)', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      get_analysis_context: () => {
+      get_analysis_job_context: () => {
         throw new DbError('http', 404, 'RB037');
       },
     });
     await run(rig);
     expect(rig.provider.calls).toBe(0);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(0);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
   });
 
   it('returns quietly when the conversation vanishes before save (RB037 on save)', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      save_conversation_analysis: () => {
+      save_analysis_job_result: () => {
         throw new DbError('http', 404, 'RB037');
       },
     });
     await run(rig);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(1);
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(0);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(1);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(0);
     // The spend is real (provider was called), so usage stays and the
     // reservation settles instead of retrying a deleted conversation.
-    expect(calledWith(rig, 'record_usage_event')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'record_analysis_usage')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(1);
     expect(calledWith(rig, 'release_index_budget')).toHaveLength(0);
   });
 
   it('returns quietly when there is nothing to analyze', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      get_analysis_context: () => contextRpc([]),
+      get_analysis_job_context: () => contextRpc([]),
     });
     await run(rig);
     expect(rig.provider.calls).toBe(0);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(0);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
   });
 
   it('throws on a transient provider failure so the runtime retries (usage still recorded)', async () => {
@@ -213,22 +292,31 @@ describe('analyze_conversation handler', () => {
     const rig = makeRig([{ failBefore: transient }]);
     await expect(run(rig)).rejects.toThrow();
     // The failed attempt counts its estimate and settles it, like the index batches.
-    expect(calledWith(rig, 'record_usage_event')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(1);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(0);
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(0);
+    expect(calledWith(rig, 'record_analysis_usage')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(0);
   });
 
   it('fails the row and returns on a billing error (never billed, reservation released)', async () => {
     const billing = new ProviderError('billing', 'payment required');
     const rig = makeRig([{ failBefore: billing }]);
     await run(rig);
-    expect(calledWith(rig, 'record_usage_event')).toHaveLength(0);
-    expect(calledWith(rig, 'release_index_budget')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(0);
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(1);
-    expect(calledWith(rig, 'fail_conversation_analysis')[0]).toMatchObject({
-      p_conversation_id: CONVERSATION_ID,
+    expect(calledWith(rig, 'record_analysis_usage')).toHaveLength(0);
+    expect(calledWith(rig, 'settle_analysis_budget')).toEqual([
+      {
+        p_job_id: JOB_ID,
+        p_worker: 'w-test',
+        p_generation: 1,
+        p_reservation_id: 'reservation-1',
+        p_actual: 0,
+      },
+    ]);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(1);
+    expect(calledWith(rig, 'fail_analysis_job')[0]).toMatchObject({
+      p_job_id: JOB_ID,
+      p_worker: 'w-test',
+      p_generation: 1,
     });
   });
 
@@ -237,28 +325,28 @@ describe('analyze_conversation handler', () => {
       { chunks: ['not json at all'], usage: { inputTokens: 400, outputTokens: 10 } },
     ]);
     await run(rig);
-    expect(calledWith(rig, 'record_usage_event')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(1);
-    expect(calledWith(rig, 'save_conversation_analysis')).toHaveLength(0);
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(1);
+    expect(calledWith(rig, 'record_analysis_usage')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(1);
+    expect(calledWith(rig, 'save_analysis_job_result')).toHaveLength(0);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(1);
   });
 
   it('fails the row and returns when the daily cap is reached (RB001)', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      reserve_index_budget: () => {
+      reserve_analysis_budget: () => {
         throw new DbError('http', 402, 'RB001');
       },
     });
     await run(rig);
     expect(rig.provider.calls).toBe(0);
-    expect(calledWith(rig, 'fail_conversation_analysis')).toHaveLength(1);
-    expect(calledWith(rig, 'settle_index_budget')).toHaveLength(0);
+    expect(calledWith(rig, 'fail_analysis_job')).toHaveLength(1);
+    expect(calledWith(rig, 'settle_analysis_budget')).toHaveLength(0);
     expect(calledWith(rig, 'release_index_budget')).toHaveLength(0);
   });
 
   it('never logs message content or the summary', async () => {
     const rig = makeRig([{ chunks: [ANALYSIS_JSON] }], {
-      get_analysis_context: () => contextRpc([message('user', 'supersecret phrase for logs')]),
+      get_analysis_job_context: () => contextRpc([message('user', 'supersecret phrase for logs')]),
     });
     await run(rig);
     expect(rig.logs.join('\n')).not.toContain('supersecret phrase for logs');

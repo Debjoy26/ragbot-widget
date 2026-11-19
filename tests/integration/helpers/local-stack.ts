@@ -12,6 +12,13 @@ export interface LocalStack {
   anonKey: string;
 }
 
+/**
+ * SQL `schema_version()` on a freshly reset local stack (all migrations in
+ * `supabase/migrations` applied). Bump together with the pgTAP census tests
+ * (220/250/260) whenever a migration moves `schema_version()`.
+ */
+export const EXPECTED_SCHEMA_VERSION = 27;
+
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
@@ -23,23 +30,43 @@ function pickString(obj: Record<string, unknown>, ...names: string[]): string | 
   return undefined;
 }
 
-/** Reads the local stack's API URL and anon key. Throws (fail closed) if the stack is not running. */
-export function getLocalStack(): LocalStack {
+/**
+ * `supabase status` output, read once per worker process and shared by both
+ * accessors below. One CLI spawn costs seconds on a loaded box (and tens of
+ * seconds when Docker churns), and every integration file reads the stack in
+ * `beforeAll`: without the cache each file paid two full spawns. The URL and
+ * keys are pinned by the local stack config and cannot change mid-run; fresh
+ * worker processes re-read. Tests reset it with resetLocalStackCacheForTests.
+ */
+let cachedStatus: Record<string, unknown> | undefined;
+
+/** Test-only reset for the per-process status cache (keeps tests isolated). */
+export function resetLocalStackCacheForTests(): void {
+  cachedStatus = undefined;
+}
+
+function loadStatus(): Record<string, unknown> {
+  if (cachedStatus !== undefined) return cachedStatus;
   let stdout: string;
   try {
-    stdout = execFileSync('npx', ['--no-install', 'supabase', 'status', '-o', 'json'], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 60_000,
-      // `npx` on Windows is a .cmd shim that cannot be executed without a
-      // shell (ENOENT). Same command everywhere else.
-      shell: process.platform === 'win32',
-    });
+    stdout = execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('../../../node_modules/supabase/dist/supabase.js', import.meta.url)),
+        'status',
+        '-o',
+        'json',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 60_000,
+      },
+    );
   } catch {
     throw new Error('local Supabase stack is not running (start it with: npm run db:start)');
   }
-
   let parsed: unknown;
   try {
     // The CLI may print notices before the JSON object.
@@ -50,7 +77,13 @@ export function getLocalStack(): LocalStack {
   if (typeof parsed !== 'object' || parsed === null) {
     throw new Error('unexpected `supabase status -o json` output');
   }
-  const status = parsed as Record<string, unknown>;
+  cachedStatus = parsed as Record<string, unknown>;
+  return cachedStatus;
+}
+
+/** Reads the local stack's API URL and anon key. Throws (fail closed) if the stack is not running. */
+export function getLocalStack(): LocalStack {
+  const status = loadStatus();
 
   const apiUrl = pickString(status, 'API_URL');
   const anonKey = pickString(status, 'ANON_KEY', 'PUBLISHABLE_KEY');
@@ -79,32 +112,16 @@ export function anonHeaders(stack: LocalStack): Record<string, string> {
  * in an error message. Use it for test set-up and clean-up only.
  */
 export function getLocalPrivilegedKey(): string {
-  const { apiUrl } = getLocalStack(); // also refuses a non-loopback stack
-  void apiUrl;
-  let stdout: string;
-  try {
-    stdout = execFileSync('npx', ['--no-install', 'supabase', 'status', '-o', 'json'], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 60_000,
-      // `npx` on Windows is a .cmd shim that cannot be executed without a
-      // shell (ENOENT). Same command everywhere else.
-      shell: process.platform === 'win32',
-    });
-  } catch {
-    throw new Error('local Supabase stack is not running (start it with: npm run db:start)');
+  const status = loadStatus();
+  const apiUrl = pickString(status, 'API_URL');
+  if (apiUrl === undefined) {
+    throw new Error('`supabase status` did not report API_URL and an anon/publishable key');
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout.slice(stdout.indexOf('{')));
-  } catch {
-    throw new Error('could not parse `supabase status -o json` output');
+  const host = new URL(apiUrl).hostname;
+  if (!LOOPBACK_HOSTS.has(host) && !LOOPBACK_HOSTS.has(`[${host}]`)) {
+    throw new Error('refusing to run integration tests against a non-loopback API URL');
   }
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error('unexpected `supabase status -o json` output');
-  }
-  const key = pickString(parsed as Record<string, unknown>, 'SERVICE_ROLE_KEY', 'SECRET_KEY');
+  const key = pickString(status, 'SERVICE_ROLE_KEY', 'SECRET_KEY');
   if (key === undefined) {
     throw new Error('`supabase status` did not report a service or secret key');
   }

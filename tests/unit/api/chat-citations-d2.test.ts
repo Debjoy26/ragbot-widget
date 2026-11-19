@@ -67,6 +67,13 @@ describe('P7-D2 F3: trailing parentheses and the other worst shapes stay linear'
     expect(delink('http://x/a))) ok', allow)).toBe(`http:${ZWSP}//x/a))) ok`);
     expect(delink('http://x/a_(b)).', allow)).toBe(`http:${ZWSP}//x/a_(b)).`);
   });
+
+  it('a host after a long dotless run is still detected (scan skips do not overshoot)', () => {
+    const text = `${'a'.repeat(199_990)}.com is here`;
+    const out = delink(text, allow);
+    expect(out.replaceAll(ZWSP, '')).toBe(text);
+    expect(out).toContain(`${ZWSP}.com`);
+  });
 });
 
 describe('P7-D2 F4: an orphan markdown link tail never survives', () => {

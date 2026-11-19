@@ -1,16 +1,34 @@
 # Handover — ragbot_widget
 
-> For the engineer (or agent) picking up this project. Read this first, then `status.md` for current progress and `plan.md` for the build order.
-> Last updated: 2026-11-13.
+## Current checkpoint - 2026-11-19
 
----
+**P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19** (pre-P11 program
+T18b-T28 evidence; carries T25-d/T26-a stay OPEN, host-bound, re-run on a
+healthy host). STOP BEFORE P11 (P11/P12 not started). No checks/workers
+running.
+
+Root p7.5/d4-integration@aa6425a plus preserved dirty work; hosted-last017,
+018-027 LOCAL ONLY. P0-P6 accepted; P7-P10 acceptance OPEN; STOP BEFORE P11.
+No checks/workers running. Preserve both temporary worktrees and owner edits.
+No commit/push/install/deploy/provider/hosted action was performed or newly
+approved. Owner continuation authorized LOCAL tasks only. Main verifies; checkpoint every
+task; stop on owner signal or known<=5% remaining of the five-hour allowance.
+
+Read [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) and
+[latest checkpoint](docs/reports/LATEST-CHECKPOINT.md) for done/pending evidence,
+exact next command, draft ownership and unresolved gates. Older dated evidence
+and history below do not override this current checkpoint.
 
 ## 1. What this project is
 An embeddable, client-branded, retrieval-augmented (RAG) chatbot that a client installs on their website with **one `<script>` tag**. It answers only from approved PDF/MD/TXT knowledge, cites sources, streams responses, and logs conversations for client admins.
 
 This repo also owns the **shared backend** — Render API, Render worker, and the Supabase schema — used by both this widget and the separate `ragbot_adminpanel` repo. The admin panel is a second frontend, **not** a second backend.
 
-## 2. Current state (honest summary)
+## 2. Implementation history (dated records)
+
+The current checkpoint above supersedes historical branch/schema/toolchain and
+next-task statements in these dated entries. They are retained for provenance;
+no old CI statement is a current gate or evidence source.
 - **Committed on `origin/main`:** planning docs, P0 decision records (ADRs 0001–0013, `5e416b6`), the P1 monorepo scaffold (`f848fb3`; ADR 0014 in the same commit), ADRs 0015–0016 (`65cc738`). CI run 41698369772 for `f848fb3` completed with success. P1 accepted by owner 2026-11-05.
 - **On `main` (code `6b24002`):** P2 shared contracts and P3 database migrations, with debug cycles P3-D1 (`65cc738`) and P3-D2 (`6b24002`). Final gates pass locally: unit 157 passed; pgTAP 17 files, 1465 passed; `db lint` clean; all npm gates exit 0. P2 and P3 accepted by owner 2026-11-05. Security reviews P3-R3 and P3-R4 (static, 2026-11-05) done. Open review findings: see `status.md §3a` (not repeated here). CI: run 41708210161 (`19438c5`) and run 41974998511 (`0059991`) completed with success (overall results only; `0059991` contains the P3-D3 code; `815cfb9` has no run of its own). Logs: `docs/evidence/P1/`, `docs/evidence/P2-P3/`, `docs/evidence/P3-R3/`, `docs/evidence/P3-R4/`.
 - **Remote dev project (2026-11-05, owner-approved):** migrations 001–005 applied to `rbejeqwxyxtklehuzibv` via `supabase db push --remote`; `seed.sql` not applied. Remote: 22 tables, RLS on all, 0 rows. Migrations 001–005 must not be edited; schema changes go in new migrations. Details: `status.md §2`, `docs/evidence/P3-R3/SUMMARY.md`.
@@ -148,11 +166,15 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 10. **`messages.role = system`** rows exist but must never be returned to visitors — enforce in the history query, not just docs.
 
 ## 7. Where to start
-1. Read `PRD.md` then `DATABASE_SCHEMA.md` (the contract everyone depends on).
-2. P0 decisions D1–D14 are approved (2026-11-03). See `docs/decisions/` ADRs 0001–0013, and §5 above for remaining open items.
-3. Fix the doc inconsistencies in §6 directly in the source docs.
-4. Next actions (mirror of `status.md §7`): P7 paid-tier eval deferred to P11 per owner 2026-11-14; owner turns off public signup and checks TOTP in the dashboard; admin panel runs `contracts:sync`; ADR 0016 and the Gemini, fallback, cap, jurisdiction and retrieval items stay open; P7/P7.5/P8/P9 gate (all on `main`, pushed; 014–017 local only, hosted at 013); P10 code-complete on `phase/p10`, awaiting owner review then merge/push; E2E + full-suite gate on the pinned toolchain.
-5. Update `status.md` at the end of every working session.
+
+Read AGENTS.md, rules.md, docs/reports/OPENCODE-HANDOFF.md and LATEST-CHECKPOINT.md.
+On owner continuation, inspect Git truth and runT18 extraction/confinement
+and admin/bootstrap setup families (T17 timing fix is COMPLETE, T03 COMPLETE
+with carried limits); do
+not repeat a completed gate without a new reason. Follow PRE-P11-TASKS.md and
+checkpoint every task. Full acceptance remains open; STOP BEFORE P11. Preserve
+the dirty overlay/worktrees and all historical evidence. Open owner decisions
+remain in status.md3; do not guess them or treat local repair approval as release.
 
 ## 8. Environment & access needed
 - Supabase: dev project (or `supabase start` local stack) + per-client production project.
@@ -218,3 +240,17 @@ Resolve these in P0 before freezing shared contracts. **Resolved 2026-11-03:** i
 | 2026-11-16 | Opus (P10) | Owner (review; merge/push; hosted 014–017; acceptances) | P10 code-complete on `phase/p9`-fresh `phase/p10` (base `e1c2c18`): T1 render/deploy-check, T2 smoke-test + helpers, T3/T4 runbooks + metrics + proxy-hops + README. Static gates green; pgTAP 28/3399 clean after clearing smoke residue with a reset; smoke 7/7; deploy-check 8/8. Evidence: `docs/evidence/P10/SUMMARY.md`. One residue-pollution false alarm recorded (smoke rows broke pgTAP counts until reset). No migration, no behavior change, no hosted change, not pushed. STOP for owner. |
 | 2026-11-16 | Opus (hosted 014–017) | Owner (token revocation; acceptances; --live smoke; proxy-hops) | Owner approved the hosted apply. Hotspot IPv6 + CLI access token (user env, never in chat) unblocked the route. Dry-run preview (014–017 only) then push, 4 migrations applied, history 001–017 nothing pending, advisors 19 WARN = documented set, anon probes 7/7 (only `public_bot_config` open). Evidence: `docs/evidence/hosted-014-017/SUMMARY.md`. P10 already on `main`. Local DB reset clean at 017. Token revocation left to owner. |
 | 2026-11-16 | Opus (fix/d1) | Owner (merge approval; 018/C8/D1 decisions; acceptances; billing) | Pre-billing fix batch on `fix/d1` (base `4ee7f59`), committed `7b36031`, not pushed: secret-scan self-test Windows probe (file probe impossible on Windows; same shape through the real parser; 27/27) + analysis save-path RB037 quiet return (test-first regression) + over-count clarifying comment. Deliberately untouched: transient estimate design, context-read trust, queue fallback value (no migration), env flakes. Evidence: `docs/evidence/FIX-D1/SUMMARY.md`. Merged to `main` @ `14b7dd7` and pushed 2026-11-16 (owner-approved; + smoke `--show-events` flag). STOP for owner (018/C8/D1 decisions, acceptances, provider key, billing). |
+| 2026-11-18 | OpenCode (T03c-3b) | Owner (T03c-3c; acceptances; STOP BEFORE P11) | Owner continuation. Docker Desktop was down; relaunched, db healthy (vector unhealthy, known limit). Full LOCAL pgTAP 31 files/3496 PASS exit0, log T03c-3/full-pgtap.log. Checkpoint PRE-P11-T03c-3b.md; status/handover/tasks/tracker/latest updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T03c-3c) | Owner (T04; acceptances; STOP BEFORE P11) | Owner continuation. Strict public lint exit0 + local advisors exit0 (logs T03c-3/public-lint.log, advisors.log). Checkpoints PRE-P11-T03c-3c-1.md/3c-2.md; status/handover/tasks/tracker/latest updated. T03 COMPLETE with Storage/Make/health carried to T16/T19, full suite to T24-T27. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T04) | Owner (T05; acceptances; STOP BEFORE P11) | Owner continuation. Warm payload requires settings_version (shared schema + worker comment + 2 test files). 80 unit PASS, typecheck 0; red-on-old by strictObject. Checkpoint PRE-P11-T04.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T05) | Owner (T06; acceptances; STOP BEFORE P11) | Owner continuation. Runtime warmGeneration parse/propagate/require + handler fail-closed guard; 2 new tests; 83 unit PASS, typecheck 0. Checkpoint PRE-P11-T05.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T06) | Owner (T07; acceptances; STOP BEFORE P11) | Owner continuation. Validated warming loader (default-off, explicit limits/prices/identities, fail-closed; 10 new unit PASS, typecheck 0); .env.example + README updated. Checkpoint PRE-P11-T06.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T07) | Owner (T08; acceptances; STOP BEFORE P11) | Owner continuation. Migration 021 reserve_warm_budget (per-question binding, atomic shared cap, precise errors); 320 pgTAP 30 PASS; full 32/3526 PASS; census 20->21; DATABASE_SCHEMA updated. Checkpoint PRE-P11-T07.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T08) | Owner (T09; acceptances; STOP BEFORE P11) | Owner continuation. Migration 022 record_warm_usage (per-invocation pending/final ledger, greatest-merge, no lease check); 321 pgTAP 27 PASS; full 33/3553 PASS; census 21->22; DATABASE_SCHEMA updated. Checkpoint PRE-P11-T08.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T09) | Owner (T10; acceptances; STOP BEFORE P11) | Owner continuation. Migration 023 settle_warm_budget + orphan sweep + index-sweep warm exclusion; 322 pgTAP 32 PASS; full 34/3585 PASS; census 22->23; maintenance schedule + spec updated. Checkpoint PRE-P11-T09.md; continuity docs updated. No commit/push/hosted/provider. |
+| 2026-11-18 | OpenCode (T10) | Owner (T11; acceptances; STOP BEFORE P11) | Owner continuation. Migration 024 fenced C4-C6 publish (layer helper + 3 RPCs, stale quiet/model loud); 323 pgTAP 38 PASS; full 35/3623 PASS; census 23->24; DATABASE_SCHEMA updated. Checkpoint PRE-P11-T10.md; continuity docs updated. No commit/push/hosted/provider. Next T11. |
+| 2026-11-19 | OpenCode (T11) | Owner (T12; acceptances; STOP BEFORE P11) | Owner continuation. Migration 025 fenced C7 publish (c7 opt-in layer + publish RPC, stale/ineligible quiet, cross-bot/lease refused, malformed loud); 324 pgTAP 38 PASS; full 36/3661 PASS; census 24->25; DATABASE_SCHEMA updated. Checkpoint PRE-P11-T11.md; continuity docs updated. No commit/push/hosted/provider. Next T12. |
+| 2026-11-19 | OpenCode (T12) | Owner (T13; acceptances; STOP BEFORE P11) | Owner continuation. H1 handler integrated from worktree draft (per-layer fenced publish, question-hash binding, adapter-vs-key identity, moderationMode); 14 draft cases adapted + 2 new fail-closed pins = 16 worker unit PASS; superseded stub tests removed with mapping; typecheck/lint 0. Checkpoint PRE-P11-T12.md; continuity docs updated. No commit/push/hosted/provider. Next T13. |
+| 2026-11-19 | OpenCode (T13-T15) | Owner (T16; acceptances; STOP BEFORE P11) | Owner continuation, one go. T13 registry wired (vendor-key reuse, startup fail-closed, 13 handler tests; build + dist check 0). T14 real-DB round trip (labelled fakes warm L2; separate built API serves key-pinned first-turn hit, zero live chat calls; 026 fixed the C5 anchor — key spaces differ by design); census to 26. T15 reviews (correctness: no blockers; security: 1 blocking tenant theme) fixed in-cycle by 027 tenant binding (C5/C7 chunk ownership + get_chunks_by_ids bot filter + live call sites) with re-review clearing the blocker; 323/324 +1 each, new 325 (6), census to 27; full 37/3671 PASS; typecheck/lint/format clean. Checkpoints PRE-P11-T13/T14/T15.md. No commit/push/hosted/provider. Next T16. C8 COMPLETE. |
+| 2026-11-19 | OpenCode (T16) | Owner (T17; acceptances; STOP BEFORE P11) | Owner continuation. Profiled first-HTTP setup (unit harness ~0.9s sync incl. Fastify-first-construction; built-API boot 4.5s; spawn/node-probe costs). Confirmed defect, reproduced today: every integration beforeAll paid 2 CLI status spawns (~5.6-7.8s each; worker-runtime hook timed out at 10s). Fix, test-first: single memoized status read shared by stack+key accessors (preserved loopback refusal, no timeout/assertion change); helper units 8/8; hook-timeout combo 23/23; warming trio 34/34. Product stages all healthy; E1 14.5s attributed to contention on the same cold-start path. Checkpoint PRE-P11-T16.md. No commit/push/hosted/provider. Next T17. |
+| 2026-11-19 | OpenCode (T17) | Owner (T18; acceptances; STOP BEFORE P11) | Owner continuation. Profiled delink on hostile shapes (CPU profiles pinned 64-char bare-host rescan ~68%, orphan budget-burn, buildWork closure+pushes ~48%). Fixed test-first, exact-behavior: findBareHosts skip to nextDot-64 (provably no match in skipped windows), destinationEnd memoized next-paren precheck (skips provably-failing scans, no budget change on success path), buildWork ASCII bulk-copy fast path (+ skip-overshoot regression pin). Timing suites 198/198 across 5 runs incl. 2x full parallel api scope (45/45, 1524); worst shapes 12-68ms isolated (was 25-240ms). Typecheck/lint/format 0; temp profilers deleted. Checkpoint PRE-P11-T17.md. No commit/push/hosted/provider. Next T18. |

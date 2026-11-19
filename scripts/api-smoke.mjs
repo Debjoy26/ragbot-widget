@@ -38,6 +38,7 @@ const SMOKE_SECRETS = {
 
 const failures = [];
 let passed = 0;
+let skipped = 0;
 const secretValues = new Set(Object.values(SMOKE_SECRETS));
 
 /** Removes every known secret from text before it is printed. */
@@ -55,6 +56,11 @@ function check(name, ok, detail = '') {
     failures.push(name);
     console.log(`FAIL ${name}${detail === '' ? '' : ` -- ${scrub(detail)}`}`);
   }
+}
+
+function skip(name, reason) {
+  skipped += 1;
+  console.log(`SKIP ${name} -- ${reason}`);
 }
 
 function fatal(message) {
@@ -436,20 +442,38 @@ async function main() {
     strict.text,
   );
 
-  // 4. SIGTERM: hold a connection open, signal, then ask for readiness on that same connection.
-  const drained = drainProbe(port, async () => {
-    run.child.kill('SIGTERM');
-    await sleep(500);
-  });
-  const answers = await drained;
-  check(
-    'while draining, /health/ready is 503 {"status":"unavailable"}',
-    /HTTP\/1\.1 503/.test(answers) && answers.includes('{"status":"unavailable"}'),
-    answers.slice(0, 300),
-  );
-  const exit = await Promise.race([run.done, sleep(15_000).then(() => undefined)]);
-  if (exit === undefined) run.child.kill('SIGKILL');
-  check('SIGTERM exits 0', exit?.code === 0, `exit ${JSON.stringify(exit)}`);
+  // 4. SIGTERM: hold a connection open, signal, then ask for readiness on that same
+  // connection. POSIX-only: on Windows child.kill('SIGTERM') ends the child via
+  // TerminateProcess, which no handler can catch, so the API can never flip to
+  // 503-while-draining or exit 0 there (observed exit
+  // {"code":null,"signal":"SIGTERM"}). The checks below keep full strength
+  // where signals are real. See T20.
+  if (process.platform === 'win32') {
+    skip(
+      'while draining, /health/ready is 503 {"status":"unavailable"}',
+      'SIGTERM is uncatchable on Windows (TerminateProcess); drain path verified on POSIX only',
+    );
+    skip(
+      'SIGTERM exits 0',
+      'SIGTERM is uncatchable on Windows (TerminateProcess); exit path verified on POSIX only',
+    );
+    run.child.kill('SIGKILL');
+    await run.done;
+  } else {
+    const drained = drainProbe(port, async () => {
+      run.child.kill('SIGTERM');
+      await sleep(500);
+    });
+    const answers = await drained;
+    check(
+      'while draining, /health/ready is 503 {"status":"unavailable"}',
+      /HTTP\/1\.1 503/.test(answers) && answers.includes('{"status":"unavailable"}'),
+      answers.slice(0, 300),
+    );
+    const exit = await Promise.race([run.done, sleep(15_000).then(() => undefined)]);
+    if (exit === undefined) run.child.kill('SIGKILL');
+    check('SIGTERM exits 0', exit?.code === 0, `exit ${JSON.stringify(exit)}`);
+  }
 
   // 5. Nothing leaked.
   for (const s of secretValues) {
@@ -459,7 +483,9 @@ async function main() {
 }
 
 await main();
-console.log(`\n${String(passed)} passed, ${String(failures.length)} failed`);
+console.log(
+  `\n${String(passed)} passed, ${String(failures.length)} failed, ${String(skipped)} skipped`,
+);
 if (failures.length > 0) {
   console.log(`failed: ${failures.join('; ')}`);
   process.exit(1);

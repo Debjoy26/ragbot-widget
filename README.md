@@ -1,6 +1,8 @@
 # ragbot_widget
 
-Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Code exists through P6: shared contracts, migrations and tests, the API foundation and visitor sessions (P4, P5), and the ingestion worker (P6). Chat routes and the widget arrive in P7 and P8.
+> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+
+Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Implementations through P10 exist; P0-P6 are accepted and P7-P10 acceptance remains open. The current uncommitted local repair overlay includes migrations018-020 and unfinished C8 warming; see the handoff before running or changing it.
 
 ## Project structure
 ```text
@@ -113,7 +115,7 @@ API chat (P7), all required with no defaults, fail closed (see `api/.env.example
 - Prices, all above zero: `CHAT_PRICE_INPUT_PER_MILLION`, `CHAT_PRICE_OUTPUT_PER_MILLION`, `MODERATION_PRICE_INPUT_PER_MILLION`, `MODERATION_PRICE_OUTPUT_PER_MILLION`, `EMBEDDING_PRICE_PER_MILLION_TOKENS`.
 - `CHAT_FALLBACK_PRICE_*` is required only when a fallback provider is configured.
 Worker: database/storage credentials plus `EMBEDDING_*` and `ANALYSIS_*`. Never give the worker the visitor-signing key.
-Worker (P6): `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, queue settings (`WORKER_CONCURRENCY`, `JOB_LEASE_SECONDS`, `JOB_HEARTBEAT_INTERVAL_SECONDS`, `JOB_POLL_INTERVAL_MS`, `JOB_BACKOFF_BASE_SECONDS`, `JOB_BACKOFF_MAX_SECONDS`, `SHUTDOWN_GRACE_MS`), maintenance and retention settings, extraction limits, `EMBEDDING_BATCH_SIZE`, `EMBEDDING_PRICE_PER_MILLION_TOKENS`, `ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS`, `ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS` (P9-T2) and `CHAT_DEADLINE_MS` (must match the API's, so the stuck-run threshold stays above it). The full list with comments is in `worker/.env.example`. PDF text comes from `pdfjs-dist` (pinned), run in a separate process with time, memory and file-access limits; scanned PDFs are refused (ADR 0005).
+Worker (P6): `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, queue settings (`WORKER_CONCURRENCY`, `JOB_LEASE_SECONDS`, `JOB_HEARTBEAT_INTERVAL_SECONDS`, `JOB_POLL_INTERVAL_MS`, `JOB_BACKOFF_BASE_SECONDS`, `JOB_BACKOFF_MAX_SECONDS`, `SHUTDOWN_GRACE_MS`), maintenance and retention settings, extraction limits, `EMBEDDING_BATCH_SIZE`, `EMBEDDING_PRICE_PER_MILLION_TOKENS`, `ANALYSIS_PRICE_INPUT_PER_MILLION_TOKENS`, `ANALYSIS_PRICE_OUTPUT_PER_MILLION_TOKENS` (P9-T2) and `CHAT_DEADLINE_MS` (must match the API's, so the stuck-run threshold stays above it). Cache warming (C8, P7.5) is opt-in and default-off: `WARM_ENABLED` plus explicit `WARM_*` limits, prices and chat/moderation model identities that must equal the API's `CHAT_*`/`MODERATION_*` values (no keys on the worker). The full list with comments is in `worker/.env.example`. PDF text comes from `pdfjs-dist` (pinned), run in a separate process with time, memory and file-access limits; scanned PDFs are refused (ADR 0005).
 AI roles are provider-agnostic (ADR 0014): `<ROLE>_PROVIDER` (`gemini` | `openai` | `anthropic` | `openai_compatible`), `<ROLE>_MODEL`, optional `<ROLE>_API_KEY` (else `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`), and `<ROLE>_BASE_URL` for `openai_compatible`. Missing values fail closed. Changing the embedding model requires a full reindex. See `api/.env.example` and `worker/.env.example`.
 Do not log full environment values. `.env` is local-only and ignored by Git. Production secrets are configured in Render.
 
@@ -153,6 +155,8 @@ npx supabase login                     # once per machine
 To recreate a local database instead, run `make db-start`, then `make db-local`. This wipes local data.
 
 **Publishable key:** copy it from the client's Supabase project into the widget `<script>` tag on the client's website (`data-supabase-publishable-key`, see `UI_SCHEMA.md`). It is public and is not stored in this repository. Never put the secret key there.
+
+**Turnstile:** for a challenge-enabled bot, also set the public `data-turnstile-site-key` in the embed. Configure a per-client invisible widget and allowed hostnames in Cloudflare (ADR 0010), and follow its CSP guidance linked in `UI_SCHEMA.md §2`. The verifier secret belongs only in the API environment. Development bots with the server challenge flag off may omit the site key. The browser integration has offline test coverage; real keys, hostname/action verification and host CSP must be validated at P12 before production acceptance.
 
 ## Deployment order per client
 1. Validate `clients/<client>/deployment.json` with `node scripts/deploy-client.mjs --file <path>` (public IDs only; the shipped `deployment.example.json` shows the shape). Provision Supabase; choose embedding dimensions; apply migrations and create private bucket (`make db-create PROJECT_REF=<ref> CONFIRM_REF=<ref>`, see `database/README.md`).

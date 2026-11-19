@@ -34,11 +34,12 @@ case "${DOCKER_HOST:-}" in
   *) echo "race-db: DOCKER_HOST points at a non-local daemon; refusing to run" >&2; exit 2 ;;
 esac
 # The docker CLI may point at a remote daemon through a context (not only through DOCKER_HOST). Only a local
-# unix socket is accepted; an unreadable context fails closed.
+# endpoint is accepted: a unix socket, or the well-known Docker Desktop named pipe on Windows (both are
+# local-machine transports; TCP/ssh endpoints are still refused). An unreadable context fails closed.
 DOCKER_ENDPOINT="$(docker context inspect --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null)"
 case "$DOCKER_ENDPOINT" in
-  unix://*) ;;
-  *) echo "race-db: the docker context endpoint is not a local unix socket (scheme '${DOCKER_ENDPOINT%%://*}'); refusing to run" >&2; exit 2 ;;
+  unix://*|npipe:////./pipe/dockerDesktopLinuxEngine) ;;
+  *) echo "race-db: the docker context endpoint is not local (scheme '${DOCKER_ENDPOINT%%://*}'); refusing to run" >&2; exit 2 ;;
 esac
 if [ "$(docker inspect -f '{{.State.Running}}' "$C" 2>/dev/null)" != "true" ]; then
   echo "race-db: container $C is not running (start the local stack: make db-start)" >&2

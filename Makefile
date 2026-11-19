@@ -106,7 +106,7 @@ test-make:
 	bash scripts/test-make-guards.sh
 
 db-lint: check-cli check-docker
-	$(SUPABASE) db lint --local
+	$(SUPABASE) db lint
 
 db-plan: check-cli check-ref
 	@$(REF_TEST) || $(REF_FAIL); \

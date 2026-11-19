@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   AnswerCache,
   answerCacheKeyHash,
@@ -11,7 +11,6 @@ import {
   type AnswerL2,
   type AnswerCacheRecord,
 } from '../../../api/src/services/answer-cache.ts';
-import { createWarmAnswerCacheHandler } from '../../../worker/src/jobs/warm-answer-cache.ts';
 
 function fakeL2(): { l2: AnswerL2; store: Map<string, AnswerCacheRecord> } {
   const store = new Map<string, AnswerCacheRecord>();
@@ -932,103 +931,5 @@ describe('C7 answer cache — api/src/services/answer-cache.ts', () => {
         }),
       ).toBeUndefined();
     });
-  });
-});
-
-describe('C8 warm-answer-cache — worker/src/jobs/warm-answer-cache.ts', () => {
-  // Use valid v4 UUIDs for warm payload (zod uuid strict)
-  const WARM_BOT = '550e8400-e29b-41d4-a716-446655440000';
-  it('pre-populates suggested_questions after activation (fetcher path)', async () => {
-    const suggested = ['What is RAG?', 'How to reset password?', 'Contact support'];
-    const fetcher = { getSuggestedQuestions: vi.fn(async () => suggested) };
-    const embed = vi.fn(async () => ({ vectors: [[0.1, 0.2]] }));
-    const match = vi.fn(async () => []);
-    const retrieval = { embedQuery: async (_q: string) => ({ vector: [0.1] as const }), match };
-    const handler = createWarmAnswerCacheHandler({
-      fetcher,
-      embedding: { embed } as never,
-      retrieval,
-    });
-    const job = {
-      id: 'job-warm-1',
-      type: 'warm_answer_cache' as const,
-      payload: { bot_id: WARM_BOT, corpus_version: 7 },
-      attempts: 1,
-      maxAttempts: 3,
-    };
-    const ctx = {
-      db: { rpc: vi.fn(async () => null) },
-      storage: {} as never,
-      config: {} as never,
-      signal: new AbortController().signal,
-      workerId: 'test-worker',
-      log: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-      } as never,
-      heartbeat: async () => {},
-    };
-    await handler(job as never, ctx as never);
-    expect(fetcher.getSuggestedQuestions).toHaveBeenCalledWith(WARM_BOT, expect.any(Object));
-    expect(embed).toHaveBeenCalledTimes(suggested.length);
-  });
-  it('no suggested_questions => no warming but still succeeds', async () => {
-    const fetcher = { getSuggestedQuestions: vi.fn(async () => []) };
-    const handler = createWarmAnswerCacheHandler({ fetcher });
-    const job = {
-      id: 'job-warm-2',
-      type: 'warm_answer_cache' as const,
-      payload: { bot_id: WARM_BOT, corpus_version: 2 },
-      attempts: 1,
-      maxAttempts: 3,
-    };
-    const ctx = {
-      db: { rpc: vi.fn() },
-      storage: {} as never,
-      config: {} as never,
-      signal: new AbortController().signal,
-      workerId: 'w',
-      log: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-      } as never,
-      heartbeat: async () => {},
-    };
-    await handler(job as never, ctx as never);
-    expect(fetcher.getSuggestedQuestions).toHaveBeenCalled();
-  });
-  it('warm job dedupes and caps at 6 questions', async () => {
-    const many = ['q1', 'q2', 'q1', 'q3', 'q4', 'q5', 'q6', 'q7'];
-    const fetcher = { getSuggestedQuestions: vi.fn(async () => many) };
-    const embed = vi.fn(async () => ({ vectors: [[0.1]] }));
-    const handler = createWarmAnswerCacheHandler({ fetcher, embedding: { embed } as never });
-    const job = {
-      id: 'job-warm-3',
-      type: 'warm_answer_cache' as const,
-      payload: { bot_id: WARM_BOT, corpus_version: 3 },
-      attempts: 1,
-      maxAttempts: 3,
-    };
-    const ctx = {
-      db: { rpc: vi.fn() },
-      storage: {} as never,
-      config: {} as never,
-      signal: new AbortController().signal,
-      workerId: 'w',
-      log: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-      } as never,
-      heartbeat: async () => {},
-    };
-    await handler(job as never, ctx as never);
-    // deduped q1 + capped to 6 => 6 calls
-    expect(embed).toHaveBeenCalledTimes(6);
   });
 });

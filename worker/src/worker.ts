@@ -1,12 +1,15 @@
 // Worker entry point (P6-QUEUE): wires config, clients, the job runtime and the maintenance
-// scheduler. Job handlers come from `buildHandlers` (index_document and cleanup); a caller may
-// inject its own map (tests). With none registered the runtime claims nothing, but maintenance still runs.
+// scheduler. Job handlers come from `buildHandlers` (index_document, analyze_conversation,
+// cleanup, plus warm_answer_cache when WARM_ENABLED=true with a valid warming config);
+// a caller may inject its own map (tests). With none registered the runtime claims nothing,
+// but maintenance still runs. Warming without configuration stays unregistered and is logged.
 import { pathToFileURL } from 'node:url';
 import { loadWorkerConfig } from './lib/config.js';
 import { createDb } from './lib/db.js';
 import { createLogger, errorCode } from './lib/logger.js';
 import { createStorage } from './lib/storage.js';
 import { buildHandlers } from './handlers.js';
+import { loadWarmingConfig } from './lib/warming-config.js';
 import { startMaintenance } from './maintenance.js';
 import { startRuntime, type JobHandlers } from './runtime.js';
 
@@ -28,7 +31,10 @@ export function startWorker(
   handlersOverride?: JobHandlers,
 ): WorkerHandle {
   const config = loadWorkerConfig(env);
-  const handlers = handlersOverride ?? buildHandlers(config);
+  // Null when WARM_ENABLED is not true: the warm handler stays unregistered (visible below).
+  // A present-but-invalid warming config, or identities without a worker key, throw here.
+  const warming = loadWarmingConfig(env, config.ai);
+  const handlers = handlersOverride ?? buildHandlers(config, { warming });
   const log = createLogger({ level: config.logLevel });
   const db = createDb({
     url: config.supabaseUrl,
@@ -47,6 +53,7 @@ export function startWorker(
     name: workerName(),
     worker_id: config.workerId,
     handlers: Object.keys(handlers).length,
+    warming_enabled: warming !== null,
     concurrency: config.concurrency,
   });
 

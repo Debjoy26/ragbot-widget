@@ -6,7 +6,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 // P3.5 settings parity (ADR 0017), SQL side. Runs every case of tests/fixtures/settings-parity.json
 // through public.admin_validate_settings_patch on the LOCAL database (psql inside the DB container) and
 // compares with the expected outcome the Zod side asserts too (tests/unit/shared/settings-parity.test.ts).
-// The JSON travels as a psql variable (-v), quoted by psql itself (:'cases'), never spliced into SQL.
+// Fixture JSON travels as base64 on stdin, avoiding Windows' command-line limit.
+// Only the base64 alphabet is interpolated into a SQL literal, never submitted text.
 // Needs the local stack with migrations applied (supabase db reset). No mocks.
 
 interface ParityCase {
@@ -48,15 +49,15 @@ beforeAll(() => {
       '|',
       '-v',
       'ON_ERROR_STOP=1',
-      '-v',
-      `cases=${JSON.stringify(cases.map((c) => c.patch))}`,
       '-f',
       '-',
     ],
     {
       input:
         "select t.ord, coalesce(public.admin_validate_settings_patch(t.c), '') " +
-        "from jsonb_array_elements(:'cases'::jsonb) with ordinality t(c, ord) order by t.ord;\n",
+        "from jsonb_array_elements(convert_from(decode('" +
+        Buffer.from(JSON.stringify(cases.map((c) => c.patch)), 'utf8').toString('base64') +
+        "', 'base64'), 'UTF8')::jsonb) with ordinality t(c, ord) order by t.ord;\n",
       encoding: 'utf8',
       timeout: 60_000,
       maxBuffer: 1 << 20,

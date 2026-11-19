@@ -1,5 +1,20 @@
 # Working rules — ragbot_widget
 
+
+## Current owner instructions and handoff
+
+Work is STOPPED for documentation handoff after completedT03c-3a; latest owner
+usage report10% remaining of the five-hour allowance. NextT03c-3b full local
+pgTAP NOT STARTED. Read docs/reports/OPENCODE-HANDOFF.md and LATEST-CHECKPOINT.md
+before resuming. This applies to OpenCode, Codex and other agents equally.
+
+Resume local tasks only when the owner says continue. After continuation, the
+owner monitors usage; do not repeatedly block solely because tools lack a meter.
+Stop immediately on owner signal or an authoritative reading<=5% remaining;
+save continuity only. Never substitute context/elapsed time or invent a reset.
+Checkpoint EVERY task including failure/interruption. STOP BEFORE P11. Main
+runs verification; no CI as evidence. No new release/hosted/provider permission.
+
 Set by the owner on 2026-11-08. These rules apply to every phase and every session. They add to `CLAUDE.md`. Where the two differ on CI, testing or starting debug cycles, this file wins.
 
 ## 1. Roles
@@ -71,3 +86,18 @@ The main session is responsible for starting and running a debug cycle whenever 
 - Fake secrets are generated at run time. No keys, tokens, chat text or document bodies in code, logs, evidence or prompts.
 - Migrations that reached the hosted project are never edited; fixes go in a new migration.
 - Report results exactly, including what was not run and what is unproven.
+
+
+## 9. Small tasks, checkpoint boundaries and usage stop
+
+Owner instruction2026-11-18: follow docs/reports/PRE-P11-TASKS.md and save a
+checkpoint at the end of every task, including a failed or interrupted task.
+Update status, handover, task tracker, exact resume file and affected current
+specs/runbooks. Preserve historical evidence and uncommitted owner work.
+
+Stop implementation/new workers/checks/migrations when an authoritative reading
+shows5% remaining or less of the five-hour account allowance, or the owner reports
+that threshold. Save and verify continuity only. Current tools do not expose the
+account usage percentage; do not claim automatic enforcement, infer a reset, or
+substitute time/context tokens/goal budgets. With unknown quota, checkpoint and
+obtain a current reading before another implementation task. No automatic P11.

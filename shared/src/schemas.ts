@@ -9,6 +9,8 @@
  */
 
 import { z } from 'zod';
+import { isHttpsUrl, isAdminHttpsUrl } from './url-policy.js';
+export { isHttpsUrl, isAdminHttpsUrl } from './url-policy.js';
 import {
   ADMIN_ROLES,
   ANALYSIS_STATUSES,
@@ -205,26 +207,10 @@ export const emailSchema = z.email().max(254);
 export const E164_PATTERN = /^\+[1-9]\d{6,14}$/;
 export const phoneE164Schema = z.string().regex(E164_PATTERN);
 
-/** C0 controls (U+0000..U+001F), DEL and C1 controls (U+0080..U+009F). */
-function hasC0C1Controls(value: string): boolean {
-  for (let i = 0; i < value.length; i += 1) {
-    const c = value.charCodeAt(i);
-    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return true;
-  }
-  return false;
-}
-
-export function isHttpsUrl(value: string): boolean {
-  if (value.length > 2048 || /[\s<>"'\\]/.test(value) || hasC0C1Controls(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  return url.protocol === 'https:' && url.hostname !== '' && !url.username && !url.password;
-}
 export const httpsUrlSchema = z.string().refine(isHttpsUrl, 'must be an https URL');
+export const adminHttpsUrlSchema = z
+  .string()
+  .refine(isAdminHttpsUrl, 'must match the admin https URL policy');
 
 export function isIanaTimeZone(value: string): boolean {
   if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(value)) return false;
@@ -353,8 +339,8 @@ function dbOptional<T extends z.ZodType>(schema: T) {
 const contactFieldShape = {
   contact_email: dbOptional(emailSchema),
   contact_phone: dbOptional(phoneE164Schema),
-  contact_whatsapp_url: dbOptional(httpsUrlSchema),
-  contact_page_url: dbOptional(httpsUrlSchema),
+  contact_whatsapp_url: dbOptional(adminHttpsUrlSchema),
+  contact_page_url: dbOptional(adminHttpsUrlSchema),
   business_hours: dbOptional(businessHoursSchema),
   timezone: dbOptional(timezoneSchema),
 };
@@ -408,7 +394,7 @@ export const publicBotConfigSchema = z
     suggested_questions: z.array(settingsPlainText(200)).max(6),
     primary_color: hexColorSchema,
     position: widgetPositionSchema,
-    privacy_url: dbOptional(httpsUrlSchema),
+    privacy_url: dbOptional(adminHttpsUrlSchema),
     supported_languages: supportedLanguagesSchema,
     updated_at: dbOptional(z.iso.datetime({ offset: true })),
     ...contactBlockShape,
@@ -443,8 +429,8 @@ export const handoffContactSchema = z
   .strictObject({
     email: emailSchema.optional(),
     phone: phoneE164Schema.optional(),
-    whatsapp_url: httpsUrlSchema.optional(),
-    page_url: httpsUrlSchema.optional(),
+    whatsapp_url: adminHttpsUrlSchema.optional(),
+    page_url: adminHttpsUrlSchema.optional(),
     business_hours: businessHoursSchema.optional(),
     timezone: timezoneSchema.optional(),
   })
@@ -511,6 +497,7 @@ export const cleanupPayloadSchema = z
 export const warmAnswerCachePayloadSchema = z.strictObject({
   bot_id: z.uuid(),
   corpus_version: z.int().nonnegative(),
+  settings_version: z.int().min(1),
 });
 
 export const jobSchema = z.discriminatedUnion('type', [
@@ -542,14 +529,14 @@ export const botSettingsPatchSchema = z
     suggested_questions: z.array(settingsPlainText(200)).max(6).optional(),
     primary_color: hexColorSchema.optional(),
     position: widgetPositionSchema.optional(),
-    privacy_url: httpsUrlSchema.nullable().optional(),
+    privacy_url: adminHttpsUrlSchema.nullable().optional(),
     supported_languages: supportedLanguagesSchema.optional(),
     escalation_label: settingsPlainText(60).optional(),
     escalation_messages: escalationMessagesSchema.optional(),
     contact_email: emailSchema.nullable().optional(),
     contact_phone: phoneE164Schema.nullable().optional(),
-    contact_whatsapp_url: httpsUrlSchema.nullable().optional(),
-    contact_page_url: httpsUrlSchema.nullable().optional(),
+    contact_whatsapp_url: adminHttpsUrlSchema.nullable().optional(),
+    contact_page_url: adminHttpsUrlSchema.nullable().optional(),
     business_hours: businessHoursSchema.nullable().optional(),
     timezone: timezoneSchema.nullable().optional(),
     tone: settingsSingleLineText(500).optional(),

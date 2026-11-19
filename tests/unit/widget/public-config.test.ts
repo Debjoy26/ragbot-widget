@@ -34,6 +34,25 @@ function headersOf(headers: Record<string, string | null>): {
 }
 
 describe('parseEmbedOptions', () => {
+  it('accepts a public challenge key and rejects malformed configured keys', () => {
+    const attrs = {
+      'data-bot-slug': 'website-support',
+      'data-api-url': 'https://api.invalid',
+      'data-supabase-url': 'https://config.invalid',
+      'data-supabase-publishable-key': 'sb_publishable_TEST_KEY_FOR_TESTS',
+    };
+    const siteKey = `fake_${crypto.randomUUID()}`;
+    expect(
+      parseEmbedOptions({ ...attrs, 'data-turnstile-site-key': siteKey }).turnstileSiteKey,
+    ).toBe(siteKey);
+    expect(parseEmbedOptions(attrs).turnstileSiteKey).toBeUndefined();
+    for (const invalid of ['', '<script>', 'has spaces', 'x'.repeat(257)]) {
+      expect(() => parseEmbedOptions({ ...attrs, 'data-turnstile-site-key': invalid })).toThrow(
+        'invalid data-turnstile-site-key',
+      );
+    }
+  });
+
   it('accepts a complete valid snippet', () => {
     const options = parseEmbedOptions({
       'data-bot-slug': 'website-support',
@@ -65,6 +84,23 @@ describe('parseEmbedOptions', () => {
 });
 
 describe('validatePublicConfig', () => {
+  it('preserves SQL URL forms from settings through the public config boundary', () => {
+    const value = 'https://xn--a';
+    const parsed = validatePublicConfig({
+      ...VALID_ROW,
+      privacy_url: value,
+      contact_whatsapp_url: value,
+      contact_page_url: value,
+    });
+    expect(parsed.privacyUrl).toBe(value);
+    expect(parsed.contactWhatsappUrl).toBe(value);
+    expect(parsed.contactPageUrl).toBe(value);
+  });
+  it('rejects forms the SQL URL policy refuses', () => {
+    for (const value of ['https://127.0.0.1', 'https://example.com:', 'https:example.com']) {
+      expect(() => validatePublicConfig({ ...VALID_ROW, contact_page_url: value })).toThrow();
+    }
+  });
   it('accepts the documented public config shape', () => {
     const config = validatePublicConfig(VALID_ROW);
     expect(config.displayName).toBe('Acme Assistant');

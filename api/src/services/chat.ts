@@ -395,6 +395,7 @@ export function createChatService(deps: ChatDeps): ChatService {
   }
 
   async function run(turn: PreparedTurn, io: RunIo): Promise<void> {
+    const cachePolicy = turn.ctx['cache_policy'] ?? turn.ctx.settings.cache_policy;
     const { sse, log, clientSignal } = io;
     const { ctx } = turn;
     const logBase = { run_id: turn.runId, bot_id: turn.botId, session_id: turn.sessionId };
@@ -550,6 +551,7 @@ export function createChatService(deps: ChatDeps): ChatService {
             deps.embedding.model,
             deps.embedding.dimensions,
             turn.message,
+            cachePolicy,
           );
           if (cached !== undefined) {
             // Cache hit: no provider call, no usage row (cost 0).
@@ -580,6 +582,7 @@ export function createChatService(deps: ChatDeps): ChatService {
               deps.embedding.dimensions,
               turn.message,
               query.vector,
+              cachePolicy,
             );
           } catch {
             // cache write failure never fails the request
@@ -633,7 +636,12 @@ export function createChatService(deps: ChatDeps): ChatService {
           if (deps.moderationCache) {
             let cached: 'allow' | 'block' | undefined;
             try {
-              cached = await deps.moderationCache.get(deps.moderationModelKey, 'v1', turn.message);
+              cached = await deps.moderationCache.get(
+                deps.moderationModelKey,
+                'v1',
+                turn.message,
+                cachePolicy,
+              );
             } catch {
               cached = undefined;
             }
@@ -657,6 +665,7 @@ export function createChatService(deps: ChatDeps): ChatService {
                   'v1',
                   turn.message,
                   verdict,
+                  cachePolicy,
                 );
               } catch {
                 // cache write failure never fails the request
@@ -712,6 +721,7 @@ export function createChatService(deps: ChatDeps): ChatService {
         try {
           const raw = await deps.db.rpc<unknown>('get_chunks_by_ids', {
             p_chunk_ids: [...ids],
+            p_bot_id: turn.botId,
           });
           const rows = (Array.isArray(raw) ? raw : [raw]) as readonly unknown[];
           const found = new Set<string>();
@@ -727,9 +737,6 @@ export function createChatService(deps: ChatDeps): ChatService {
         }
       };
       if (deps.answerCache && !turn.hadConversation) {
-        const cachePolicy =
-          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
-          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
         const cached = await deps.answerCache.get(
           turn.botId,
           turn.ctx.bot.corpus_version,
@@ -789,9 +796,6 @@ export function createChatService(deps: ChatDeps): ChatService {
       let chunks: RetrievedChunk[];
       if (deps.retrievalCache) {
         const embeddingHash = queryEmbeddingHash(query.vector);
-        const cachePolicy =
-          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
-          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
         let hydrated: readonly RetrievedChunk[] | undefined;
         try {
           hydrated = await deps.retrievalCache.getHydrated(
@@ -803,7 +807,7 @@ export function createChatService(deps: ChatDeps): ChatService {
             turn.language ?? '',
             async (ids) => {
               const refs = ids.map((id) => ({ chunk_id: id, similarity: 1 }));
-              const full = await retrieval.hydrate(refs, workSignal);
+              const full = await retrieval.hydrate(refs, workSignal, turn.botId);
               const map = new Map(full.map((c) => [c.chunk_id, c] as const));
               return map;
             },
@@ -1096,9 +1100,6 @@ export function createChatService(deps: ChatDeps): ChatService {
         !turn.hadConversation &&
         (terminal.kind === 'answer' || terminal.kind === 'handoff')
       ) {
-        const cachePolicy =
-          (turn.ctx as unknown as Record<string, unknown>).cache_policy ??
-          (turn.ctx.settings as unknown as Record<string, unknown>).cache_policy;
         const sourceRefs =
           terminal.kind === 'answer'
             ? terminal.cited.map((id) => {

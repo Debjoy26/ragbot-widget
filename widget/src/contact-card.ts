@@ -5,7 +5,7 @@
 // never claims a human has been notified.
 
 import type { WidgetContact, WidgetHandoff, WidgetPublicConfig } from './types.js';
-import { assertSafeHref } from './render.js';
+import { isAdminHttpsUrl, phoneE164Schema, emailSchema } from '../../shared/src/schemas.js';
 
 export interface ContactLink {
   readonly kind: 'email' | 'phone' | 'whatsapp' | 'page';
@@ -20,17 +20,6 @@ export interface ContactCardData {
   readonly businessHoursText?: string | undefined;
   readonly openNow: boolean | null;
   readonly prominent: boolean;
-}
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const E164 = /^\+[1-9]\d{7,14}$/;
-
-function isHttps(value: string): boolean {
-  try {
-    return new URL(value).protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 function contactFromConfig(config: WidgetPublicConfig): WidgetContact {
@@ -70,21 +59,19 @@ export function buildContactLinks(
 ): ContactLink[] {
   const links: ContactLink[] = [];
   if (contact.email !== undefined) {
-    if (!EMAIL.test(contact.email)) throw new Error('bad handoff email');
+    if (!emailSchema.safeParse(contact.email).success) throw new Error('bad handoff email');
     links.push({ kind: 'email', label: labels.email, href: `mailto:${contact.email}` });
   }
   if (contact.phone !== undefined) {
-    if (!E164.test(contact.phone)) throw new Error('bad handoff phone');
+    if (!phoneE164Schema.safeParse(contact.phone).success) throw new Error('bad handoff phone');
     links.push({ kind: 'phone', label: labels.phone, href: `tel:${contact.phone}` });
   }
   if (contact.whatsappUrl !== undefined) {
-    if (!isHttps(contact.whatsappUrl)) throw new Error('bad handoff whatsapp_url');
-    assertSafeHref(contact.whatsappUrl);
+    if (!isAdminHttpsUrl(contact.whatsappUrl)) throw new Error('bad handoff whatsapp_url');
     links.push({ kind: 'whatsapp', label: labels.whatsapp, href: contact.whatsappUrl });
   }
   if (contact.pageUrl !== undefined) {
-    if (!isHttps(contact.pageUrl)) throw new Error('bad handoff page_url');
-    assertSafeHref(contact.pageUrl);
+    if (!isAdminHttpsUrl(contact.pageUrl)) throw new Error('bad handoff page_url');
     links.push({ kind: 'page', label: labels.page, href: contact.pageUrl });
   }
   return links;
