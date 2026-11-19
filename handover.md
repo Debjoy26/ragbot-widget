@@ -2,10 +2,11 @@
 
 ## Current checkpoint - 2026-11-19
 
-**P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19** (pre-P11 program
-T18b-T28 evidence; carries T25-d/T26-a stay OPEN, host-bound, re-run on a
-healthy host). STOP BEFORE P11 (P11/P12 not started). No checks/workers
-running.
+**PUSHED to `origin/main` @ `9c35306`** on explicit owner instruction.
+**P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19**; carries T25-d/T26-a
+stay OPEN (host-bound, re-run on a healthy host). Post-push: static gates 0,
+pgTAP 37/3671 PASS, hosted dry-run 018-027 pending (nothing applied).
+STOP BEFORE P11. No checks/workers running.
 
 Root p7.5/d4-integration@aa6425a plus preserved dirty work; hosted-last017,
 018-027 LOCAL ONLY. P0-P6 accepted; P7-P10 acceptance OPEN; STOP BEFORE P11.

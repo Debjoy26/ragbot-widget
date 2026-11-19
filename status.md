@@ -2,13 +2,14 @@
 
 ## Current checkpoint - 2026-11-19
 
-**P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19** on the authority of the
-pre-P11 local program (T18b-T28) evidence, with two host-bound carries that
-stay OPEN: **T25-d real races** (docker-exec speed bound; zero data violations
-in 204+ orderings) and **T26-a single-command full unit** (3497/3501; 4
-PDF-child 5s timeouts at 0.2GB host free; every failing file green alone;
-T26-b full integration CLOSED 23 files/848 passed). Re-run both on a healthy
-host. STOP BEFORE P11 (P11/P12 not started). No checks/workers running.
+**PUSHED to `origin/main` @ `9c35306`** (fast-forward from `aa6425a`) on
+explicit owner instruction. **P7, P7.5, P8, P9, P10 ACCEPTED by owner
+2026-11-19** with two host-bound carries that stay OPEN: **T25-d real races**
+and **T26-a single-command full unit** (re-run on a healthy host).
+Post-push gates on `main`: build/lint/format/typecheck 0, reset + pgTAP
+37/3671 PASS, hosted dry-run lists 018-027 pending (nothing applied).
+STOP BEFORE P11. No checks/workers running. See
+`docs/reports/checkpoints/PRE-P11-POST-PUSH-9c35306.md`.
 
 Root p7.5/d4-integration@aa6425a plus preserved dirty work; hosted-last017,
 018-027 LOCAL ONLY. P0-P6 accepted; P7-P10 acceptance OPEN; STOP BEFORE P11.
