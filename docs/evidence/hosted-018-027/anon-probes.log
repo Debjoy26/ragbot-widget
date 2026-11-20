@@ -1,0 +1,5 @@
+﻿public_bot_config: ERROR The remote server returned an error: (400) Bad Request.
+bot_profiles: DENIED The remote server returned an error: (401) Unauthorized.
+messages: DENIED The remote server returned an error: (401) Unauthorized.
+rpc/admin_list_bots: DENIED The remote server returned an error: (401) Unauthorized.
+public_bot_config select=*: HTTP 200 rows=0 cols=[]

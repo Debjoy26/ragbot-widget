@@ -2,12 +2,16 @@
 
 ## Current execution state
 
-STOPPED at completed pre-P11 local program (T18b-T28), 2026-11-19. Owner
-continuation complete for this run; STOP BEFORE P11. T25-d (real races) and
-T26 single-command full gates stay OPEN on measured host bounds (see below);
-everything else in T18-T28 is complete with checkpoints. No active
-checks/workers. No commit/push/install/deploy/hosted/provider action was
-performed or is approved.
+PUSHED to `origin/main` @ `8a38455` (via `9c35306`), 2026-11-19; P7-P10
+accepted with host-bound carries T25-d/T26-a OPEN. STOPPED — next-work packet
+recorded in LATEST-CHECKPOINT.md (healthy-host re-runs, hosted 018-027
+decision, remaining carries, P11 start conditions). Do anything there ONLY on
+explicit owner go-ahead. No active checks/workers. No further
+commit/push/install/deploy/hosted/provider action is approved.
+
+2026-11-20: owner approved hosted 018-027 apply (DONE, hosted now 027 —
+checkpoints/PRE-P11-hosted-018-027-2026-11-20.md) and GNU make install
+(pending); gates T25-d/T26-a/T26-b WAIT for healthy host, no commit yet.
 
 ## Latest owner instruction - continue with owner-monitored usage
 
@@ -91,16 +95,17 @@ If a task expands beyond a small unit of work, checkpoint and split it further.
 | T16 | P7/P7.5: first HTTP-test timing defect | Profile setup/ready/request/provider/cleanup under controlled load; identify cause and fix it without increasing timeout or dropping assertions to hide failure | complete |
 | T17 | P7: citation timing defects | Profile hostile input shapes; diagnose six recorded500ms failures and fix confirmed cause; preserve all hostile cases and bounds | complete |
 | T18 | P6/integration: remaining extraction/setup failures | Reproduce remaining broad extraction/confinement and admin/bootstrap setup families; split confirmed defects into subtask checkpoints and fix without weakening negatives | complete (T18a confinement fixed; T18b first-admin 21/21; T18c parity 264/264 + helper 8/8; T18d admin-real 244/244; T18e api-wiring 10/10 + limits/auth 40/40; T18f chat-e2e 82/82 + worker-runtime 7/7 + ingestion-e2e green; 4 drain cases fixed in T20 via POSIX guards: checkpoints/PRE-P11-T18a.md..T18f.md + T20.md) |
-| T19 | P3/tooling: Windows database and Make gates | Make/race/guard commands work through documented supported execution path; preserve real concurrency and assertion coverage; record exact platform limitations | complete (db-lint --local dropped, lint clean; guards 111/116, 5 fail only on missing make binary — install needs owner approval; race/test runs via Git Bash direct path in T25) |
+| T19 | P3/tooling: Windows database and Make gates | Make/race/guard commands work through documented supported execution path; preserve real concurrency and assertion coverage; record exact platform limitations | complete (db-lint --local dropped; 2026-11-20 owner-approved GNU Make 3.81 install via winget — choco blocked on permissions, user PATH updated; guards 116/116 via script AND make test-make exit 0; make db-lint exit 0 "No schema errors found" with Git-Bash-first PATH recipe; make install/npm-ci not run; race via Git Bash direct path in T25; checkpoints/PRE-P11-T19-make-2026-11-20.md) |
 | T20 | P4/P10: API smoke shutdown behavior | Diagnose draining/SIGTERM failures on Windows; fix confirmed behavior/harness cause; existing smoke assertions pass | complete (root cause: child.kill signal uncatchable on Windows/TerminateProcess; POSIX-only harness guards, assertions intact: smoke 33/0/2 skipped, ingestion-process 6/4 skipped; checkpoints/PRE-P11-T20.md) |
 | T21 | P10: guards and secret scanner | Verify scanner/self-test/Make guards and classify owner-kept demo hit without printing value; fix real issues without concealing secrets or discarding owner edits | complete (self-test 27/27; tracked scan 1 known owner-kept demo hit; untracked 14 classified by location only, 3 restore-URL hits carried to T23, 8 codex-transcript hits for owner triage; guards 111/116 per T19; checkpoints/PRE-P11-T21.md) |
 | T22 | P9: combined scheduling/accounting regression | Run all18 analysis cases together on current schema; preserve the conservative spend floor and successor-generation checks; report exact results | complete (clean reset 001-027; combined 18/18 PASS; checkpoints/PRE-P11-T22.md) |
 | T23 | P10/P8: repaired-boundary regression | Current restore-checker and URL/widget boundary checks pass; record bundle-size tradeoff; actual restore and live performance evaluation remain P11 | complete (restore 18/18, widget 73/73, shared+policy 1140/1140; restore URLs confirmed runtime fakes; bundle raw 497021/gzip 106721, perf unmeasured/P11; checkpoints/PRE-P11-T23.md) |
 | T24 | Integrated build/static gates | Root build, lint, format and typecheck all pass; checkpoint each command/result | complete (build/lint/format/typecheck all exit 0; fixed TEMP profiler lint + 7-file prettier style incl. T20/T18a lineage; semantics re-proven 52/52 + smoke 33/0/2; checkpoints/PRE-P11-T24.md) |
-| T25 | Integrated local DB gates | Clean local replay, full pgTAP, lint, real races and local advisors pass; checkpoint each command/result; no hosted writes | needs-fix (replay/pgTAP 37/3671/lint/advisors PASS; race OPEN: npipe guard fixed, 4 runs 14/4/8/10 — confirmed 3.5-7s docker-exec overhead vs sub-second harness margins, zero data violations in 204 orderings; checkpoints/PRE-P11-T25.md) |
-| T26 | Integrated unit/integration gates | Full unit and full local integration pass; diagnose every failure, preserve tests; checkpoint each suite and any interrupted run | partial (T26-b CLOSED: full integration single-command 23 files/848 passed/4 POSIX-skipped exit 0 on clean DB; T26-a OPEN at 3497/3501 — 4 PDF-child 5s timeouts at 0.2GB host free, all failing files green alone; worker flags parallelism-only; checkpoints/PRE-P11-T26.md) |
+| T25 | Integrated local DB gates | Clean local replay, full pgTAP, lint, real races and local advisors pass; checkpoint each command/result; no hosted writes | needs-fix (replay/pgTAP 37/3671/lint/advisors PASS; race OPEN: npipe guard fixed, 4 runs 14/4/8/10 — confirmed 3.5-7s docker-exec overhead vs sub-second harness margins, zero data violations in 204 orderings; 2026-11-20 healthy-host re-run: 3x51 orderings all CONSISTENT, same 4 fast-UNEXPECTED-BLOCK artifacts as RAM fell 839MB->247MB, exit 1; checkpoints/PRE-P11-T25.md + PRE-P11-T25d-rerun-2026-11-20.md, logs docs/evidence/T25/race-rerun-2026-11-20.log + race-rerun2-2026-11-20.log) |
+| T26 | Integrated unit/integration gates | Full unit and full local integration pass; diagnose every failure, preserve tests; checkpoint each suite and any interrupted run | partial (T26-b re-prove OPEN: 2026-11-20 single-command on clean DB exit 1 — 3 failed/783 passed/66 skipped; 4 hook-timeout whole-file skips + 2 seed-spawn 5s timeouts + 1 analysis-budget assertion; isolation analysis-budget 8/8 alone = load cross-talk, 4 hook files unclassifiable alone at 0.1GB, admin-real 242/244; prior --maxWorkers=4 CLOSED basis (848 passed) stands on unchanged tree. T26-a still OPEN: 2026-11-20 single-command exit 1 — 45 failed/3456 passed incl 23x 5s timeouts; all 6 failing files green alone; checkpoints/PRE-P11-T26.md + PRE-P11-T26a-rerun-2026-11-20.md + PRE-P11-T26b-rerun-2026-11-20.md + PRE-P11-T26b-isolation-2026-11-20.md (2026-11-20 isolation: 5/5 green alone — api-wiring 10/10, db-boundary 24/24, first-admin 21/21, worker-runtime 7/7, admin-real 244/244 — plus analysis-budget 8/8: 6/6 failures classified contention, zero product assertions open; single-command re-proves stay OPEN), logs docs/evidence/T26/unit-rerun-2026-11-20.log + integration-rerun-2026-11-20.log) |
 | T27 | Integrated running-system/guard gates | API smoke, compiled worker, Make guards, secret self-test and untracked-inclusive scan pass; checkpoint each command/result | complete (smoke 33/0/2; dist-check PASS; guards 111/116 per T19; self-test 27/27; untracked scan same 14 classified, no new hits; checkpoints/PRE-P11-T27.md) |
 | T28 | P7–P10: final documentation and handoff | Synchronize affected current docs and evidence; cross-check actual Git/schema truth; list manual/hosted/phase gates; STOP BEFORE P11 | complete (checkpoints/PRE-P11-T18b.md..T28.md, evidence T18f/T25/T26, continuity synced; race + single-command gates carried OPEN; checkpoints/PRE-P11-T28.md) |
+| T29 | Documentation-only: align backend plan with admin-panel proposal | Record cross-repo ownership and proposed provider, widget-key, subscription, reviewed-answer, and AWS-hosting contracts; no code/migrations/phase progression; checkpoint and preserve pre-existing work | complete (PRD/architecture/technical/database/plan + ADR 0019, status/handover/tracker sync; checkpoint `checkpoints/PRE-P11-T29-admin-panel-contract.md`; no commit/push to this repo) |
 
 Dependencies: T01 precedes any020 application; T02 precedes T03. T04–T13 freeze
 and integrate the C8 contracts before T14/T15. T16–T23 resolve remaining known
@@ -114,9 +119,15 @@ small task. Do not start a long suite just to race a usage limit.
 
 ## Current handoff
 
-See OPENCODE-HANDOFF.md. CompletedT17 (T03 COMPLETE with carried limits);
-nextT18. Older T00 UNKNOWN/019 blocks are historical and superseded. Full original
-task file archived in checkpoints/PRE-P11-TASKS-BEFORE-DOC-SYNC-2026-11-18.md.
+T29 is complete as a documentation-only proposal. The main worktree was
+`main` @ `8a38455` at task start; preserve its pre-existing dirty changes and
+both temporary worktrees. Hosted migrations 018–027 were applied with owner
+approval on 2026-11-20; local/hosted history is recorded at 027. T25-d and
+T26 single-command gates remain open; STOP BEFORE P11. Read
+`LATEST-CHECKPOINT.md` and `OPENCODE-HANDOFF.md` for current next actions.
+T29 does not authorize implementation, a hosted write, P11/P12, or a commit or
+push to `ragbot-widget`. Full original task file archived in
+checkpoints/PRE-P11-TASKS-BEFORE-DOC-SYNC-2026-11-18.md.
 
 ## T03 subtask boundaries
 

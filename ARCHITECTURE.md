@@ -1,6 +1,6 @@
 # Architecture — ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): P7–P10 accepted; P11 not started. Local/hosted migration histories are recorded at 027; T25-d/T26 single-command gates remain open. The provider-admin design in §10 is proposed and does not alter the current per-client topology. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
 ## 1. Topology
 ```text
@@ -61,3 +61,67 @@ Use request/job IDs; metrics for latency, usage, queue age, errors, rate denials
 
 ## 9. Availability and limits
 Paid API and worker services are the production baseline. Free Render web services are only for demos; sleeping/cold starts remain even if data storage is offloaded. Render does not eliminate finite memory, CPU, bandwidth, database quotas, or provider rate limits. Large/OCR workloads may require a larger or specialised worker.
+
+## 10. Managed administration extension (proposed)
+
+The existing runtime remains per-client: one tenant Supabase project, API,
+worker, widget deployment, and client-admin deployment. The new
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel)
+specifies a client experience plus a proposed provider experience. This
+proposal does not replace or silently change the current deployment model.
+
+### Client mode
+
+- The client-admin browser authenticates to that client's Supabase Auth and
+  uses active membership, `aal2`, RLS, reviewed RPCs, and Storage policies.
+- Ordinary admin operations do not go through the visitor API.
+- It receives no service-role or provider credentials.
+- Any new tenant schema or browser-callable RPC is designed and migrated only
+  in this repository's `supabase/migrations` history.
+
+### Provider mode
+
+```text
+Provider-admin browser
+  -> provider identity/MFA
+  -> provider control API
+  -> provider client/deployment registry and audit
+  -> explicitly scoped tenant operation, if authorized
+```
+
+The provider API and registry are proposed separate control-plane components;
+neither is currently part of this repository. Provider browser code must never
+connect to arbitrary tenant projects with service-role keys. Provider access
+to client conversations or document bodies requires a separately approved
+purpose, permission, and audit policy. The exact delegation/proxy model remains
+an open decision.
+
+### Widget identifier and service state
+
+The current embed contract (public bot slug plus configured public project/API
+values) remains in force. A future dedicated widget key is public
+identification only; it is not authentication. Bootstrap, key rotation,
+revocation, and hostname policy need a reviewed contract. Subscription status
+and provider suspension must be enforced by an authoritative backend check on
+runtime operations; hiding the widget or disabling only its UI is insufficient.
+Whether that state is stored in each tenant database or obtained through a
+central control plane is undecided.
+
+### Hosting change under consideration
+
+The current deployment remains Render API/worker and the existing widget
+hosting arrangement. The owner has also discussed Docker deployment on AWS.
+That is a proposed hosting change, not an implemented migration: choose EC2
+versus ECS/Fargate, per-client versus shared services, secrets/observability,
+and static widget delivery (for example S3/CloudFront) in a separate approved
+architecture decision. The browser widget remains a static JavaScript bundle;
+Docker is for server processes, not the plugin itself.
+
+### Reviewed knowledge-gap answers
+
+The existing `knowledge_gaps` RPC is reporting, not a publish-answer workflow.
+The proposed flow is admin-authored/approved content through the existing
+validated tenant ingestion path, followed by worker indexing and atomic
+activation. It becomes retrievable only when active. Automatically promoting
+visitor or model text to trusted knowledge is prohibited. Markdown versus a
+dedicated FAQ entity is undecided.

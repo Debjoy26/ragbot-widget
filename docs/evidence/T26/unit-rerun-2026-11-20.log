@@ -1,0 +1,766 @@
+﻿
+> ragbot-widget@0.1.0 test
+> vitest run --project unit
+
+
+ RUN  v5.1.0 D:/Projects1/Text_AI/ragbot-widget
+
+ Γ¥» |unit| tests/unit/worker/chunk.test.ts (56 tests | 1 failed) 15443ms
+   Γ¥» chunkDocument: linear time on hostile input (R-1) (19)
+     ├ù chunks 1,000,000 characters of combining marks after one letter in under 2 seconds 2763ms
+ Γ¥» |unit| tests/unit/worker/index-document.test.ts (129 tests | 25 failed) 33364ms
+   Γ¥» index_document: success path (5)
+     ├ù processes a PDF with a text layer 6561ms
+   Γ¥» index_document: permanent failures fail the version and return (32)
+     ├ù a scanned PDF (no text layer) fails OCR_REQUIRED and is never activated 5469ms
+     ├ù a corrupt PDF fails FILE_UNSUPPORTED 5008ms
+     ├ù zero chunks fail OCR_REQUIRED for a PDF and FILE_UNSUPPORTED for other types 5759ms
+     ├ù the daily cap (RB001) fails BUDGET_EXCEEDED with no provider call, no write, nothing to release 29ms
+     ├ù other reserve failures are not file failures: they propagate for a retry 5ms
+     ├ù a non-retryable provider error (auth) fails INDEXING_FAILED and releases the reservation 3ms
+     ├ù a wrong-length vector from the provider fails INDEXING_FAILED and nothing is written 2ms
+     ├ù a wrong vector count from the provider fails INDEXING_FAILED 1ms
+   Γ¥» index_document: activation refused (RB011) (4)
+     ├ù fails SUPERSEDED when a newer version became active meanwhile 2ms
+     ├ù fails INDEXING_FAILED on an embedding model mismatch 3ms
+     ├ù completes without failing when the version is already ready (duplicate delivery) 1ms
+     ├ù keeps the settled reservation settled (no release after settle) 3ms
+   Γ¥» index_document: transient failures retry (10)
+     ├ù a rate-limited provider throws RetryJobError with the retry-after hint and releases the reservation 1ms
+     ├ù a transient provider error throws RetryJobError(provider_transient) 1ms
+     ├ù a failure after some batches leaves written chunks, never activates, and settles the cost so far 2ms
+     ├ù a database network error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend 2ms
+     ├ù a database timeout error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend 1ms
+     ├ù a database http 503 error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend 16ms
+     ├ù an unexpected error is rethrown (the runtime retries it) after the partial spend is settled 1ms
+     ├ù a failing release never masks the original failure 1ms
+     ├ù an RB003 on settle is tolerated and activation still happens 1ms
+   Γ¥» index_document: lease loss and aborts touch nothing (6)
+     ├ù RB013 on write_document_chunks stops without releasing, failing or activating 3ms
+     ├ù an aborted signal during the provider call stops without releasing or failing 2ms
+   Γ¥» index_document: logging (2)
+     ├ù logs the resume offset as a number (it is not redacted) 8ms
+ Γ¥» |unit| tests/unit/deploy-client.test.ts (8 tests | 3 failed) 38563ms
+   Γ¥» deploy-client (8)
+     ├ù accepts the shipped example shape with concrete values 7457ms
+     ├ù rejects the example file itself (placeholders are not deployable) 6778ms
+     ├ù requires --file 5017ms
+ Γ¥» |unit| tests/unit/create-first-admin.test.ts (8 tests | 4 failed) 41238ms
+   Γ¥» create-first-admin existing-user rule (8)
+     ├ù invites a new user 5025ms
+     ├ù reuses an unanswered invite (never confirmed, never signed in) 7433ms
+     ├ù adopts a confirmed user only with --adopt-existing 5029ms
+     ├ù rejects a repeated or valued --adopt-existing as bad usage 7578ms
+ Γ¥» |unit| tests/unit/worker/extract-confinement.test.ts (12 tests | 4 failed) 41741ms
+   Γ¥» PDF child confinement (real node process, the flags the extractor uses) (8)
+     ├ù control: an unconfined node can read the file and the parent environment 6998ms
+     ├ù cannot read a temporary file outside the allowed paths, nor the parent environ 6974ms
+     ├ù the real extraction still works under the confinement 5807ms
+   Γ¥» PDF child start failures are transient, not file failures (4)
+     ├ù a time kill and a memory kill stay FILE_UNSUPPORTED 7135ms
+{"level":30,"time":"2026-11-20T12:50:05.114Z","reqId":"68ce7b77-fadf-4039-83a0-ef688054adf0","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.231Z","reqId":"2c5589d8-720e-4422-8246-214d1344d15a","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.156Z","reqId":"68ce7b77-fadf-4039-83a0-ef688054adf0","bot_id":"ff162d43-40fc-484d-8a8f-80007a20b010","session_id":"045fe9e9-55b1-4914-a3c4-b324bae810ee","schema_key":"callback_request","entry_id":"c9081d5e-406f-4be9-b3eb-449818658ab8","msg":"data entry recorded"}
+{"level":30,"time":"2026-11-20T12:50:05.164Z","reqId":"68ce7b77-fadf-4039-83a0-ef688054adf0","res":{"statusCode":200},"responseTime":17.856300000000374,"msg":"request completed"}
+{"level":30,"time":"2026-11-20T12:50:05.236Z","reqId":"2c5589d8-720e-4422-8246-214d1344d15a","bot_id":"ff162d43-40fc-484d-8a8f-80007a20b010","session_id":"045fe9e9-55b1-4914-a3c4-b324bae810ee","schema_key":"callback_request","entry_id":"c9081d5e-406f-4be9-b3eb-449818658ab8","msg":"data entry recorded"}
+{"level":30,"time":"2026-11-20T12:50:05.355Z","reqId":"3609a829-3981-4983-85b2-88ced4a4664e","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.239Z","reqId":"2c5589d8-720e-4422-8246-214d1344d15a","res":{"statusCode":200},"responseTime":6.351200000000063,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.358Z","reqId":"3609a829-3981-4983-85b2-88ced4a4664e","err":{"type":"AppError","code":"INVALID_REQUEST"},"error_code":"INVALID_REQUEST","internal":"entries_unknown_schema","status":400,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.373Z","reqId":"31a5fbcc-3352-44a9-b02b-74c65ca3a251","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.362Z","reqId":"3609a829-3981-4983-85b2-88ced4a4664e","res":{"statusCode":400},"responseTime":6.048099999999977,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.381Z","reqId":"31a5fbcc-3352-44a9-b02b-74c65ca3a251","err":{"type":"AppError","code":"INVALID_REQUEST"},"error_code":"INVALID_REQUEST","internal":"entries_invalid_payload","status":400,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.436Z","reqId":"d0086b43-d185-483b-a905-ad4bc52b5b88","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.383Z","reqId":"31a5fbcc-3352-44a9-b02b-74c65ca3a251","res":{"statusCode":400},"responseTime":8.86120000000028,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.440Z","reqId":"d0086b43-d185-483b-a905-ad4bc52b5b88","err":{"type":"AppError","code":"INVALID_REQUEST"},"error_code":"INVALID_REQUEST","internal":"entries_invalid_payload","status":400,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.454Z","reqId":"9c706ea2-1960-42ae-88a1-e734e32c652e","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.443Z","reqId":"d0086b43-d185-483b-a905-ad4bc52b5b88","res":{"statusCode":400},"responseTime":5.800799999999981,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.459Z","reqId":"9c706ea2-1960-42ae-88a1-e734e32c652e","err":{"type":"AppError","code":"INVALID_REQUEST"},"error_code":"INVALID_REQUEST","internal":"entries_body_invalid","status":400,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.529Z","reqId":"5b419387-d325-451f-aed7-77a3d9b3ac6d","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.460Z","reqId":"9c706ea2-1960-42ae-88a1-e734e32c652e","res":{"statusCode":400},"responseTime":4.2358999999987645,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.593Z","reqId":"5b419387-d325-451f-aed7-77a3d9b3ac6d","err":{"type":"AppError","code":"INVALID_REQUEST"},"error_code":"INVALID_REQUEST","internal":"entries_conversation_not_found","status":404,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.678Z","reqId":"d8c5a474-bc2f-40a2-ab23-20f08c3e0c8f","req":{"method":"POST","path":"/v1/entries"},"msg":"incoming request"}
+{"level":30,"time":"2026-11-20T12:50:05.623Z","reqId":"5b419387-d325-451f-aed7-77a3d9b3ac6d","res":{"statusCode":404},"responseTime":32.38920000000144,"msg":"request completed"}
+{"level":40,"time":"2026-11-20T12:50:05.680Z","reqId":"d8c5a474-bc2f-40a2-ab23-20f08c3e0c8f","err":{"type":"VisitorAuthError","code":"UNAUTHORIZED"},"error_code":"UNAUTHORIZED","internal":"visitor_auth","status":401,"msg":"request rejected"}
+{"level":30,"time":"2026-11-20T12:50:05.682Z","reqId":"d8c5a474-bc2f-40a2-ab23-20f08c3e0c8f","res":{"statusCode":401},"responseTime":2.6648999999997613,"msg":"request completed"}
+ Γ¥» |unit| tests/unit/worker/extract.test.ts (32 tests | 8 failed) 76782ms
+   Γ¥» extractText: PDF (12)
+     ├ù extracts the text of a one-page PDF 5297ms
+     ├ù keeps page numbers on a multi-page PDF and drops empty pages 5279ms
+     ├ù returns OCR_REQUIRED for a PDF with no text layer 5764ms
+     ├ù returns OCR_REQUIRED when the total text is below the threshold 8133ms
+     ├ù returns FILE_UNSUPPORTED for a corrupt PDF 5932ms
+     ├ù returns FILE_UNSUPPORTED for a truncated PDF 5004ms
+     ├ù returns FILE_UNSUPPORTED when the PDF has more pages than the limit 5157ms
+   Γ¥» extractText: text limit (EXTRACT_MAX_CHARS) (2)
+     ├ù refuses a PDF whose total text is over maxChars as FILE_UNSUPPORTED (summed over pages) 5054ms
+node.exe : 
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ» Failed Tests 45 ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»
+
+ FAIL  |unit| tests/unit/create-first-admin.test.ts > create-first-admin existing-user rule > invites a new user
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/create-first-admin.test.ts:81:3
+     79|
+     80| describe('create-first-admin existing-user rule', () => {
+     81|   it('invites a new user', async () => {
+       |   ^
+     82|     const f = await startFake(null);
+     83|     const r = await run(f.url);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[1/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/create-first-admin.test.ts > create-first-admin existing-user rule > reuses an unanswered 
+invite (never confirmed, never signed in)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/create-first-admin.test.ts:89:3
+     87|   });
+     88|
+     89|   it('reuses an unanswered invite (never confirmed, never signed in)',ΓÇª
+       |   ^
+     90|     const f = await startFake({
+     91|       ...base,
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[2/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/create-first-admin.test.ts > create-first-admin existing-user rule > adopts a confirmed user 
+only with --adopt-existing
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/create-first-admin.test.ts:127:3
+    125|   });
+    126|
+    127|   it('adopts a confirmed user only with --adopt-existing', async () =>ΓÇª
+       |   ^
+    128|     const f = await startFake({ ...base, email_confirmed_at: '2026-01-ΓÇª
+    129|     const r = await run(f.url, ['--adopt-existing']);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[3/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/create-first-admin.test.ts > create-first-admin existing-user rule > rejects a repeated or 
+valued --adopt-existing as bad usage
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/create-first-admin.test.ts:135:3
+    133|   });
+    134|
+    135|   it('rejects a repeated or valued --adopt-existing as bad usage', asyΓÇª
+       |   ^
+    136|     const f = await startFake(null);
+    137|     expect((await run(f.url, ['--adopt-existing', '--adopt-existing'])ΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[4/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/deploy-client.test.ts > deploy-client > accepts the shipped example shape with concrete values
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/deploy-client.test.ts:43:3
+     41|
+     42| describe('deploy-client', () => {
+     43|   it('accepts the shipped example shape with concrete values', async (ΓÇª
+       |   ^
+     44|     const { code, out } = await run(['--file', fixture(VALID)]);
+     45|     expect(code).toBe(0);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[5/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/deploy-client.test.ts > deploy-client > rejects the example file itself (placeholders are not 
+deployable)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/deploy-client.test.ts:50:3
+     48|   });
+     49|
+     50|   it('rejects the example file itself (placeholders are not deployableΓÇª
+       |   ^
+     51|     const { code } = await run(['--file', EXAMPLE]);
+     52|     expect(code).not.toBe(0);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[6/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/deploy-client.test.ts > deploy-client > requires --file
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/deploy-client.test.ts:99:3
+     97|   });
+     98|
+     99|   it('requires --file', async () => {
+       |   ^
+    100|     const { code, out } = await run([]);
+    101|     expect(code).not.toBe(0);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[7/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/chunk.test.ts > chunkDocument: linear time on hostile input (R-1) > chunks 1,000,000 
+characters of combining marks after one letter in under 2 seconds
+AssertionError: expected 2683.741799999998 to be less than 2000
+ Γ¥» tests/unit/worker/chunk.test.ts:480:23
+    478|       const { chunks } = chunkDocument([{ number: 1, text }], mediaTypΓÇª
+    479|       const elapsed = performance.now() - started;
+    480|       expect(elapsed).toBeLessThan(LIMIT_MS);
+       |                       ^
+    481|       chunks.forEach((chunk, i) => {
+    482|         expect(chunk.chunk_index).toBe(i);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[8/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract-confinement.test.ts > PDF child confinement (real node process, the flags the 
+extractor uses) > control: an unconfined node can read the file and the parent environment
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract-confinement.test.ts:120:3
+    118|
+    119| describe('PDF child confinement (real node process, the flags the extrΓÇª
+    120|   it('control: an unconfined node can read the file and the parent envΓÇª
+       |   ^
+    121|     const open = probe(false);
+    122|     expect(open['outside']).toBe('READ');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[9/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract-confinement.test.ts > PDF child confinement (real node process, the flags the 
+extractor uses) > cannot read a temporary file outside the allowed paths, nor the parent environ
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract-confinement.test.ts:127:3
+    125|   });
+    126|
+    127|   it('cannot read a temporary file outside the allowed paths, nor the ΓÇª
+       |   ^
+    128|     const closed = probe(true);
+    129|     expect(closed['outside']).toBe('ERR_ACCESS_DENIED');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[10/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract-confinement.test.ts > PDF child confinement (real node process, the flags the 
+extractor uses) > the real extraction still works under the confinement
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract-confinement.test.ts:196:3
+    194|   });
+    195|
+    196|   it('the real extraction still works under the confinement', async ()ΓÇª
+       |   ^
+    197|     const pdf = buildPdf({ pages: [['Confined child still extracts thiΓÇª
+    198|     const result = await extractText(pdf, 'application/pdf', LIMITS);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[11/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract-confinement.test.ts > PDF child start failures are transient, not file 
+failures > a time kill and a memory kill stay FILE_UNSUPPORTED
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract-confinement.test.ts:223:3
+    221|   );
+    222|
+    223|   it('a time kill and a memory kill stay FILE_UNSUPPORTED', async () =ΓÇª
+       |   ^
+    224|     const pdf = buildPdf({ pages: [['Some text on a page here.']] });
+    225|     const timeout = await extractText(pdf, 'application/pdf', { ...LIMΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[12/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > extracts the text of a one-page PDF
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:134:3
+    132|
+    133| describe('extractText: PDF', () => {
+    134|   it('extracts the text of a one-page PDF', async () => {
+       |   ^
+    135|     const pdf = buildPdf({ pages: [['The quick brown fox jumps over thΓÇª
+    136|     const result = await extractText(pdf, 'application/pdf', LIMITS);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[13/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > keeps page numbers on a multi-page PDF and drops 
+empty pages
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:144:3
+    142|   });
+    143|
+    144|   it('keeps page numbers on a multi-page PDF and drops empty pages', aΓÇª
+       |   ^
+    145|     const pdf = buildPdf({
+    146|       pages: [
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[14/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > returns OCR_REQUIRED for a PDF with no text layer
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:159:3
+    157|   });
+    158|
+    159|   it('returns OCR_REQUIRED for a PDF with no text layer', async () => {
+       |   ^
+    160|     const err = await failureOf(
+    161|       extractText(buildPdf({ pages: [[], []] }), 'application/pdf', LIΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[15/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > returns OCR_REQUIRED when the total text is below 
+the threshold
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:167:3
+    165|   });
+    166|
+    167|   it('returns OCR_REQUIRED when the total text is below the threshold'ΓÇª
+       |   ^
+    168|     const tiny = 'x'.repeat(MIN_PDF_TEXT_CHARS - 1);
+    169|     const err = await failureOf(
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[16/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > returns FILE_UNSUPPORTED for a corrupt PDF
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:185:3
+    183|   });
+    184|
+    185|   it('returns FILE_UNSUPPORTED for a corrupt PDF', async () => {
+       |   ^
+    186|     const pdf = utf8('%PDF-1.4\nthis is not a real pdf body, just garbΓÇª
+    187|     const err = await failureOf(extractText(pdf, 'application/pdf', LIΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[17/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > returns FILE_UNSUPPORTED for a truncated PDF
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:192:3
+    190|   });
+    191|
+    192|   it('returns FILE_UNSUPPORTED for a truncated PDF', async () => {
+       |   ^
+    193|     const pdf = buildPdf({ pages: [['A page of reasonable length for tΓÇª
+    194|     const err = await failureOf(
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[18/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: PDF > returns FILE_UNSUPPORTED when the PDF has more 
+pages than the limit
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:200:3
+    198|   });
+    199|
+    200|   it('returns FILE_UNSUPPORTED when the PDF has more pages than the liΓÇª
+       |   ^
+    201|     const pages = Array.from({ length: 5 }, (_, i) => [`Page number ${ΓÇª
+    202|     const err = await failureOf(
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[19/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/extract.test.ts > extractText: text limit (EXTRACT_MAX_CHARS) > refuses a PDF whose 
+total text is over maxChars as FILE_UNSUPPORTED (summed over pages)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/extract.test.ts:302:3
+    300|   });
+    301|
+    302|   it('refuses a PDF whose total text is over maxChars as FILE_UNSUPPORΓÇª
+       |   ^
+    303|     const pages = [['a'.repeat(60)], ['b'.repeat(60)]];
+    304|     const err = await failureOf(
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[20/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: success path > processes a PDF with a text 
+layer
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/index-document.test.ts:425:3
+    423|   });
+    424|
+    425|   it('processes a PDF with a text layer', async () => {
+       |   ^
+    426|     const pdf = buildPdf({ pages: [[`${SENTINEL} first page of the hanΓÇª
+    427|     const rig = makeRig(pdf, { media_type: 'application/pdf' });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[21/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > a scanned PDF (no text layer) fails OCR_REQUIRED and is never activated
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/index-document.test.ts:1451:3
+    1449|   });
+    1450|
+    1451|   it('a scanned PDF (no text layer) fails OCR_REQUIRED and is never acΓÇª
+       |   ^
+    1452|     const rig = makeRig(buildPdf({ pages: [[], []] }), { media_type: 'ΓÇª
+    1453|     await run(rig);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[22/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > a corrupt PDF fails FILE_UNSUPPORTED
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/index-document.test.ts:1467:3
+    1465|   });
+    1466|
+    1467|   it('a corrupt PDF fails FILE_UNSUPPORTED', async () => {
+       |   ^
+    1468|     const rig = makeRig(utf8('%PDF-1.4\nthis is not a real pdf body atΓÇª
+    1469|       media_type: 'application/pdf',
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[23/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > zero chunks fail OCR_REQUIRED for a PDF and FILE_UNSUPPORTED for other types
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/unit/worker/index-document.test.ts:1484:3
+    1482|   });
+    1483|
+    1484|   it('zero chunks fail OCR_REQUIRED for a PDF and FILE_UNSUPPORTED forΓÇª
+       |   ^
+    1485|     vi.mocked(chunkModule.chunkDocumentAsync).mockResolvedValue({ chunΓÇª
+    1486|     const pdfRig = makeRig(buildPdf({ pages: [['some words that are fiΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[24/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > the daily cap (RB001) fails BUDGET_EXCEEDED with no provider call, no write, nothing to release
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'BUDGET_EXCEEDED' // Object.is equality
+
+Expected: "BUDGET_EXCEEDED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1507:29
+    1505|     };
+    1506|     await run(rig);
+    1507|     expect(failedWith(rig)).toBe('BUDGET_EXCEEDED');
+       |                             ^
+    1508|     expect(rig.embed).not.toHaveBeenCalled();
+    1509|     expect(rig.of('write_document_chunks')).toHaveLength(0);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[25/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > other reserve failures are not file failures: they propagate for a retry
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1520:27
+    1518|       throw new DbError('http', 400, 'RB002');
+    1519|     };
+    1520|     await expect(run(rig)).rejects.toBeInstanceOf(DbError);
+       |                           ^
+    1521|     expect(rig.embed).not.toHaveBeenCalled();
+    1522|     expect(failedWith(rig)).toBeUndefined();
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[26/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > a non-retryable provider error (auth) fails INDEXING_FAILED and releases the reservation
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'INDEXING_FAILED' // Object.is equality
+
+Expected: "INDEXING_FAILED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1531:29
+    1529|     );
+    1530|     await run(rig);
+    1531|     expect(failedWith(rig)).toBe('INDEXING_FAILED');
+       |                             ^
+    1532|     expect(rig.names()).toContain('release_index_budget');
+    1533|     expect(rig.names()).not.toContain('settle_index_budget');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[27/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > a wrong-length vector from the provider fails INDEXING_FAILED and nothing is written
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'INDEXING_FAILED' // Object.is equality
+
+Expected: "INDEXING_FAILED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1541:29
+    1539|     rig.embed.mockResolvedValueOnce({ vectors: [[0.1, 0.2, 0.3]], inpuΓÇª
+    1540|     await run(rig);
+    1541|     expect(failedWith(rig)).toBe('INDEXING_FAILED');
+       |                             ^
+    1542|     expect(rig.of('write_document_chunks')).toHaveLength(0);
+    1543|     // The provider answered and was paid: the usage is recorded and tΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[28/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: permanent failures fail the version and 
+return > a wrong vector count from the provider fails INDEXING_FAILED
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'INDEXING_FAILED' // Object.is equality
+
+Expected: "INDEXING_FAILED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1552:29
+    1550|     rig.embed.mockResolvedValueOnce({ vectors: [], inputTokens: 5 });
+    1551|     await run(rig);
+    1552|     expect(failedWith(rig)).toBe('INDEXING_FAILED');
+       |                             ^
+    1553|     expect(rig.of('write_document_chunks')).toHaveLength(0);
+    1554|   });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[29/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: activation refused (RB011) > fails SUPERSEDED 
+when a newer version became active meanwhile
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'SUPERSEDED' // Object.is equality
+
+Expected: "SUPERSEDED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1586:29
+    1584|     refuse(rig, { status: 'embedding', version_number: 1, active_versiΓÇª
+    1585|     await run(rig);
+    1586|     expect(failedWith(rig)).toBe('SUPERSEDED');
+       |                             ^
+    1587|     expect(rig.names()).toContain('settle_index_budget');
+    1588|     expect(rig.names()).not.toContain('release_index_budget');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[30/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: activation refused (RB011) > fails 
+INDEXING_FAILED on an embedding model mismatch
+AssertionError: expected 'FILE_UNSUPPORTED' to be 'INDEXING_FAILED' // Object.is equality
+
+Expected: "INDEXING_FAILED"
+Received: "FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1595:29
+    1593|     refuse(rig, { status: 'embedding', embedding_model: 'changed-modelΓÇª
+    1594|     await run(rig);
+    1595|     expect(failedWith(rig)).toBe('INDEXING_FAILED');
+       |                             ^
+    1596|   });
+    1597|
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[31/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: activation refused (RB011) > completes 
+without failing when the version is already ready (duplicate delivery)
+AssertionError: expected 'FILE_UNSUPPORTED' to be undefined
+
+- Expected:
+undefined
+
++ Received:
+"FILE_UNSUPPORTED"
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1602:29
+    1600|     refuse(rig, { status: 'ready' });
+    1601|     await run(rig);
+    1602|     expect(failedWith(rig)).toBeUndefined();
+       |                             ^
+    1603|   });
+    1604|
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[32/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: activation refused (RB011) > keeps the 
+settled reservation settled (no release after settle)
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1609:43
+    1607|     refuse(rig, { status: 'embedding' });
+    1608|     await run(rig);
+    1609|     expect(rig.of('settle_index_budget')).toHaveLength(1);
+       |                                           ^
+    1610|     expect(rig.of('release_index_budget')).toHaveLength(0);
+    1611|   });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[33/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a rate-limited 
+provider throws RetryJobError with the retry-after hint and releases the reservation
+AssertionError: expected undefined to be an instance of RetryJobError
+ Γ¥» tests/unit/worker/index-document.test.ts:1623:17
+    1621|     );
+    1622|     const err = await run(rig).catch((e: unknown) => e);
+    1623|     expect(err).toBeInstanceOf(RetryJobError);
+       |                 ^
+    1624|     expect((err as RetryJobError).code).toBe('provider_rate_limited');
+    1625|     expect((err as RetryJobError).retryAfterSeconds).toBe(42);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[34/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a transient 
+provider error throws RetryJobError(provider_transient)
+AssertionError: expected undefined to be an instance of RetryJobError
+ Γ¥» tests/unit/worker/index-document.test.ts:1640:17
+    1638|     rig.embed.mockRejectedValueOnce(new ProviderError('transient', 'emΓÇª
+    1639|     const err = await run(rig).catch((e: unknown) => e);
+    1640|     expect(err).toBeInstanceOf(RetryJobError);
+       |                 ^
+    1641|     expect((err as RetryJobError).code).toBe('provider_transient');
+    1642|     expect(failedWith(rig)).toBeUndefined();
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[35/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a failure after 
+some batches leaves written chunks, never activates, and settles the cost so far
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1653:27
+    1651|       )
+    1652|       .mockRejectedValueOnce(new ProviderError('transient', 'embeddingΓÇª
+    1653|     await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+       |                           ^
+    1654|     expect(rig.of('write_document_chunks')).toHaveLength(1);
+    1655|     expect(rig.names()).not.toContain('activate_version_for_job');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[36/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a database network 
+error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a database timeout 
+error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a database http 
+503 error (after a batch was embedded) becomes RetryJobError(db_unavailable) and settles the partial spend
+AssertionError: expected undefined to be an instance of RetryJobError
+ Γ¥» tests/unit/worker/index-document.test.ts:1674:19
+    1672|       };
+    1673|       const err = await run(rig).catch((e: unknown) => e);
+    1674|       expect(err).toBeInstanceOf(RetryJobError);
+       |                   ^
+    1675|       expect((err as RetryJobError).code).toBe('db_unavailable');
+    1676|       expectPartialSpendSettled(rig);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[37/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > an unexpected 
+error is rethrown (the runtime retries it) after the partial spend is settled
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1693:27
+    1691|       throw new TypeError('boom');
+    1692|     };
+    1693|     await expect(run(rig)).rejects.toBeInstanceOf(TypeError);
+       |                           ^
+    1694|     expectPartialSpendSettled(rig);
+    1695|     expect(failedWith(rig)).toBeUndefined();
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[38/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > a failing release 
+never masks the original failure
+AssertionError: promise resolved "undefined" instead of rejecting
+
+- Expected:
+Error {
+  "message": "rejected promise",
+}
+
++ Received:
+undefined
+
+ Γ¥» tests/unit/worker/index-document.test.ts:1704:27
+    1702|     };
+    1703|     rig.embed.mockRejectedValueOnce(new ProviderError('transient', 'emΓÇª
+    1704|     await expect(run(rig)).rejects.toBeInstanceOf(RetryJobError);
+       |                           ^
+    1705|   });
+    1706|
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[39/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: transient failures retry > an RB003 on settle 
+is tolerated and activation still happens
+AssertionError: expected [ 'get_index_job_context', ΓÇª(2) ] to include 'activate_version_for_job'
+ Γ¥» tests/unit/worker/index-document.test.ts:1713:25
+    1711|     };
+    1712|     await run(rig);
+ Test Files  6 failed | 89 passed (95)
+    1713|     expect(rig.names()).toContain('activate_version_for_job');
+       |                         ^
+    1714|   });
+    1715| });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[40/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: lease loss and aborts touch nothing > RB013 
+on write_document_chunks stops without releasing, failing or activating
+AssertionError: expected [ 'get_index_job_context', ΓÇª(2) ] to not include 'fail_document_version'
+ Γ¥» tests/unit/worker/index-document.test.ts:1751:31
+    1749|       'activate_version_for_job',
+    1750|     ]) {
+    1751|       expect(rig.names()).not.toContain(name);
+       |                               ^
+    1752|     }
+    1753|     // The usage of the paid-for batch was recorded before the write tΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[41/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: lease loss and aborts touch nothing > an 
+aborted signal during the provider call stops without releasing or failing
+AssertionError: expected [ 'get_index_job_context', ΓÇª(2) ] to not include 'fail_document_version'
+ Γ¥» tests/unit/worker/index-document.test.ts:1784:31
+    1782|       'write_document_chunks',
+    1783|     ]) {
+    1784|       expect(rig.names()).not.toContain(name);
+       |                               ^
+    1785|     }
+    1786|   });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[42/45]ΓÄ»
+
+ FAIL  |unit| tests/unit/worker/index-document.test.ts > index_document: logging > logs the resume offset as a number 
+(it is not redacted)
+AssertionError: expected undefined to be defined
+ Γ¥» tests/unit/worker/index-document.test.ts:1836:21
+    1834|         (l) => l['msg'] === 'index_embedding_started' || l['event'] ==ΓÇª
+    1835|       );
+    1836|     expect(started).toBeDefined();
+       |                     ^
+    1837|     expect(started?.['resume_offset']).toBe(0);
+    1838|     expect(rig.logs.join('\n')).not.toContain('resumed_from_chunk');
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[43/45]ΓÄ»
+
+      Tests  45 failed | 3456 passed (3501)
+   Start at  18:18:43
+   Duration  205.19s (import 45%, tests 38%, transform 17%)
+
+    Isolate  95 workers spawned ┬╖ ~6.14s startup each (spawn + environment, per file)
+             at least ~46.90s faster with isolate: false ΓÇö reuses workers across files instead of one per file
+

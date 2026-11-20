@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ragbot widget — no-key UI preview</title>
+    <!-- Preview only: dummy https endpoints in valid format. The config fetch
+         fails, the widget falls back to bundled branding, and the full shell
+         renders. Sending a message ends in `unavailable` — expected. -->
+    <script
+      src="/dist/v1.0.0/widget.js"
+      data-bot-slug="website-support"
+      data-api-url="https://api.example.invalid"
+      data-supabase-url="https://example.invalid"
+      data-supabase-publishable-key="preview-only-dummy-key-0000"
+      defer
+    ></script>
+  </head>
+  <body>
+    <h1>No-key UI preview</h1>
+    <p>
+      Look for the round launcher bubble, bottom-right. Click it: header, greeting, composer,
+      footer. No real backend is contacted.
+    </p>
+  </body>
+</html>

@@ -1,6 +1,32 @@
 # Handover — ragbot_widget
 
-## Current checkpoint - 2026-11-19
+## Current checkpoint - 2026-11-20
+
+The root checkout is `main` @ `8a38455`; the task-start tree had pre-existing
+owner edits and untracked work that must be preserved. Two temporary worktrees
+remain. P0–P6 are accepted; P7–P10 were accepted by the owner on 2026-11-19.
+T25-d races and T26 single-command gates remain open. The owner-approved
+018–027 hosted migration apply completed on 2026-11-20; local and hosted
+histories are recorded at 027. P11 is not started. Follow
+[LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md) for exact next
+actions and [OPENCODE-HANDOFF.md](docs/reports/OPENCODE-HANDOFF.md) for the
+preserved execution history.
+
+The companion
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel) now has
+a pushed documentation baseline. This repository has a corresponding
+**proposed-only** backend scope in [ADR 0019](docs/decisions/0019-managed-admin-platform.md)
+and its PRD/architecture/technical/database/plan docs. No backend code or
+migration was changed for that proposal. Provider control plane, dedicated
+widget-key lifecycle, subscription enforcement, and approved-answer publishing
+remain open decisions. This docs-only request does not authorize P11, P12,
+hosted writes, deployment, or a push of this repository.
+
+No P11/P12 work is running. Preserve all existing owner edits and both
+temporary worktrees. Historical acceptance and test notes below are retained;
+use this checkpoint and the referenced current reports for live state.
+
+## Historical checkpoint - 2026-11-19
 
 **PUSHED to `origin/main` @ `9c35306`** on explicit owner instruction.
 **P7, P7.5, P8, P9, P10 ACCEPTED by owner 2026-11-19**; carries T25-d/T26-a
@@ -23,7 +49,12 @@ and history below do not override this current checkpoint.
 ## 1. What this project is
 An embeddable, client-branded, retrieval-augmented (RAG) chatbot that a client installs on their website with **one `<script>` tag**. It answers only from approved PDF/MD/TXT knowledge, cites sources, streams responses, and logs conversations for client admins.
 
-This repo also owns the **shared backend** — Render API, Render worker, and the Supabase schema — used by both this widget and the separate `ragbot_adminpanel` repo. The admin panel is a second frontend, **not** a second backend.
+This repo also owns the **shared tenant backend** — Render API, Render worker,
+and Supabase schema — consumed by the separate
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel). The
+client admin is a frontend, **not** a second tenant backend. A provider-wide
+control plane is a separate proposed trust domain, not part of this current
+per-client topology.
 
 ## 2. Implementation history (dated records)
 
@@ -255,3 +286,5 @@ remain in status.md3; do not guess them or treat local repair approval as releas
 | 2026-11-19 | OpenCode (T13-T15) | Owner (T16; acceptances; STOP BEFORE P11) | Owner continuation, one go. T13 registry wired (vendor-key reuse, startup fail-closed, 13 handler tests; build + dist check 0). T14 real-DB round trip (labelled fakes warm L2; separate built API serves key-pinned first-turn hit, zero live chat calls; 026 fixed the C5 anchor — key spaces differ by design); census to 26. T15 reviews (correctness: no blockers; security: 1 blocking tenant theme) fixed in-cycle by 027 tenant binding (C5/C7 chunk ownership + get_chunks_by_ids bot filter + live call sites) with re-review clearing the blocker; 323/324 +1 each, new 325 (6), census to 27; full 37/3671 PASS; typecheck/lint/format clean. Checkpoints PRE-P11-T13/T14/T15.md. No commit/push/hosted/provider. Next T16. C8 COMPLETE. |
 | 2026-11-19 | OpenCode (T16) | Owner (T17; acceptances; STOP BEFORE P11) | Owner continuation. Profiled first-HTTP setup (unit harness ~0.9s sync incl. Fastify-first-construction; built-API boot 4.5s; spawn/node-probe costs). Confirmed defect, reproduced today: every integration beforeAll paid 2 CLI status spawns (~5.6-7.8s each; worker-runtime hook timed out at 10s). Fix, test-first: single memoized status read shared by stack+key accessors (preserved loopback refusal, no timeout/assertion change); helper units 8/8; hook-timeout combo 23/23; warming trio 34/34. Product stages all healthy; E1 14.5s attributed to contention on the same cold-start path. Checkpoint PRE-P11-T16.md. No commit/push/hosted/provider. Next T17. |
 | 2026-11-19 | OpenCode (T17) | Owner (T18; acceptances; STOP BEFORE P11) | Owner continuation. Profiled delink on hostile shapes (CPU profiles pinned 64-char bare-host rescan ~68%, orphan budget-burn, buildWork closure+pushes ~48%). Fixed test-first, exact-behavior: findBareHosts skip to nextDot-64 (provably no match in skipped windows), destinationEnd memoized next-paren precheck (skips provably-failing scans, no budget change on success path), buildWork ASCII bulk-copy fast path (+ skip-overshoot regression pin). Timing suites 198/198 across 5 runs incl. 2x full parallel api scope (45/45, 1524); worst shapes 12-68ms isolated (was 25-240ms). Typecheck/lint/format 0; temp profilers deleted. Checkpoint PRE-P11-T17.md. No commit/push/hosted/provider. Next T18. |
+| 2026-11-20 | OpenCode (T29 docs-only admin integration) | Owner (review ADR 0019 and future-scope decisions; STOP BEFORE P11) | Recorded the new separate `ragbot-admin-panel` proposal in this repo's PRD, architecture, technical specs, database gap register, plan, status, and ADR 0019. Documented existing `knowledge_gaps` reporting separately from the proposed approved-answer/indexing flow; dedicated public widget key, subscriptions, and provider control plane remain unimplemented/open. No code, migrations, tests, hosted writes, or deployment. Working tree was already dirty; no commit/push to `ragbot-widget`. Checkpoint `docs/reports/checkpoints/PRE-P11-T29-admin-panel-contract.md`. |
+| 2026-11-20 | OpenCode (commit task) | Owner (push decision; STOP BEFORE P11) | Owner-ordered commit of the docs/evidence overlay to `main` (local only, no push). Gates: build/lint/format/typecheck 0; pgTAP 37/3671; db lint + local advisors clean; smoke 33/0/2; dist-check 0; unit/integration keep known host-bound carries (isolation probe green); guards/scan WSL-blocked, race carried OPEN. App code byte-identical to `8a38455`; worktree-only exclusions stay dirty. Checkpoint `docs/reports/checkpoints/PRE-P11-commit-2026-11-20.md`. |

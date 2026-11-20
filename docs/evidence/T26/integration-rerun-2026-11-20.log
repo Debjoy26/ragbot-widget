@@ -1,0 +1,154 @@
+﻿
+> ragbot-widget@0.1.0 test:integration
+> vitest run --project integration
+
+
+ RUN  v5.1.0 D:/Projects1/Text_AI/ragbot-widget
+
+ Γ¥» |integration| tests/integration/admin-real-session.test.ts (244 tests | 2 failed) 82359ms
+   Γ¥» seed-test-users.mjs refuses unsafe input (8)
+     ├ù stops with exit 2 when the password variable is missing or empty (no default password) 5732ms
+     ├ù stops when the password is shorter than 12 characters, or the URL or key is missing 9881ms
+ Γ¥» |integration| tests/integration/first-admin.test.ts (21 tests | 21 skipped) 16253ms
+ Γ¥» |integration| tests/integration/worker-runtime.test.ts (7 tests | 7 skipped) 14830ms
+ Γ¥» |integration| tests/integration/analysis-budget.test.ts (8 tests | 1 failed) 17081ms
+   ├ù uses a fresh generation after shutdown handback even when the attempt is refunded 272ms
+ Γ¥» |integration| tests/integration/api-wiring.test.ts (10 tests | 10 skipped) 11755ms
+ Γ¥» |integration| tests/integration/db-boundary.test.ts (24 tests | 24 skipped) 13582ms
+node.exe : 
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ» Failed Suites 4 ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»
+
+ FAIL  |integration| tests/integration/api-wiring.test.ts [ tests/integration/api-wiring.test.ts ]
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ Γ¥» tests/integration/api-wiring.test.ts:92:1
+     90| }
+     91|
+     92| beforeAll(async () => {
+       | ^
+     93|   ({ apiUrl, anonKey } = getLocalStack());
+     94|   key = getLocalPrivilegedKey();
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[1/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/api-wiring.test.ts [ tests/integration/api-wiring.test.ts ]
+Error: service call -> 400
+ Γ¥» svc tests/integration/api-wiring.test.ts:45:32
+     43|     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+     44|   });
+     45|   if (res.status >= 300) throw new Error(`service call -> ${String(resΓÇª
+       |                                ^
+     46|   const text = await res.text();
+     47|   return text.length === 0 ? null : (JSON.parse(text) as unknown);
+ Γ¥» tests/integration/api-wiring.test.ts:119:3
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[2/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/db-boundary.test.ts [ tests/integration/db-boundary.test.ts ]
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ Γ¥» tests/integration/db-boundary.test.ts:42:1
+     40| let stack: LocalStack;
+     41|
+     42| beforeAll(() => {
+       | ^
+     43|   stack = getLocalStack();
+     44| });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[3/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/first-admin.test.ts [ tests/integration/first-admin.test.ts ]
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ Γ¥» tests/integration/first-admin.test.ts:50:1
+     48| }
+     49|
+     50| beforeAll(() => {
+       | ^
+     51|   stack = getLocalStack();
+     52|   key = getLocalPrivilegedKey();
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[4/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/worker-runtime.test.ts [ tests/integration/worker-runtime.test.ts ]
+Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally with "hookTimeout".
+ Γ¥» tests/integration/worker-runtime.test.ts:151:1
+    149|   job.payload['run'] === RUN;
+    150|
+    151| beforeAll(() => {
+       | ^
+    152|   const stack = getLocalStack();
+    153|   apiUrl = stack.apiUrl;
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[5/8]ΓÄ»
+
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ» Failed Tests 3 ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»
+
+ FAIL  |integration| tests/integration/admin-real-session.test.ts > seed-test-users.mjs refuses unsafe input > stops 
+with exit 2 when the password variable is missing or empty (no default password)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/integration/admin-real-session.test.ts:2279:3
+    2277|   };
+    2278|
+    2279|   it('stops with exit 2 when the password variable is missing or emptyΓÇª
+       |   ^
+    2280|     for (const v of [undefined, '']) {
+    2281|       const r = run({ ...local, SEED_TEST_PASSWORD: v });
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[6/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/admin-real-session.test.ts > seed-test-users.mjs refuses unsafe input > stops 
+when the password is shorter than 12 characters, or the URL or key is missing
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ Γ¥» tests/integration/admin-real-session.test.ts:2287:3
+    2285|   });
+    2286|
+    2287|   it('stops when the password is shorter than 12 characters, or the URΓÇª
+       |   ^
+    2288|     expect(run({ ...local, SEED_TEST_PASSWORD: 'short' }).status).toBeΓÇª
+    2289|     expect(run({ ...local, SUPABASE_URL: undefined }).out).toContain('ΓÇª
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[7/8]ΓÄ»
+
+ FAIL  |integration| tests/integration/analysis-budget.test.ts > uses a fresh generation after shutdown handback even 
+when the attempt is refunded
+AssertionError: expected { ΓÇª(20) } to match object { ΓÇª(3) }
+(19 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+-   "analysis_generation": 2,
++   "analysis_generation": 1,
+    "attempts": 1,
+-   "id": "95d6c058-216e-4692-91d8-56c58eeabc21",
++   "id": "74eff556-fc8f-4ad5-9c3d-992a2da01115",
+  }
+
+ Γ¥» tests/integration/analysis-budget.test.ts:251:22
+    249|     },
+    250|   );
+    251|   expect(claimed[0]).toMatchObject({ id, attempts: 1, analysis_generatΓÇª
+       |                      ^
+    252|   const second = await reserve(id, 0.1, 2);
+    253|   expect(second).not.toBe(first);
+
+ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»ΓÄ»[8/8]ΓÄ»
+
+
+ Test Files  6 failed | 17 passed (23)
+      Tests  3 failed | 783 passed | 66 skipped (852)
+   Start at  18:29:48
+   Duration  983.77s (tests 98%, import 1%)
+

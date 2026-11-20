@@ -1,0 +1,81 @@
+
+ RUN  v5.1.0 D:/Projects1/Text_AI/ragbot-widget
+
+ ❯ |unit| tests/unit/widget/session-cancellation.test.ts (3 tests | 3 failed) 200ms
+   ❯ session creation cancellation (3)
+     × an already aborted attempt starts no challenge or POST 65ms
+     × abort during challenge acquisition prevents the POST 67ms
+     × passes the signal to fetch and never stores a late cancelled response 57ms
+node : 
+At line:2 char:1
++ node node_modules/vitest/vitest.mjs run --project unit tests/unit/wid ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| tests/unit/widget/session-cancellation.test.ts > session creation cancellation > an already aborted 
+attempt starts no challenge or POST
+AssertionError: expected [Function] to throw error including 'SESSION_CANCELLED' but got 'SESSION_FAILED'
+
+Expected: "SESSION_CANCELLED"
+Received: "SESSION_FAILED"
+
+ ❯ tests/unit/widget/session-cancellation.test.ts:19:55
+     17|     const input = args(stop.signal);
+     18|     const fetchFn = vi.fn(async () => ({ ok: true, status: 200, json: …
+     19|     await expect(createSession({ ...input, fetchFn })).rejects.toThrow…
+       |                                                       ^
+     20|     expect(input.getChallengeToken).not.toHaveBeenCalled();
+     21|     expect(fetchFn).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  |unit| tests/unit/widget/session-cancellation.test.ts > session creation cancellation > abort during challenge 
+acquisition prevents the POST
+AssertionError: expected [Function] to throw error including 'SESSION_CANCELLED' but got 'SESSION_FAILED'
+
+Expected: "SESSION_CANCELLED"
+Received: "SESSION_FAILED"
+
+ ❯ tests/unit/widget/session-cancellation.test.ts:32:55
+     30|       return crypto.randomUUID();
+     31|     });
+     32|     await expect(createSession({ ...input, fetchFn })).rejects.toThrow…
+       |                                                       ^
+     33|     expect(fetchFn).not.toHaveBeenCalled();
+     34|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  |unit| tests/unit/widget/session-cancellation.test.ts > session creation cancellation > passes the signal to 
+fetch and never stores a late cancelled response
+AssertionError: promise resolved "{ …(2) }" instead of rejecting
+
+- Expected
++ Received
+
+- Error {
+-   "message": "rejected promise",
++ {
++   "expiresAt": "2026-11-17T16:56:08.629Z",
++   "token": "[synthetic session value redacted]",
+  }
+
+ ❯ tests/unit/widget/session-cancellation.test.ts:47:55
+     45|       } };
+     46|     });
+     47|     await expect(createSession({ ...input, fetchFn })).rejects.toThrow…
+       |                                                       ^
+     48|     expect(passedSignal).toBe(stop.signal);
+     49|     expect(input.storage.setItem).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed (3)
+   Start at  22:25:03
+   Duration  5.21s (transform 53%, tests 30%, import 12%, worker 5%)
+

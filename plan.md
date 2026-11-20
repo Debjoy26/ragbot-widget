@@ -1,6 +1,6 @@
 # Implementation Plan — ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): P7–P10 accepted; P11 not started. Local/hosted migration histories are recorded at 027. T25-d/T26 single-command gates remain open. The provider-admin/SaaS additions in §1b and ADR 0019 are proposals, not an approved phase. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
 > Source of truth: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`.
 > This plan turns that planning baseline (v1.0) into an ordered, testable build. Requirement IDs (W-01…W-16) refer to `PRD.md §5`.
@@ -43,7 +43,7 @@ P6 and P8 can run in parallel with P7 once P5 is merged and the chat event contr
 
 ### 1a. Admin panel integration
 
-The admin panel (`../ragbot-admin_pannel`, phases `AP0`–`AP7`) talks only to Supabase and never calls the Render API (ADR 0017). It raised these requests in its `plan.md §3`, where each gap is described in full. This table is the schedule for them. Scheduling an item doesn't approve it: migrations, shared-contract changes and any remote change still need owner approval when they are built.
+The client admin panel talks only to Supabase and never calls the Render API for administrative operations (ADR 0017). The new companion specification is [`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel). Earlier AP0–AP7 backend requests are retained below as historical integration requirements; the new provider/SaaS extension is separately proposed in §1b. Scheduling or documenting an item does not approve implementation: migrations, shared-contract changes and remote changes require their own owner approval.
 
 | Lands in | Items | What this repo delivers |
 |---|---|---|
@@ -66,6 +66,43 @@ B-13 to B-15 unblock the admin panel's first real `aal2` test, so they come firs
 - **First deployment:** P12 and admin AP7 are one joint rollout (see P12).
 
 Each change to `shared/src` reaches the admin panel through its `npm run contracts:sync`, so tell that repo when one lands.
+
+### 1b. Managed SaaS administration extension (proposed; not scheduled)
+
+The owner has specified a broader product direction for the separate
+`ragbot-admin-panel`: client administrators use the existing tenant admin
+capabilities, while provider administrators have an additional global client
+registry and explicitly authorized lifecycle controls. The panel's current
+proposal is in its
+[PRD](https://github.com/Debjoy26/ragbot-admin-panel/blob/main/PRD.md) and this
+repository's [ADR 0019](docs/decisions/0019-managed-admin-platform.md).
+
+This extension is outside the accepted P0–P12 baseline and does not authorize
+P11, P12, hosted writes, or deployment. Before any implementation, owner
+approval and a task plan are required for:
+
+- Provider identity/MFA/roles, control API, registry ownership, and audited
+  tenant-operation boundary. Provider accounts must not become tenant admins
+  by default; browser code must never hold service-role credentials.
+- Public widget-key issuance, lookup/bootstrap, rotation, revocation, optional
+  host restrictions, and its distinction from authentication. The current
+  `UI_SCHEMA.md §2` embed contract remains unchanged until a replacement is
+  approved.
+- Subscription states, terms, quotas, suspension/restoration, authoritative
+  runtime checks, and fail-closed behavior. `bot_profiles.enabled` alone is
+  not subscription management.
+- Admin-authored answers from knowledge gaps: choose Markdown document versus
+  FAQ entity, define authorization/audit and indexing contracts, and expose an
+  answer only after successful atomic activation. No automatic learning from
+  visitor or model text.
+- Hosting: the current Render API/worker deployment remains the baseline;
+  separately decide whether/how to move Dockerized server processes to AWS
+  (EC2 versus ECS/Fargate, isolation, secrets, monitoring, and widget static
+  hosting). The widget remains a static bundle, not a Docker service.
+
+Any tenant-schema work stays in `supabase/migrations`; provider registry
+storage must not be added to the tenant schema without an explicit design
+decision.
 
 ---
 

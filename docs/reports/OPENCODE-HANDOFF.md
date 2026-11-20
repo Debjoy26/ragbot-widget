@@ -1,5 +1,26 @@
 # OpenCode handoff - current pre-P11 repairs
 
+## 2026-11-20 documentation-only update (supersedes stale current-state lines below)
+
+The root checkout was `main` @ `8a38455` at T29 start, with pre-existing dirty
+owner work and two preserved temporary worktrees. Owner-approved hosted
+migrations 018–027 completed on 2026-11-20; local and hosted histories are
+recorded at 027. T25-d and T26 single-command gates remain open. P11 remains
+not started.
+
+T29 adds a proposed backend integration scope for
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel):
+client admin remains direct-to-Supabase under ADR 0017; provider admin requires
+a separate control plane; dedicated widget-key, subscription, and
+admin-authored-answer publishing contracts remain unimplemented/open. AWS
+versus the current Render deployment is also undecided. Details
+are in `docs/decisions/0019-managed-admin-platform.md` and
+`docs/reports/checkpoints/PRE-P11-T29-admin-panel-contract.md`.
+
+No code, migration, tests, hosted action, deployment, commit, or push to this
+repository was performed for T29. Preserve all pre-existing work. This update
+is documentation-only and does not authorize P11/P12.
+
 Updated2026-11-19: owner authorized continuation; T16 COMPLETE.
 Work continues one small task at a time from completedT16 (T03 COMPLETE
 with carried limits). This document and LATEST-CHECKPOINT.md give
@@ -104,14 +125,14 @@ A14 URL parity and A15 canonical widget config. See repair tracker for counts.
 These results do not replace final full-system gates. P0-P6 accepted; P7-P10
 implementation history is on main, acceptance remains open; P11/P12 not started.
 
-## Exact NEXT task - STOPPED, awaiting owner
+## Exact NEXT task - STOPPED, next-work packet recorded
 
-T28 is COMPLETE. The pre-P11 local program (T18b-T28) is done; STOP BEFORE
-P11. Do not start P11, merges, pushes, hosted writes, releases, installs,
-or real provider calls. On owner resumption: read AGENTS.md, rules.md,
-LATEST-CHECKPOINT.md, this handoff and PRE-P11-TASKS.md; inspect git status,
-git log -5, git worktree list; preserve the overlay. First re-runs on a
-healthy host: T25-d races (51/0) and T26 single-command full gates.
+Pushed to `origin/main` @ `8a38455` (via `9c35306`); P7-P10 accepted with
+host-bound carries T25-d/T26-a. Do NOT start work without explicit owner
+go-ahead. The full next-work packet (healthy-host re-runs, hosted 018-027
+decision, remaining carries, P11 start conditions, first resume commands) is
+in [LATEST-CHECKPOINT.md](LATEST-CHECKPOINT.md) — follow it, not the
+paragraphs below (historical).
 
 1. Read AGENTS.md, rules.md, LATEST-CHECKPOINT.md, this handoff and PRE-P11-TASKS.md.
    Inspect git status, git log -5, git worktree list. Preserve the overlay.

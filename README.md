@@ -1,8 +1,8 @@
 # ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): P7–P10 accepted; P11 not started. Local and hosted migration histories are recorded at 027; T25-d/T26 single-command gates remain open. Managed-admin additions are proposed only. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
-Client-branded website RAG widget, the Render API and worker behind it, and the Supabase schema it shares with the admin panel. The admin panel talks only to Supabase (ADR 0017). Implementations through P10 exist; P0-P6 are accepted and P7-P10 acceptance remains open. The current uncommitted local repair overlay includes migrations018-020 and unfinished C8 warming; see the handoff before running or changing it.
+Client-branded website RAG widget, the Render API and worker behind it, and the per-client Supabase schema consumed by the separate [`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel). Client administration talks directly to Supabase under ADR 0017. This repository owns the widget, tenant backend, worker, and the single tenant migration history. The provider-wide administration/control plane described in the companion proposal is not implemented here.
 
 ## Project structure
 ```text
@@ -82,6 +82,7 @@ The tree is cumulative: it shows the finished layout, and files appear in the ph
 - `plan.md`: phased implementation plan.
 - `status.md`: progress tracker.
 - `handover.md`: context and invariants for whoever picks up the work.
+- `docs/decisions/0019-managed-admin-platform.md`: proposed boundary and backend gaps for the companion admin panel; not an implementation approval.
 
 ## Local setup contract
 Install the Node version in `.nvmrc` and run `nvm use`. Exact dependency versions are pinned in `package-lock.json`.

@@ -1,6 +1,54 @@
 # Status — ragbot_widget
 
-## Current checkpoint - 2026-11-19
+## Current checkpoint - 2026-11-20
+
+Local Git truth at task start: `main` @ `8a38455`; the working tree already
+contained owner changes and untracked evidence/transcripts. Preserve them.
+The root worktree and two temporary worktrees are listed in the latest
+checkpoint. P0–P6 are accepted; P7–P10 were accepted by the owner on
+2026-11-19. T25-d real races and T26 single-command unit/integration gates
+remain open. The owner-approved hosted apply of migrations 018–027 completed
+2026-11-20; local and hosted migration histories are recorded at 027. P11 is
+not started. No P11/P12 progression is authorized here.
+
+This task adds a documentation-only proposal for the separate
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel).
+Provider control plane, widget-key lifecycle, subscription enforcement, and
+admin-authored knowledge-gap answers are **not implemented or approved for
+implementation**. See [ADR 0019](docs/decisions/0019-managed-admin-platform.md)
+and the T29 checkpoint. No code, migration, hosted change, or deployment was
+performed.
+
+- 2026-11-20 commit task (owner-ordered): verified the tree (build/lint/
+format/typecheck 0; pgTAP 37/3671 PASS; db lint + local advisors clean;
+smoke 33/0/2; dist-check 0; unit/integration carry their known host-bound
+failures with a green isolation probe; guards/scan/race env-blocked or
+carried OPEN) and committed the docs/evidence overlay + no-key
+`widget/public/preview.html` to `main` locally (no push). App code is
+byte-identical to `8a38455`. Worktree-only exclusions stay dirty.
+See `docs/reports/checkpoints/PRE-P11-commit-2026-11-20.md`.
+
+Read [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) and
+[latest checkpoint](docs/reports/LATEST-CHECKPOINT.md) for exact evidence and
+next actions. Historical phase notes below are retained and may be superseded
+by this checkpoint.
+
+### Proposed admin-panel integration scope
+
+- The client panel consumes existing tenant Auth/MFA, RLS, RPC, and Storage
+  contracts; it does not own migrations or call the visitor API for admin
+  writes.
+- `knowledge_gaps` is reporting only; an admin-authored answer-to-indexed-
+  knowledge workflow needs a new, reviewed backend contract.
+- A dedicated public widget key and subscription lifecycle are not current
+  backend capabilities. The existing public embed and `bot_profiles.enabled`
+  behavior remain unchanged pending design/approval.
+- Provider staff require a separate control-plane identity/API/registry and
+  audit boundary; no provider cross-tenant access is granted by this proposal.
+- AWS Docker hosting was discussed, but Render remains the documented
+  deployment baseline until an explicit AWS architecture decision is accepted.
+
+## Historical checkpoint - 2026-11-19
 
 **PUSHED to `origin/main` @ `9c35306`** (fast-forward from `aa6425a`) on
 explicit owner instruction. **P7, P7.5, P8, P9, P10 ACCEPTED by owner
@@ -48,6 +96,16 @@ values in historical phase packets are not today's state.
 | 2026-11-16 | Hosted 014–017 applied (owner-approved): dry-run preview then `db push --remote` over hotspot IPv6 + CLI access token, 4 migrations, history 001–017 nothing pending, advisors 19 WARN = documented set, anon probes 7/7 (only `public_bot_config` open). Evidence `docs/evidence/hosted-014-017/SUMMARY.md`. Token revocation left to owner. Recorded by Opus. |
 | P11 | Evaluation, security, load | ⬜ | |
 | P12 | First client deployment | ⬜ | |
+
+### Proposed managed-admin extension (outside P0–P12 acceptance)
+
+The companion `ragbot-admin-panel` documentation baseline is pushed at
+`Debjoy26/ragbot-admin-panel` commit `4894d2b`. This backend repo now records
+the proposed integration boundary in ADR 0019 and updates PRD, architecture,
+technical, database, and plan documentation. No code, migration, or deployment
+was performed. Provider control plane, widget-key lifecycle, subscriptions,
+and approved-answer indexing remain open design work; this does not authorize
+P11 or P12.
 
 ## 2. Done so far
 - [x] Planning docs written: `PRD.md`, `ARCHITECTURE.md`, `DATABASE_SCHEMA.md`, `TECH_SPECS.md`, `UI_SCHEMA.md`, `README.md`

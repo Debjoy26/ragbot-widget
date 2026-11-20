@@ -1,5 +1,22 @@
 # Pre-P11 repair tracker - current state
 
+## 2026-11-20 update
+
+Current root Git truth was `main` @ `8a38455` with a pre-existing dirty
+worktree and two preserved temporary worktrees. Hosted migrations 018–027
+were applied with owner approval; local and hosted histories are recorded at
+027. T25-d races and T26 single-command full gates remain open. P11 remains
+stopped.
+
+T29 records a documentation-only SaaS/admin proposal in ADR 0019 and the
+backend specs. The proposed provider control plane, widget-key lifecycle,
+subscription enforcement, and admin-authored knowledge-gap publishing are
+not repairs, not implemented, and not authorized for implementation by this
+tracker update. Existing repair records below are retained. Later the same
+day, the owner-ordered commit task verified the tree and committed the
+docs/evidence overlay to `main` locally (no push); see
+`checkpoints/PRE-P11-commit-2026-11-20.md`. T25-d/T26 carries unchanged.
+
 Stopped at completed pre-P11 local program T18b-T28 (2026-11-19), STOP BEFORE
 P11. T18 enumeration complete (4 worker-drain cases POSIX-guarded in T20);
 T19 db-lint flag fixed; T20 shutdown-harness fixed; T21 secrets classified;
@@ -27,13 +44,11 @@ No running task checks/workers. Preserve all dirty work and both temp worktrees.
 | A14 | P2/P3.5 |1179related units+264actual SQL PASS recorded; two static reviews clear |
 | A15 | P8 |73widget units,36browser+9nullable-bootstrap PASS recorded; raw496989/gzip107761 bytes; performance unmeasured |
 
-## Current next tasks
+## Historical repair-program next tasks
 
-T11-T15 C8 work COMPLETE (incl. T14 C5-anchor fix and T15 tenant binding);
-T16-T23 remaining
-failures; T24-T27 integrated suite; T28 docs/handoff and STOP BEFORE P11. Follow
-PRE-P11-TASKS.md dependencies; never advance through a failed prerequisite.
-Storage/Make/health gates carried to T16/T19. No provider/hosted/release actions.
+The repaired sequence and current remaining gates are in PRE-P11-TASKS.md and
+LATEST-CHECKPOINT.md. Do not treat this historical paragraph as the live next
+task. STOP BEFORE P11.
 
 ## Historical records
 

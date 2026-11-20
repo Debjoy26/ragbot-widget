@@ -1,13 +1,13 @@
 # Product Requirements Document — ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): P7–P10 accepted; P11 not started. Local and hosted migration histories are recorded at 027. T25-d and T26 single-command gates remain open. Managed-admin additions in §10 are a proposed scope extension, not part of the accepted v1 baseline. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
 ## 1. Status and purpose
 - Version: 1.0 planning baseline.
 - This document specifies intended behaviour; it is not evidence of an implemented system.
 - Product: an embeddable, client-branded, retrieval-augmented website chatbot.
 - Deployment model: one Supabase project, Render API, and Render worker per client; a Vercel deployment serves the widget.
-- The companion `ragbot_adminpanel` manages the same backend. It is not a second backend, and it talks only to Supabase (ADR 0017).
+- The companion [`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel) manages the same tenant backend. Its client mode talks directly to Supabase under ADR 0017; its proposed provider mode requires a separate provider control service and is not implemented by this repository.
 - FDE means the deployment engineering team responsible for client configuration, migrations, branding, and operations.
 
 ## 2. Goals
@@ -116,3 +116,60 @@ These are settled in `docs/decisions/` unless marked open. ADR 0014 revises the 
 - Hosting resources and per-client commercial limits (open: no ADR yet).
 - Feedback buttons (deferred, ADR 0011) and the answer cache (off by default, ADR 0012).
 - Per-client contact channels, business hours, localised escalation messages, and the repeated-miss threshold for contact routing.
+
+## 10. Managed administration extension (proposed)
+
+This section records the product direction discussed for the separate
+`ragbot-admin-panel`; it does not change the accepted v1 requirements W-01 to
+W-16 or authorize a new implementation phase. The proposal is tracked in
+[ADR 0019](docs/decisions/0019-managed-admin-platform.md); the panel's detailed
+specification is in its
+[PRD](https://github.com/Debjoy26/ragbot-admin-panel/blob/main/PRD.md).
+
+### 10.1 Client administration
+
+The client panel is intended to provide login/MFA, bot settings, document
+upload/re-index/delete, permitted conversation and usage review, membership
+management, widget installation, subscription-status display, and knowledge
+gap review. It remains a separate frontend; tenant migrations, RPCs, RLS, and
+Storage policies remain owned here.
+
+### 10.2 Provider administration
+
+Provider staff are a distinct trust domain from tenant owners/admins/analysts.
+The target product lets provider staff view the client registry and perform
+explicitly authorized, audited lifecycle actions, including subscription
+management and suspension/restoration. Provider access must not be implemented
+by putting service-role credentials in a browser or silently granting provider
+users ordinary tenant memberships. A provider control API/registry and its
+authorization model are not yet designed or implemented.
+
+### 10.3 Public widget identifier and subscriptions
+
+A future per-client widget key is a **public identifier**, not a client login,
+visitor token, or secret. The current embed contract remains authoritative
+until an approved replacement is designed. Key creation, rotation, hostname
+restrictions, revocation, and bootstrap resolution require backend contracts.
+
+The current bot enable/disable flag is not a subscription system. Subscription
+states, dates, quotas, grace behavior, enforcement location, and fail-closed
+runtime behavior must be designed before the panel presents subscription
+controls as authoritative.
+
+### 10.4 Reviewed answers for knowledge gaps
+
+The existing knowledge-gap reporting supports identifying repeated unanswered
+questions. The proposed extension lets an authorized client admin review a gap,
+author/approve content, and submit it through the ordinary tenant knowledge
+validation and indexing lifecycle. The answer becomes retrievable only after
+successful atomic activation. Visitor questions or model responses must never
+automatically become trusted knowledge. Whether approved answers are stored as
+Markdown documents or dedicated FAQ records remains open.
+
+### 10.5 Hosting
+
+The current Render API/worker deployment remains the baseline. AWS Docker
+hosting was discussed, but replacing Render requires a separate approved
+architecture decision covering EC2 versus ECS/Fargate, per-client versus
+shared isolation, secrets/monitoring, and static widget delivery. The widget
+remains a static JavaScript bundle, not a Docker container.

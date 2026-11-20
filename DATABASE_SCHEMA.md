@@ -1,10 +1,10 @@
 # Database Schema — ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): migration history is recorded at 027 locally and on hosted dev. T25-d/T26 single-command gates remain open; P11 not started. §10 is a proposed SaaS/admin gap register, not a migration or approved schema. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
 
 ## Shared ownership
-This is one schema in the client-specific Supabase project, not a database per frontend. `ragbot_widget/supabase/migrations` is the authoritative migration history. The admin repository consumes this contract and must not maintain competing migrations.
+This is one schema in the client-specific Supabase project, not a database per frontend. `ragbot_widget/supabase/migrations` is the authoritative tenant migration history. The client admin repository consumes this contract and must not maintain competing tenant migrations.
 
 ## Conventions
 - IDs: UUID primary keys; timestamps: `timestamptz`, UTC.
@@ -357,3 +357,26 @@ Service role only: `reserve_index_budget`, `settle_index_budget` and `release_in
 
 ## Retention
 Scheduled jobs expire sessions, rate buckets and cache rows, reconcile stale reservations, and delete/anonymise records under the agreed retention policy. Original-file, chunk, message, source-excerpt, export, and analysis deletion must be coordinated. Backup retention and provider-side retention are separate policies.
+
+## Proposed SaaS administration gaps (not current schema)
+
+The separate [`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel)
+requires additional backend contracts for the product direction below. This
+section is a gap register only: it creates no table, grant, RPC, migration, or
+permission. Tenant changes still require an owner-approved task, a new forward
+migration, local tests, and security review. A provider registry must not be
+added to the tenant schema by default.
+
+| Capability | Current tenant support | Required design before implementation |
+|---|---|---|
+| Client admin UI | Auth, membership, RLS, `aal2`, admin RPCs, Storage | Verify concrete RPC contracts against migrations; no direct protected-table writes |
+| Frequent unanswered questions | `knowledge_gaps` aggregate/reporting RPC | Define authorized admin-authored answer submission, dedupe, audit, indexing status, retention, and citation behavior |
+| Approved answers as bot knowledge | No publish-answer workflow defined | Decide whether to use the existing Markdown document/index pipeline or a dedicated FAQ entity; activation must be atomic and explicit |
+| Public widget identifier | Public bot slug/config contract exists | Dedicated key issuance, storage/lookup, rotation, revocation, optional host restrictions, and fail-closed bootstrap are not defined; key is never auth |
+| Subscription status | `bot_profiles.enabled` and runtime disabled checks exist | Define plan/status/period/quota source, provider mutation authorization, audit, and enforcement for session/chat/index paths |
+| Provider control plane | No provider role or cross-client registry in this tenant schema | Design a separate provider-owned registry/API and security boundary; do not grant cross-tenant access through tenant membership |
+
+Any approved-answer write must preserve the existing ingestion invariant:
+unpublished content is not retrieval-eligible, and failed indexing does not
+replace prior active knowledge. Subscription and suspension checks must be
+server-authoritative; a frontend-only disabled state is not enforcement.

@@ -1,6 +1,6 @@
 # Technical Specifications — ragbot_widget
 
-> Current execution checkpoint (2026-11-18): completedT03c-3a; nextT03c-3b full LOCAL pgTAP is NOT STARTED. LOCAL020/hosted-last017; P7-P10 acceptance OPEN. Work stopped for handoff after owner-reported10% usage remaining. See [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) for done/pending work and exact resume steps. STOP BEFORE P11; this document does not authorize hosted/release/provider actions.
+> Current checkpoint (2026-11-20): P7–P10 accepted; P11 not started. Local/hosted migration histories are recorded at 027; T25-d/T26 single-command gates remain open. The administration additions in §11 are proposals only. See [status.md](status.md) and [LATEST-CHECKPOINT.md](docs/reports/LATEST-CHECKPOINT.md).
 
 ## 1. Stack
 - Widget: TypeScript compiled/bundled to a self-contained JavaScript entry; CSS inside encapsulated UI.
@@ -26,7 +26,7 @@ Session creation is not proof of human identity. Rate limits/bot challenges and 
 For challenge-enabled bots, the embed's public `data-turnstile-site-key` supplies the per-client Turnstile configuration (ADR 0010). The widget acquires a fresh token with shared `TURNSTILE_SESSION_ACTION` before a new session POST, never for live session reuse. Callback failure/expiry, load errors, timeout and cancellation do not send a tokenless fallback. A refused session remains a generic verification/access refusal, without distinguishing disabled/missing bots from rejected challenges. Server Siteverify and per-client policy remain authoritative. UI_SCHEMA §2 defines lifecycle, retry and deployment requirements.
 
 ## 3. Administrative operations
-The admin panel never calls the Render API (ADR 0017). It reads under RLS and writes through database functions and Storage policies, listed in `DATABASE_SCHEMA.md` "Admin RPCs". Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules.
+The **client admin panel** never calls the Render API for administrative operations (ADR 0017). It reads under RLS and writes through database functions and Storage policies, listed in `DATABASE_SCHEMA.md` "Admin RPCs". Every function requires active membership, the required role and `aal2`, and follows the ADR 0017 rules. This does not define the proposed provider control API; see §11.
 | Operation | Purpose |
 |---|---|
 | Register document | Validate metadata, create document and version, return the generated storage path |
@@ -119,3 +119,49 @@ Use backoff, lease heartbeats, cancellation, bounded concurrency, and durable pr
 
 ## 10. Operational constraints
 Choose compute from measurements, not a promise of unlimited scalability. Monitor Supabase/Postgres connection and quota limits, Render CPU/RAM/egress, queue age, and provider quotas. Use connection pooling if direct SQL is introduced; the initial design can use Supabase RPC/HTTP clients. No paid SLA is implied by these documents.
+
+## 11. Managed administration integration (proposed)
+
+This section adds a backend integration backlog for the separate
+[`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel). It is
+not evidence that its UI or the listed backend capabilities exist. Exact
+schemas, RPC signatures, roles, and tests must be approved before
+implementation.
+
+### Existing backend capabilities to consume
+
+- Client authentication uses Supabase Auth; private reads and admin writes
+  require active membership and `aal2`.
+- Client administration uses documented RLS reads, browser-callable admin
+  RPCs, and Storage policies; no direct protected-table mutations.
+- `knowledge_gaps` currently provides a bounded aggregate report for permitted
+  tenant roles. It does not publish answers into the knowledge base.
+- `admin_set_bot_enabled` can enable/disable a bot; this is not a complete
+  subscription lifecycle.
+- Existing widget embeds use the contract in `UI_SCHEMA.md §2`; a dedicated
+  rotating widget key is not part of that contract.
+
+### Required design before implementation
+
+1. **Approved knowledge answer:** define how an authorized admin creates
+   tenant-owned knowledge from a reviewed unanswered question. Use the same
+   file validation, disclosure, quota/budget, indexing, citation, and atomic
+   activation guarantees as other knowledge. No visitor/model text is
+   auto-published. Choose Markdown document versus FAQ entity and specify
+   audit, deduplication, deletion, retention, and status reporting.
+2. **Public widget key:** decide key generation/storage, lookup/bootstrap,
+   optional host restrictions, rotation, revocation, cache invalidation, and
+   unknown/disabled-key behavior. The key must identify a bot only and never
+   authorize admin or visitor actions.
+3. **Subscription and suspension:** define authoritative status, dates, quotas,
+   grace policy, provider actions, audit, and the runtime checks that reject
+   session creation/chat/indexing when access is suspended or expired. Missing
+   or unavailable state must fail closed according to an approved policy.
+4. **Provider control plane:** define provider identity/MFA/roles, registry
+   ownership, tenant targeting, credential storage, allowed operations, audit,
+   and any delegation/proxy model. No browser receives service-role keys and
+   provider accounts are not implicitly tenant admins.
+
+Until these contracts and tests are approved, the admin panel may present
+existing capabilities only and must label unsupported controls as unavailable;
+it must not simulate success with frontend-only state.
