@@ -28,6 +28,14 @@ carried OPEN) and committed the docs/evidence overlay + no-key
 byte-identical to `8a38455`. Worktree-only exclusions stay dirty.
 See `docs/reports/checkpoints/PRE-P11-commit-2026-11-20.md`.
 
+- 2026-11-20 scan-fix (owner-ordered CI-green follow-up, unpushed): the push
+  exposed 6 secret-scan hits (4 pre-existing fakes + the new `preview.html`
+  dummy). All replaced with scanner-clean obviously-fake equivalents, runtime
+  values identical, no assertion weakened. Affected files re-verified
+  (typecheck 0, prettier clean, 21 + 13 unit, 1 + 1 integration green).
+  Full `secret-scan.sh` still needs one confirmation run (WSL down in the
+  agent shell). See `docs/reports/checkpoints/PRE-P11-scanfix-2026-11-20.md`.
+
 Read [OpenCode handoff](docs/reports/OPENCODE-HANDOFF.md) and
 [latest checkpoint](docs/reports/LATEST-CHECKPOINT.md) for exact evidence and
 next actions. Historical phase notes below are retained and may be superseded

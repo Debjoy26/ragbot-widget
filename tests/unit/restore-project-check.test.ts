@@ -16,11 +16,14 @@ import {
 
 const ref = 'abcdefghijklmnopqrst';
 const options = () => ({ ref, confirm: ref, url: `https://${ref}.supabase.co` });
-const env = () => ({
-  RESTORE_DATABASE_URL: `postgresql://postgres:${randomBytes(20).toString('hex')}@db.${ref}.supabase.co/postgres`,
-  RESTORE_SERVICE_KEY: randomBytes(24).toString('hex'),
-  RESTORE_PUBLISHABLE_KEY: randomBytes(24).toString('hex'),
-});
+const env = () => {
+  const pwd = randomBytes(20).toString('hex');
+  return {
+    RESTORE_DATABASE_URL: `postgresql://postgres:${pwd}@db.${ref}.supabase.co/postgres`,
+    RESTORE_SERVICE_KEY: randomBytes(24).toString('hex'),
+    RESTORE_PUBLISHABLE_KEY: randomBytes(24).toString('hex'),
+  };
+};
 const manifest = () => ({
   version: 1,
   projectRef: 'tsrqponmlkjihgfedcba',
@@ -90,7 +93,8 @@ describe('restored target safety', () => {
   });
   it('accepts matching pooler identity', () => {
     const input = env();
-    input.RESTORE_DATABASE_URL = `postgresql://postgres.${ref}:${randomBytes(20).toString('hex')}@aws-0.pooler.supabase.com/postgres`;
+    const poolerPassword = randomBytes(20).toString('hex');
+    input.RESTORE_DATABASE_URL = `postgresql://postgres.${ref}:${poolerPassword}@aws-0.pooler.supabase.com/postgres`;
     expect(validateTarget(options(), input).database.user).toBe(`postgres.${ref}`);
   });
   it('uses read-only psql environment, fixed SELECTs and no credential arguments', () => {

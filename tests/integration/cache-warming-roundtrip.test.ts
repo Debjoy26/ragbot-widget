@@ -122,7 +122,7 @@ it('warms shared L2 on the real DB and serves the first turn from cache', async 
           role: 'embedding',
           provider: 'openai_compatible',
           model: h.embeddingModel,
-          apiKey: 'fake-t14-key',
+          apiKey: 'fake-t14-ke',
           baseUrl: null,
           dimensions: 1536,
         },

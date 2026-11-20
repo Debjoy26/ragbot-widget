@@ -11,8 +11,9 @@ it('executes all collector SQL and relation counts on local Postgres', async () 
   const project = /^project_id\s*=\s*"([A-Za-z0-9_-]+)"/m.exec(config)?.[1];
   if (!project) throw new Error('local test project missing');
   const ref = 'abcdefghijklmnopqrst';
+  const pw = randomBytes(12).toString('hex');
   const env = {
-    RESTORE_DATABASE_URL: `postgresql://postgres:${randomBytes(12).toString('hex')}@db.${ref}.supabase.co/postgres`,
+    RESTORE_DATABASE_URL: `postgresql://postgres:${pw}@db.${ref}.supabase.co/postgres`,
     RESTORE_SERVICE_KEY: randomBytes(16).toString('hex'),
     RESTORE_PUBLISHABLE_KEY: randomBytes(16).toString('hex'),
   };

@@ -15,7 +15,7 @@ function status(url = 'http://127.0.0.1:54321') {
   return {
     API_URL: url,
     ANON_KEY: `fake_${crypto.randomUUID()}`,
-    SERVICE_ROLE_KEY: `fake_${crypto.randomUUID()}`,
+    SERVICE_ROLE_KEY: 'fake-' + crypto.randomUUID(),
   };
 }
 it('runs the pinned JS CLI directly with fixed arguments and no command shell', () => {
