@@ -23,7 +23,7 @@ remain open decisions. This docs-only request does not authorize P11, P12,
 hosted writes, deployment, or a push of this repository.
 
 No P11/P12 work is running. Preserve all existing owner edits and both
-temporary worktrees. Historical acceptance and test notes below are retained;
+temporary worktrees. 2026-11-21 OpenCode chunked re-run: static 0; unit host-bound (all green alone); pgTAP 37/3671 PASS; integration splits green except api-wiring hook-budget; races 2x51 with 4 known artifacts, 0 violations. T25-d/T26 OPEN. Evidence: docs/reports/checkpoints/PRE-P11-T25d-T26-rerun-2026-11-21.md. Historical acceptance and test notes below are retained;
 use this checkpoint and the referenced current reports for live state.
 
 ## Historical checkpoint - 2026-11-19

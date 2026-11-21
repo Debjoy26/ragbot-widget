@@ -11,6 +11,9 @@ remain open. The owner-approved hosted apply of migrations 018–027 completed
 2026-11-20; local and hosted migration histories are recorded at 027. P11 is
 not started. No P11/P12 progression is authorized here.
 
+### 2026-11-21 chunked re-run (OpenCode, owner-continued, no commit/push/hosted)
+Static gates `build/lint/format/typecheck` 0; full unit `56F/3445P` host-bound with all 13 files green alone/batched; `pgTAP 37/3671 PASS` clean reset; integration splits green except `api-wiring` host hook-budget (probe `201/200`); races `2x51`, 4 known exec artifacts, 0 violations. `T25-d/T26-a/b` stay OPEN. Full evidence: `docs/reports/checkpoints/PRE-P11-T25d-T26-rerun-2026-11-21.md`.
+
 This task adds a documentation-only proposal for the separate
 [`ragbot-admin-panel`](https://github.com/Debjoy26/ragbot-admin-panel).
 Provider control plane, widget-key lifecycle, subscription enforcement, and
