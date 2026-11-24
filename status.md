@@ -11,6 +11,17 @@ remain open. The owner-approved hosted apply of migrations 018–027 completed
 2026-11-20; local and hosted migration histories are recorded at 027. P11 is
 not started. No P11/P12 progression is authorized here.
 
+### 2026-11-24 P11 progress + Render deployment decision (pushed @ `42e404b`)
+P11 started (owner-approved): live Gemini eval 23/24 (ADR 0020: default now
+`gemini-3.5-flash-lite`, paid-tier $0.30/$2.50), multi-ID citation fix + F2
+accept-and-log, T4 security executed, restore drill + indicative load probe
+done. Carries: T25-d/T26, fallback eval, load p95, throwaway restore, P12 infra.
+**Deployment decision: Render baseline confirmed for the first client; AWS
+(ADR 0021) stays Proposed for later.** Vercel commercial-licence note recorded;
+static frontends can move to S3/CloudFront under ADR 0021 when adopted.
+Next: P12 needs owner inputs (Supabase ref, client descriptor, Render/Vercel
+wiring, knowledge docs) — see `docs/reports/checkpoints/P11-P12-ready-2026-11-24.md`.
+
 ### 2026-11-21 chunked re-run (OpenCode, owner-continued, no commit/push/hosted)
 Static gates `build/lint/format/typecheck` 0; full unit `56F/3445P` host-bound with all 13 files green alone/batched; `pgTAP 37/3671 PASS` clean reset; integration splits green except `api-wiring` host hook-budget (probe `201/200`); races `2x51`, 4 known exec artifacts, 0 violations. `T25-d/T26-a/b` stay OPEN. Full evidence: `docs/reports/checkpoints/PRE-P11-T25d-T26-rerun-2026-11-21.md`.
 
