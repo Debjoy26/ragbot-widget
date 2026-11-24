@@ -1,5 +1,15 @@
 # Status — ragbot_widget
 
+### 2026-11-24 Automation build (owner-approved, uncommitted, no hosted write)
+ADR 0022 Accepted: full auto-provision (separate provider registry, fail-closed
+subscription, `wgk_` public key). Tenant `028_widget_keys` + `029_subscription_gate`
++ `326_auto_provision` (18 asserts) + shared/widget/provider scaffold built locally.
+Verified now: `typecheck 0`, `build` (widget v1.0.0), `lint 0`, `format:check 0`,
+targeted unit `105/105` (drift/db/errors/auto-provision/widget config). Full
+`db-test`/unit/integration + hosted `028-029` apply still pending owner per-action
+approval. Portals live in `ragbot-admin-panel`. See `docs/decisions/0022-auto-provision.md`
+and `docs/reports/checkpoints/P12-AUTO-0022-2026-11-24.md`.
+
 ## Current checkpoint - 2026-11-20
 
 Local Git truth at task start: `main` @ `8a38455`; the working tree already

@@ -27,6 +27,10 @@ const CONTRACT: ReadonlyArray<readonly [string, string]> = [
   ['RB037', 'not_found'],
   ['RB038', 'upload_missing'],
   ['RB039', 'bot_disabled'],
+  ['RB040', 'widget_key_invalid'],
+  ['RB041', 'widget_key_revoked'],
+  ['RB042', 'subscription_suspended'],
+  ['RB043', 'widget_key_host_mismatch'],
 ];
 
 describe('dbErrorFor (G-14)', () => {
@@ -62,7 +66,7 @@ describe('dbErrorFor (G-14)', () => {
 
   it('keeps the API envelope codes separate from database states', () => {
     for (const code of ERROR_CODES) expect(Object.keys(DB_ERROR_STATES)).not.toContain(code);
-    expect(ERROR_CODES).toHaveLength(12);
+    expect(ERROR_CODES).toHaveLength(15);
   });
 
   it('knows every errcode raised in the migrations on disk, not only RBxxx', () => {

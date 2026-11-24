@@ -29,6 +29,7 @@ export function parseEmbedOptions(attrs: AttrMap): EmbedOptions {
   const supabaseUrl = attrs['data-supabase-url'] ?? '';
   const supabasePublishableKey = attrs['data-supabase-publishable-key'] ?? '';
   const turnstileSiteKey = attrs['data-turnstile-site-key'];
+  const widgetKey = attrs['data-widget-key'];
   if (!botSlugSchema.safeParse(botSlug).success) throw new Error('invalid data-bot-slug');
   if (!isHttpsUrl(apiUrl)) throw new Error('invalid data-api-url');
   if (!isHttpsUrl(supabaseUrl)) throw new Error('invalid data-supabase-url');
@@ -38,7 +39,17 @@ export function parseEmbedOptions(attrs: AttrMap): EmbedOptions {
   if (turnstileSiteKey !== undefined && !/^[A-Za-z0-9_-]{1,256}$/.test(turnstileSiteKey)) {
     throw new Error('invalid data-turnstile-site-key');
   }
-  return { botSlug, apiUrl, supabaseUrl, supabasePublishableKey, turnstileSiteKey };
+  if (widgetKey !== undefined && !/^wgk_[0-9a-f]{32}$/.test(widgetKey)) {
+    throw new Error('invalid data-widget-key');
+  }
+  return {
+    botSlug,
+    apiUrl,
+    supabaseUrl,
+    supabasePublishableKey,
+    turnstileSiteKey,
+    ...(widgetKey === undefined ? {} : { widgetKey }),
+  };
 }
 
 /** Validate one raw row from `public_bot_config`. Returns a typed config or throws. */

@@ -137,9 +137,12 @@ describe('error codes', () => {
     'PROVIDER_UNAVAILABLE',
     'STREAM_INTERRUPTED',
     'INTERNAL_ERROR',
+    'SUBSCRIPTION_SUSPENDED',
+    'WIDGET_KEY_REVOKED',
+    'WIDGET_KEY_HOST_MISMATCH',
   ];
 
-  it('contains exactly the 12 stable codes', () => {
+  it('contains exactly the 15 stable codes', () => {
     expect([...ERROR_CODES]).toEqual(expected);
   });
 

@@ -10,6 +10,8 @@ export interface EmbedOptions {
   readonly supabaseUrl: string;
   readonly supabasePublishableKey: string;
   readonly turnstileSiteKey?: string | undefined;
+  /** ADR 0022 public widget key (`wgk_` + 32 hex). Public ID only, never auth. */
+  readonly widgetKey?: string | undefined;
 }
 
 export type WidgetState =

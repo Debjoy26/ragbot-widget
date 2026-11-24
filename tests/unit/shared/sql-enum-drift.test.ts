@@ -20,6 +20,7 @@ import {
   MODERATION_VERDICTS,
   REQUEST_RUN_STATES,
   SENTIMENTS,
+  SUBSCRIPTION_STATUSES,
   USAGE_OPERATIONS,
   WIDGET_POSITIONS,
 } from '@ragbot/shared';
@@ -127,6 +128,7 @@ const EXPECTED: Record<string, readonly string[]> = {
   budget_reservations_state_check: BUDGET_RESERVATION_STATES,
   usage_events_operation_check: USAGE_OPERATIONS,
   moderation_cache_verdict_check: MODERATION_VERDICTS,
+  subscription_state_status: SUBSCRIPTION_STATUSES,
 };
 
 function loadAppliedChecks(): Map<string, EnumCheck> {

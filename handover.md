@@ -1,5 +1,15 @@
 # Handover — ragbot_widget
 
+### 2026-11-24 Automation build (owner-approved, local only)
+ADR 0022 Accepted and built uncommitted: separate provider registry, fail-closed
+subscription gate, `wgk_` public key, async idempotent provisioner design.
+Tenant migrations `028-029`, shared/widget contracts, provider scaffold
+(`provider/README + 001_registry + provision.mjs`) done. Static gates green
+(typecheck/build/lint/format), targeted unit 105/105. No commit/push/hosted
+write. Next needs owner per-action approval: local `db-local` + `db-test`,
+hosted `028-029` apply, org tokens, portals in admin-panel. Evidence:
+`docs/reports/checkpoints/P12-AUTO-0022-2026-11-24.md`.
+
 ## Current checkpoint - 2026-11-20
 
 The root checkout is `main` @ `8a38455`; the task-start tree had pre-existing

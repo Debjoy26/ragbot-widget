@@ -31,9 +31,11 @@ import {
   MODERATION_VERDICTS,
   REQUEST_RUN_STATES,
   SENTIMENTS,
+  SUBSCRIPTION_STATUSES,
   USAGE_OPERATIONS,
   VISITOR_VISIBLE_ROLES,
   WEEKDAYS,
+  WIDGET_KEY_PATTERN,
   WIDGET_POSITIONS,
   type AdminAddDocumentVersionRow,
   type AdminBotListRow,
@@ -196,6 +198,10 @@ export const uuidSchema = z.uuid();
 /** Lower-case slug used in the embed snippet and chat requests. */
 export const BOT_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 export const botSlugSchema = z.string().regex(BOT_SLUG_PATTERN);
+
+/** ADR 0022 public widget key (`wgk_` + 32 hex). Public ID only, never auth. */
+export const widgetKeySchema = z.string().regex(WIDGET_KEY_PATTERN);
+export const subscriptionStatusSchema = z.enum(SUBSCRIPTION_STATUSES);
 
 export const LANGUAGE_TAG_PATTERN = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
 export const languageTagSchema = z.string().regex(LANGUAGE_TAG_PATTERN);

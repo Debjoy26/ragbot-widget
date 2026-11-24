@@ -19,6 +19,9 @@ export const ERROR_CODES = [
   'PROVIDER_UNAVAILABLE',
   'STREAM_INTERRUPTED',
   'INTERNAL_ERROR',
+  'SUBSCRIPTION_SUSPENDED',
+  'WIDGET_KEY_REVOKED',
+  'WIDGET_KEY_HOST_MISMATCH',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -36,6 +39,9 @@ export const ERROR_HTTP_STATUS: Readonly<Record<ErrorCode, number>> = {
   PROVIDER_UNAVAILABLE: 503,
   STREAM_INTERRUPTED: 502,
   INTERNAL_ERROR: 500,
+  SUBSCRIPTION_SUSPENDED: 403,
+  WIDGET_KEY_REVOKED: 403,
+  WIDGET_KEY_HOST_MISMATCH: 403,
 };
 
 /** The only shape an error may take on the wire (HTTP body or SSE `error` payload). */
@@ -71,6 +77,10 @@ export const DB_ERROR_STATES = Object.freeze({
   RB037: 'not_found',
   RB038: 'upload_missing',
   RB039: 'bot_disabled',
+  RB040: 'widget_key_invalid',
+  RB041: 'widget_key_revoked',
+  RB042: 'subscription_suspended',
+  RB043: 'widget_key_host_mismatch',
   '22023': 'invalid_argument',
   '23514': 'check_violation',
   '42501': 'permission_denied',
@@ -106,6 +116,10 @@ export const DB_ERROR_API_CODE: Readonly<Record<DbErrorName, ErrorCode>> = Objec
   not_found: 'INVALID_REQUEST',
   upload_missing: 'INVALID_REQUEST',
   bot_disabled: 'FORBIDDEN',
+  widget_key_invalid: 'FORBIDDEN',
+  widget_key_revoked: 'WIDGET_KEY_REVOKED',
+  widget_key_host_mismatch: 'WIDGET_KEY_HOST_MISMATCH',
+  subscription_suspended: 'SUBSCRIPTION_SUSPENDED',
   invalid_argument: 'INVALID_REQUEST',
   check_violation: 'INVALID_REQUEST',
   permission_denied: 'FORBIDDEN',

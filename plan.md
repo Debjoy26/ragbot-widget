@@ -67,7 +67,15 @@ B-13 to B-15 unblock the admin panel's first real `aal2` test, so they come firs
 
 Each change to `shared/src` reaches the admin panel through its `npm run contracts:sync`, so tell that repo when one lands.
 
-### 1b. Managed SaaS administration extension (proposed; not scheduled)
+### 1b. Managed SaaS administration extension (ADR 0022 Accepted for build 2026-11-24)
+
+Owner approved full auto-provision: separate provider registry, fail-closed
+subscription, `wgk_` public key, async idempotent provisioner. Tenant work in
+`028-029`; provider registry in `provider/supabase/migrations` (separate history).
+Portals live in `ragbot-admin-panel`. Hosted writes, org tokens, and deploys
+still need per-action approval. See ADR 0022. Historical proposal below retained.
+
+### 1b-historical. Managed SaaS administration extension (proposed; not scheduled)
 
 The owner has specified a broader product direction for the separate
 `ragbot-admin-panel`: client administrators use the existing tenant admin

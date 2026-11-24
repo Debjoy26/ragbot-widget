@@ -498,3 +498,16 @@ export interface AdminMemberRow {
   /** The member's sign-in email (B-7); NULL if the auth user is gone. */
   readonly label: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Self-serve auto-provision (ADR 0022, Accepted). Public widget key is a
+// public identifier only, never authentication. Subscription is
+// server-authoritative, fail-closed.
+// ---------------------------------------------------------------------------
+
+export const SUBSCRIPTION_STATUSES = ['active', 'past_due', 'suspended', 'cancelled'] as const;
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+
+/** Public widget key format: `wgk_` + 32 lowercase hex. Raw key never stored. */
+export const WIDGET_KEY_PATTERN = /^wgk_[0-9a-f]{32}$/;
+export const WIDGET_KEY_PREFIX = 'wgk_';
