@@ -273,7 +273,7 @@ function baseEnv(url, key, port, live) {
     EMBEDDING_MODEL: live ? 'gemini-embedding-001' : 'smoke-embedding-model',
     EMBEDDING_DIMENSIONS: '1536',
     MODERATION_PROVIDER: 'gemini',
-    MODERATION_MODEL: live ? 'gemini-2.5-flash-lite' : 'smoke-moderation-model',
+    MODERATION_MODEL: live ? 'gemini-3.5-flash-lite' : 'smoke-moderation-model',
     MODERATION_MODE: 'llm_classifier',
   };
 }

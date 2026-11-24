@@ -311,7 +311,9 @@ async function startApiProcess(name: string, env: Record<string, string>): Promi
     );
   } catch (e) {
     child.kill('SIGKILL');
-    throw e;
+    throw new Error(`API "${name}" failed to answer /health/live within 20s. Output:\n${out}`, {
+      cause: e,
+    });
   }
   return {
     name,

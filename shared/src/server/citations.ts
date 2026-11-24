@@ -98,8 +98,13 @@ export function sanitiseModelText(text: string): string {
 // Citation markers
 // ---------------------------------------------------------------------------
 
-/** A marker with at most one whitespace character before it, so removal leaves no gap before punctuation. */
-const MARKER = /\s?\[\[[A-Za-z0-9_-]{1,64}\]\]/g;
+/**
+ * A marker with at most one whitespace character before it, so removal leaves no gap before
+ * punctuation. Also matches the comma-separated multi-ID markers the live model emits
+ * (`[[c1, c2]]`, P11-D1); every member is stripped whatever its validity. Text like
+ * `[[not a marker]]` (no comma, non-ID words) is still left alone.
+ */
+const MARKER = /\s?\[\[[A-Za-z0-9_-]{1,64}(?:\s*,\s*[A-Za-z0-9_-]{1,64})*\]\]/g;
 
 /** An unfinished marker at the very end of the text: `[`, `[[`, `[[id` or `[[id]`. */
 const PARTIAL_MARKER_TAIL = /\s?\[(?:\[[A-Za-z0-9_-]{0,64}\]?)?$/;

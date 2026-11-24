@@ -155,7 +155,7 @@ export interface ChatDeps {
   /** The query embedding provider; its model must equal the bot's embedding model. */
   readonly embedding: Pick<EmbeddingProvider, 'provider' | 'model' | 'dimensions'>;
   /**
-   * Moderation identity for C6 cache keys, e.g. `gemini/gemini-2.5-flash-lite/llm_classifier`.
+   * Moderation identity for C6 cache keys, e.g. `gemini/gemini-3.5-flash-lite/llm_classifier`.
    * A provider/model/mode change must invalidate cached verdicts. P7-D3.
    */
   readonly moderationModelKey: string;
@@ -169,7 +169,7 @@ export interface ChatDeps {
   readonly queueAnalysis?: Pick<AnalysisQueue, 'enqueue'>;
   /**
    * Chat model identity for answer-cache keys, e.g.
-   * `gemini/gemini-2.5-flash-lite` (plus `|fallback...` when configured).
+   * `gemini/gemini-3.5-flash-lite` (plus `|fallback...` when configured).
    * Changing the model must invalidate cached answers. P7-D2.
    */
   readonly chatModelKey: string;
@@ -1045,9 +1045,16 @@ export function createChatService(deps: ChatDeps): ChatService {
         await deliver(await gate.push(safeText.flush(cutOff)), false);
         await deliver(await gate.finish(), false);
         if (out.text.trim() === '') return handoffTerminal(missReason, 'complete');
+        const cited = citedChunkIds(raw.text, new Set(evidence.keys()));
+        if (evidence.size > 0 && cited.length === 0) {
+          // P11-F2: the model cited only invented ids (or none in a usable shape), so every
+          // citation was dropped and the visitor sees an answer with no sources. Served as-is
+          // by product decision; logged for eval frequency tracking. No text, ids or keys here.
+          log.warn({ ...logBase, evidenceBlocks: evidence.size }, 'answer_citations_all_dropped');
+        }
         return {
           kind: 'answer',
-          cited: citedChunkIds(raw.text, new Set(evidence.keys())),
+          cited,
           // The provider hit its output-token limit, or the character cap cut the answer.
           truncated: capped || lastAttempt?.truncated === true,
         };

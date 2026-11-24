@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:evaluation": "vitest run --project evaluation",
     "test:e2e": "playwright test --pass-with-no-tests",
     "db:start": "supabase start",
     "db:migrate:dev": "supabase db reset",

@@ -31,6 +31,18 @@ export default defineConfig({
           fileParallelism: false,
         },
       },
+      {
+        resolve: { alias },
+        test: {
+          // P11 live-provider evaluation. Opt-in only: without EVAL_LIVE=1 every case
+          // skips and nothing is spent. Never run by default `npm test` gates.
+          name: 'evaluation',
+          include: ['tests/evaluation/**/*.test.ts'],
+          fileParallelism: false,
+          testTimeout: 180_000,
+          hookTimeout: 600_000,
+        },
+      },
     ],
   },
 });

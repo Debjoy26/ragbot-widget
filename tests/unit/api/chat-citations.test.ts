@@ -33,6 +33,15 @@ describe('citation markers', () => {
     expect(citedChunkIds(text, new Set([ID1]))).toEqual([ID1]);
     expect(citedChunkIds(text, new Set())).toEqual([]);
   });
+
+  // P11-D1: multi-id markers from the live model. Valid members are cited, invented
+  // members dropped, and the whole marker is stripped from visitor text.
+  it('handles comma-separated multi-id markers', () => {
+    const text = `a [[${ID1}, invented]] b [[invented, ${ID2}]] c`;
+    expect(citedChunkIds(text, new Set([ID1, ID2]))).toEqual([ID1, ID2]);
+    expect(stripCitationMarkers(text)).toBe('a b c');
+    expect(stripCitationMarkers(`x [[${ID1},${ID2}]] y`)).toBe('x y');
+  });
 });
 
 describe('SafeTextStream', () => {

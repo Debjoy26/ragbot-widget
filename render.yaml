@@ -13,6 +13,10 @@ services:
     startCommand: npm run start -w api
     healthCheckPath: /health/ready
     envVars:
+      # Pinned to the repo toolchain (ADR 0018, .nvmrc). Render also reads
+      # package.json engines; this makes the version explicit per service.
+      - key: NODE_VERSION
+        value: 26.13.1
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY
@@ -123,6 +127,9 @@ services:
     buildCommand: npm ci && npm run build
     startCommand: npm run start -w worker
     envVars:
+      # Pinned to the repo toolchain (ADR 0018, .nvmrc).
+      - key: NODE_VERSION
+        value: 26.13.1
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY

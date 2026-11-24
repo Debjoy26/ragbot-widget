@@ -214,4 +214,14 @@ describe('model reply helpers', () => {
     ]);
     expect(extractCitedChunkIds('no citations', allowed)).toEqual([]);
   });
+
+  // P11-D1: the live model emits multi-ID markers ([[c1, invented]]). Each ID-shaped
+  // token must be validated individually; the marker is not a single ID.
+  it('validates each id inside a comma-separated multi-id marker', () => {
+    const allowed = new Set(['c1', 'c2']);
+    expect(extractCitedChunkIds('A [[c1, invented]] B', allowed)).toEqual(['c1']);
+    expect(extractCitedChunkIds('A [[c1,c2]] B [[invented, c2]] C', allowed)).toEqual(['c1', 'c2']);
+    expect(extractCitedChunkIds('A [[invented, also-invented]] B', allowed)).toEqual([]);
+    expect(extractCitedChunkIds('keeps [[not a marker]] as text', allowed)).toEqual([]);
+  });
 });

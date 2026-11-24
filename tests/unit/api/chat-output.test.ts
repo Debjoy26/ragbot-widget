@@ -307,3 +307,31 @@ describe('output cap and provider truncation (P7-D1 fix 5 and fix 12, R1-2, R2-9
     expect(moderated.length).toBeLessThanOrEqual(700);
   });
 });
+
+describe('all-dropped citations are logged (P11-F2)', () => {
+  const INVENTED = '22222222-2222-4222-8222-222222222222';
+
+  it('logs when every cited id was invented, serving the stripped answer as complete', async () => {
+    const { h, events } = await run({
+      chat: [{ chunks: [`${ANSWER_HEADER}To claim, you need an order number [[${INVENTED}]].`] }],
+    });
+    expect(eventOf(events, 'done').data.status).toBe('complete');
+    expect(eventOf(events, 'sources').data.sources).toEqual([]);
+    expect(deltaText(events)).not.toContain(INVENTED);
+    expect(h.capture.text).toContain('answer_citations_all_dropped');
+  });
+
+  it('does not log when a real citation survives (including inside a multi-id marker)', async () => {
+    const { h, events } = await run({
+      chat: [
+        {
+          chunks: [
+            `${ANSWER_HEADER}To claim, you need an order number [[${INVENTED}, ${CHUNK_A}]].`,
+          ],
+        },
+      ],
+    });
+    expect(eventOf(events, 'sources').data.sources.map((s) => s.chunk_id)).toEqual([CHUNK_A]);
+    expect(h.capture.text).not.toContain('answer_citations_all_dropped');
+  });
+});

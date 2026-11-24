@@ -161,12 +161,22 @@ export function parseEvidenceHeader(reply: string): EvidenceHeader {
   return { insufficientEvidence: null, outcome: null, body: reply };
 }
 
-/** Returns only cited IDs that were actually supplied as evidence; invented IDs are dropped. */
+/**
+ * Returns only cited IDs that were actually supplied as evidence; invented IDs are dropped.
+ * The live model also emits comma-separated multi-ID markers (`[[c1, c2]]`); each ID-shaped
+ * token inside is validated individually (P11-D1). Order is first appearance.
+ */
 export function extractCitedChunkIds(text: string, allowed: ReadonlySet<string>): string[] {
   const found: string[] = [];
-  for (const match of text.matchAll(/\[\[([A-Za-z0-9_-]{1,64})\]\]/g)) {
-    const id = match[1];
-    if (id !== undefined && allowed.has(id) && !found.includes(id)) found.push(id);
+  const push = (id: string): void => {
+    if (allowed.has(id) && !found.includes(id)) found.push(id);
+  };
+  for (const match of text.matchAll(
+    /\[\[([A-Za-z0-9_-]{1,64}(?:\s*,\s*[A-Za-z0-9_-]{1,64})*)\]\]/g,
+  )) {
+    const inner = match[1];
+    if (inner === undefined) continue;
+    for (const id of inner.split(/\s*,\s*/)) push(id);
   }
   return found;
 }
