@@ -1,0 +1,8 @@
+ERROR:  40P01: deadlock detected
+DETAIL:  Process 2053 waits for ShareLock on transaction 1542; blocked by process 2046.
+Process 2046 waits for ShareLock on transaction 1540; blocked by process 2053.
+HINT:  See server log for query details.
+CONTEXT:  while locking tuple (0,19) in relation "documents"
+SQL statement "DELETE FROM ONLY "public"."documents" WHERE $1 OPERATOR(pg_catalog.=) "bot_id""
+LOCATION:  DeadLockReport, deadlock.c:1130
+race-db: fixture setup failed

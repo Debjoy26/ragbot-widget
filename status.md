@@ -175,7 +175,7 @@ All 14 decisions were approved by the owner on 2026-11-03 as recommended. Each d
 | # | Decision | Blocks | Owner | State |
 |---|---|---|---|---|
 | D1 | Embedding provider/model + vector dimension | P3, P6, P7 | Owner (approved 2026-11-03) | ✅ ADR 0002, provider/model revised by ADR 0014 (Gemini `gemini-embedding-001`, 1536 dims; retrieval check open, §3a c) |
-| D2 | Primary + fallback chat providers | P7 | Owner (approved 2026-11-03) | ✅ ADR 0003, revised by ADR 0014 (Gemini `gemini-2.5-flash-lite`; no independent fallback, §3a o) |
+| D2 | Primary + fallback chat providers | P7 | Owner (approved 2026-11-03) | ✅ ADR 0003, revised by ADR 0014 (Gemini `gemini-2.5-flash-lite`; no independent fallback, §3a o); chat default moved to `gemini-3.5-flash-lite` by ADR 0020 (P11, 2.5 retired for new keys) |
 | D3 | Moderation provider + streaming policy | P7 | Owner (approved 2026-11-03) | ✅ ADR 0004, revised by ADR 0014 (`llm_classifier` default, §3a p) |
 | D4 | OCR scope/provider | P6 | Owner (approved 2026-11-03) | ✅ ADR 0005 |
 | D5 | Retention, jurisdiction, provider DPA | P3 (005), P9 | Owner (approved 2026-11-03) | ✅ ADR 0006 (open: jurisdiction per client, DPAs, §3a b) |

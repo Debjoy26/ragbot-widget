@@ -96,9 +96,8 @@ approval and a task plan are required for:
   answer only after successful atomic activation. No automatic learning from
   visitor or model text.
 - Hosting: the current Render API/worker deployment remains the baseline;
-  separately decide whether/how to move Dockerized server processes to AWS
-  (EC2 versus ECS/Fargate, isolation, secrets, monitoring, and widget static
-  hosting). The widget remains a static bundle, not a Docker service.
+  the AWS alternative is recorded (Proposed) in ADR 0021 with adoption gates.
+  The widget remains a static bundle, not a Docker service.
 
 Any tenant-schema work stays in `supabase/migrations`; provider registry
 storage must not be added to the tenant schema without an explicit design

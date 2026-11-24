@@ -169,7 +169,7 @@ Markdown documents or dedicated FAQ records remains open.
 ### 10.5 Hosting
 
 The current Render API/worker deployment remains the baseline. AWS Docker
-hosting was discussed, but replacing Render requires a separate approved
-architecture decision covering EC2 versus ECS/Fargate, per-client versus
-shared isolation, secrets/monitoring, and static widget delivery. The widget
+hosting is recorded as a proposed alternative in ADR 0021 (Plan B: ECS/Fargate
++ S3/CloudFront, per-client isolation kept); adopting it requires accepting
+that ADR and passing its adoption gates. The widget
 remains a static JavaScript bundle, not a Docker container.
