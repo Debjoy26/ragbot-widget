@@ -20,6 +20,6 @@ select ok((select bool_and(not p.prosecdef and 'lock_timeout=2s' = any(p.proconf
   and p.proname in ('analysis_job_fence','get_analysis_job_context','reserve_analysis_budget','record_analysis_usage',
     'settle_analysis_budget','save_analysis_job_result','fail_analysis_job','settle_orphaned_analysis_reservations')),
   'analysis APIs are invoker functions with bounded locks and empty search paths');
-select is(public.schema_version(), 27, 'schema version 27');
+select is(public.schema_version(), 29, 'schema version 29');
 select * from finish();
 rollback;

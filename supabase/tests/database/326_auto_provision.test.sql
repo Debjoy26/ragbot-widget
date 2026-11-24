@@ -2,7 +2,7 @@
 -- Synthetic rows contained in transaction and rolled back.
 begin;
 set local lock_timeout = '2s';
-select plan(18);
+select plan(16);
 
 select has_table('public','widget_keys','widget keys table exists');
 select has_table('public','subscription_state','subscription cache table exists');
