@@ -10,7 +10,7 @@ export function requestService({ client, botSlug, botName, origin, plan }) {
   if (!client || client.status !== 'approved') throw new Error('client not approved');
   if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(botSlug)) throw new Error('invalid bot_slug');
   if (!botName || botName.length > 128) throw new Error('invalid bot_name');
-  let host = null;
+  let host;
   try {
     const u = new URL(origin);
     if (u.protocol !== 'https:') throw new Error('origin must be https');
