@@ -8,9 +8,12 @@
 
 ## Context
 
-Owner approved full auto-provision: client registers on service site →
-provider approves in dashboard → system provisions tenant → client panel
-shows `<script>` → client pastes → ragbot live. Choices locked:
+Owner-locked portal flow (2026-11-24):
+1. Client creates account on our portal (= central client dashboard/admin panel).
+2. Inside portal, client asks for service (bot name, website origin, plan).
+3. Provider approves from provider dashboard → script generated on client dashboard.
+
+Choices locked:
 
 - Depth: full auto-provision (not assisted-only)
 - Registry: separate provider project (not tenant schema)
@@ -20,9 +23,11 @@ shows `<script>` → client pastes → ragbot live. Choices locked:
 ## Decision
 
 1. **Provider control plane is separate.** New Supabase project
-   `provider_registry` + provider API (Render web service, same repo
-   `provider/` workspace) + provisioner worker. Tenant DBs never hold the
-   registry; provider browser never holds tenant service-role or org tokens.
+   `provider_registry` + provider API (Render web service, `provider/`) +
+   provisioner worker. Portal accounts (`clients` pending) live here; tenant
+   `admin_memberships` created only at provision via first-admin link. Tenant DBs
+   never hold the registry; provider browser never holds tenant service-role or
+   org tokens.
 2. **Widget key is public ID only.** Format `wgk_<32 hex>` (server-generated,
    `sha256` fingerprint stored). Tenant stores fingerprint + `revoked_at` +
    optional `allowed_hosts`. Never auth; visitor sessions still use HMAC

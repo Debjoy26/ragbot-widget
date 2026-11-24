@@ -1,4 +1,7 @@
 -- Provider registry (separate project, NOT tenant schema). ADR 0022.
+-- Portal flow: portal signup -> clients(pending); request service ->
+-- deployments(pending: bot_name/origin/plan); provider approve ->
+-- provisioning_jobs -> live; script shown on client dashboard.
 create table public.clients (
   id uuid primary key default gen_random_uuid(),
   name text not null check (char_length(name) between 1 and 128),
@@ -10,6 +13,9 @@ create table public.deployments (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references public.clients (id) on delete cascade,
   bot_slug text not null,
+  bot_name text null,
+  website_origin text null,
+  plan text null,
   supabase_ref text null,
   api_url text null,
   widget_url text null,
