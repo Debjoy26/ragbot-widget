@@ -17,7 +17,7 @@ export interface LocalStack {
  * `supabase/migrations` applied). Bump together with the pgTAP census tests
  * (220/250/260) whenever a migration moves `schema_version()`.
  */
-export const EXPECTED_SCHEMA_VERSION = 27;
+export const EXPECTED_SCHEMA_VERSION = 29;
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
