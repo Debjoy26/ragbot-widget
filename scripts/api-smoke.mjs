@@ -8,9 +8,9 @@
 // configuration exit 1 naming the variable without its value; /health/live and /health/ready;
 // the error envelope on an unknown route; CORS for an allowed and a refused origin; and that
 // POST /v1/sessions for the seeded dev bot (200, token shape and HMAC, session row exists), an
-// unknown slug (403) and a strict-body violation (400); and that
-// SIGTERM flips /health/ready to 503 while draining and exits 0. Nothing it prints contains the
-// key or any smoke secret. Any failed check makes the script exit non-zero.
+// unknown slug (403) and a strict-body violation (400); and that SIGTERM exits 0 with nothing
+// left listening (the 503-while-draining contract is pinned in-process; see section 4). Nothing
+// it prints contains the key or any smoke secret. Any failed check makes the script exit non-zero.
 //
 // Safety: the Supabase URL must be a loopback address, otherwise the script refuses to run.
 // `API_SMOKE_SUPABASE_URL` may override the URL (used to prove that refusal); it never carries a key.
@@ -290,23 +290,18 @@ async function refuses(name, env, mustName, mustNotContain) {
   }
 }
 
-/** Drain scenario on one kept-alive connection: see the comment where it is used. */
-function drainProbe(port, afterHold) {
+/** Refused-connection probe: resolves true when nothing accepts on the port. */
+function portRefused(port) {
   return new Promise((resolve) => {
-    let received = '';
-    const socket = connect({ port, host: '127.0.0.1' }, () => {
-      // The readiness request is held unfinished (headers not yet ended), which keeps the connection
-      // busy through server.close(). It is completed after SIGTERM, so the one response on this
-      // connection is always the readiness answer given while draining.
-      socket.write('GET /health/ready HTTP/1.1\r\nHost: smoke\r\n');
-      afterHold().then(() => {
-        socket.write('\r\n');
-      });
+    const probe = connect({ port, host: '127.0.0.1' }, () => {
+      probe.destroy();
+      resolve(false);
     });
-    socket.on('data', (d) => (received += d.toString('latin1')));
-    socket.on('error', () => undefined);
-    socket.on('close', () => resolve(received));
-    setTimeout(() => socket.destroy(), 8000).unref();
+    probe.on('error', () => resolve(true));
+    setTimeout(() => {
+      probe.destroy();
+      resolve(false);
+    }, 5000).unref();
   });
 }
 
@@ -442,16 +437,22 @@ async function main() {
     strict.text,
   );
 
-  // 4. SIGTERM: hold a connection open, signal, then ask for readiness on that same
-  // connection. POSIX-only: on Windows child.kill('SIGTERM') ends the child via
-  // TerminateProcess, which no handler can catch, so the API can never flip to
-  // 503-while-draining or exit 0 there (observed exit
-  // {"code":null,"signal":"SIGTERM"}). The checks below keep full strength
-  // where signals are real. See T20.
+  // 4. SIGTERM: the child must exit 0 and leave nothing listening. POSIX-only: on Windows
+  // child.kill('SIGTERM') ends the child via TerminateProcess, which no handler can catch, so the
+  // API can never exit 0 there (observed exit {"code":null,"signal":"SIGTERM"}). The exit path is
+  // verified on POSIX only (see T20).
+  //
+  // What this section used to do (hold half-sent headers across SIGTERM, then complete them and
+  // expect the draining 503 on that connection) cannot work: Node/Fastify close() resets a
+  // connection with no complete request yet, so the held socket always dies with zero bytes
+  // (ECONNRESET, proven with the repo's own Fastify) and the 503 is unobservable across a real
+  // shutdown. The 503-while-draining contract itself is pinned deterministically in-process by
+  // tests/unit/api/server-hardening.test.ts ('draining (B-1)' plus 'answers 503 at once after
+  // beginDrain(), without a database call'): no product change here.
   if (process.platform === 'win32') {
     skip(
-      'while draining, /health/ready is 503 {"status":"unavailable"}',
-      'SIGTERM is uncatchable on Windows (TerminateProcess); drain path verified on POSIX only',
+      'after exit, the port refuses new connections',
+      'SIGTERM is uncatchable on Windows (TerminateProcess); exit path verified on POSIX only',
     );
     skip(
       'SIGTERM exits 0',
@@ -460,19 +461,11 @@ async function main() {
     run.child.kill('SIGKILL');
     await run.done;
   } else {
-    const drained = drainProbe(port, async () => {
-      run.child.kill('SIGTERM');
-      await sleep(500);
-    });
-    const answers = await drained;
-    check(
-      'while draining, /health/ready is 503 {"status":"unavailable"}',
-      /HTTP\/1\.1 503/.test(answers) && answers.includes('{"status":"unavailable"}'),
-      answers.slice(0, 300),
-    );
+    run.child.kill('SIGTERM');
     const exit = await Promise.race([run.done, sleep(15_000).then(() => undefined)]);
     if (exit === undefined) run.child.kill('SIGKILL');
     check('SIGTERM exits 0', exit?.code === 0, `exit ${JSON.stringify(exit)}`);
+    check('after exit, the port refuses new connections', await portRefused(port));
   }
 
   // 5. Nothing leaked.

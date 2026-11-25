@@ -1,5 +1,19 @@
 # Status — ragbot_widget
 
+### 2026-11-25 CI repair (owner-ordered, pushed)
+Three owner-reported CI failures fixed on `main`, one per commit: `a63549c`
+(`ci.yml`: dropped the removed `--local` from `supabase db lint`, Windows job
+runs full `npm run build` so `worker-dist-check` finds `worker/dist`, Ubuntu
+timeout 20→45 min, Windows 20→30 min, `concurrency/cancel-in-progress`);
+`8eb1576` (integration pins left stale by ADR 0022: `EXPECTED_SCHEMA_VERSION`
+27→29 in `helpers/local-stack.ts`, `widget_keys` + `subscription_state` added
+to `db-boundary.test.ts` census 22→24); plus the `api-smoke.mjs` drain-harness
+rewrite below. Verified locally: lint/format/typecheck 0, secret-scan clean,
+census file-parse 25/25, drain-contract unit suites 134/134; full
+DB-backed gates (integration, smoke) can only run in CI / on a Docker host.
+Untracked scratch files (`convo.md`, `tempreport.md`, `codex-session-*.md`)
+preserved, never committed.
+
 ### 2026-11-24 Automation build (owner-approved, uncommitted, no hosted write)
 ADR 0022 Accepted: full auto-provision (separate provider registry, fail-closed
 subscription, `wgk_` public key). Tenant `028_widget_keys` + `029_subscription_gate`

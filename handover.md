@@ -1,5 +1,15 @@
 # Handover — ragbot_widget
 
+### 2026-11-25 CI repair (owner-ordered, pushed)
+Owner-reported CI red fixed in three commits on `main`: `a63549c` (workflow),
+`8eb1576` (integration pins), and the `api-smoke.mjs` drain-harness rewrite
+(held-headers 503 probe removed — Node/Fastify `close()` resets half-open
+connections, proven with the repo's Fastify, so the 503 was unobservable
+across a real shutdown; 503-while-draining stays pinned in-process by
+`server-hardening.test.ts`; smoke now asserts SIGTERM exit 0 + port refused).
+No product code changed in any of the three. Next: watch the CI run on the
+pushed tip; DB-backed suites were verified by reasoning/unit only on this box.
+
 ### 2026-11-24 Automation build (owner-approved, local only)
 ADR 0022 Accepted and built uncommitted: separate provider registry, fail-closed
 subscription gate, `wgk_` public key, async idempotent provisioner design.
