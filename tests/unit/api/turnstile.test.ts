@@ -164,11 +164,22 @@ describe('createTurnstileVerifier', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('fails closed without calling out when no secret is configured', async () => {
+    for (const secret of ['', undefined] as const) {
+      const f = fakeFetch(() => reply(GOOD));
+      const v = createTurnstileVerifier({
+        secret: secret as unknown as string,
+        timeoutMs: 1000,
+        allowedHostnames: HOSTS,
+        fetchImpl: f.impl,
+      });
+      expect(await v.verify(TOKEN, '1.1.1.1')).toBe(false);
+      expect(f.calls).toHaveLength(0);
+    }
+  });
+
   it('fails closed on missing configuration', () => {
     const ok = { allowedHostnames: HOSTS };
-    expect(() => createTurnstileVerifier({ ...ok, secret: '', timeoutMs: 1000 })).toThrow(
-      TypeError,
-    );
     expect(() => createTurnstileVerifier({ ...ok, secret: SECRET, timeoutMs: 0 })).toThrow(
       TypeError,
     );

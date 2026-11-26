@@ -20,7 +20,8 @@ export interface AppConfig {
   readonly visitorTokenSecret: string;
   /** Optional: a retired signing secret, accepted by verifyToken only, never used to sign. */
   readonly visitorTokenSecretPrevious: string | undefined;
-  readonly turnstileSecretKey: string;
+  /** Absent means Turnstile is not configured: challenge-required requests fail closed. */
+  readonly turnstileSecretKey: string | undefined;
   /** HMAC key for rate-limit bucket keys (lib/rate-key.ts). Non-enumerable like the other secrets. */
   readonly rateLimitKeySecret: string;
   readonly allowedOrigins: readonly string[];
@@ -175,7 +176,9 @@ const envSchema = z.object({
   SUPABASE_SECRET_KEY: secret(1),
   VISITOR_TOKEN_SECRET: secret(MIN_SECRET_BYTES),
   VISITOR_TOKEN_SECRET_PREVIOUS: optionalSecret(MIN_SECRET_BYTES),
-  TURNSTILE_SECRET_KEY: secret(1).refine((v) => !CLOUDFLARE_TEST_SECRETS.has(v)),
+  TURNSTILE_SECRET_KEY: optionalSecret(1).refine(
+    (v) => v === undefined || !CLOUDFLARE_TEST_SECRETS.has(v),
+  ),
   RATE_LIMIT_KEY_SECRET: secret(MIN_SECRET_BYTES),
   ALLOWED_ORIGINS: allowedOrigins,
   PORT: integer(1, 65_535),

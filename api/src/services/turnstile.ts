@@ -27,8 +27,13 @@ export interface TurnstileVerifier {
 }
 
 export interface CreateTurnstileVerifierOptions {
-  /** Turnstile secret key. Required. */
-  secret: string;
+  /**
+   * Turnstile secret key. Absent or empty means "not configured": the verifier
+   * never calls out and every challenge fails closed. Bots whose policy sets
+   * `turnstile_required` then get `forbidden()` on session creation; bots with
+   * the flag off never reach verification.
+   */
+  secret: string | undefined;
   /**
    * Hostnames (no scheme or port) a valid challenge may report, derived from ALLOWED_ORIGINS.
    * Required and non-empty: with none, every challenge would be refused.
@@ -56,7 +61,8 @@ export function createTurnstileVerifier(
   }
   const fetchImpl = options.fetchImpl ?? fetch;
   if (typeof secret !== 'string' || secret.length === 0) {
-    throw new TypeError('turnstile secret is required');
+    // Not configured: fail closed without any network call.
+    return { verify: () => Promise.resolve(false) };
   }
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError('turnstile timeout must be a positive integer (milliseconds)');

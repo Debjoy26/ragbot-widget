@@ -108,11 +108,17 @@ describe('loadConfig', () => {
     expect(loadConfig(validEnv({ TRUSTED_PROXY_HOPS: '0' })).trustedProxyHops).toBe(0);
   });
 
+  it('accepts a missing or empty TURNSTILE_SECRET_KEY as not configured', () => {
+    expect(loadConfig(validEnv({ TURNSTILE_SECRET_KEY: undefined })).turnstileSecretKey).toBe(
+      undefined,
+    );
+    expect(loadConfig(validEnv({ TURNSTILE_SECRET_KEY: '' })).turnstileSecretKey).toBe(undefined);
+  });
+
   const required = [
     'SUPABASE_URL',
     'SUPABASE_SECRET_KEY',
     'VISITOR_TOKEN_SECRET',
-    'TURNSTILE_SECRET_KEY',
     'RATE_LIMIT_KEY_SECRET',
     'ALLOWED_ORIGINS',
     'PORT',
